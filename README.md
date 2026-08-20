@@ -72,7 +72,7 @@ Gemini provider identities plus pure dated-price cost and budget helpers. Every 
 network-not-wired, identity-unverified, and non-executable; no API keys, environment reads, network calls, telemetry, or
 provider persistence are added. Local Ollama remains the only executable runtime.
 Phase 17 — DONE (bounded hardening) — adds a dependency-free boundary checker and deterministic fixtures for the reviewed
-Windows/Linux CI matrix, inactive non-macOS packaging targets, exact Tauri CSP/capability/local-font/loopback invariants,
+Windows/Linux CI matrix, deterministic worker sidecar packaging, exact Tauri CSP/capability/local-font/loopback invariants,
 secret ignores, lockfiles, and tracked key-material screening. Pull-request CI runs the checker and high-severity
 production dependency audit after install; no release, signing, deployment, publication, or merge behavior is enabled.
 
@@ -109,8 +109,9 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 - The registered Tauri commands remain typed, including published benchmark-version read, profile-revision
   listing/registration, fixed-loopback Ollama model discovery, read-only hardware/official-pack list/read, one-shot run
   execution, and Runs read commands.
-  `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
-  shell or arbitrary arguments, and persists the returned terminal outcome in the app-owned store. Benchmark draft
+  `execute_run_once` checks the fixed app-sibling worker in development and the target-triple-suffixed packaged Tauri
+  resource, passes one bounded JSON request without a shell, PATH lookup, user path, download, or arbitrary arguments,
+  and persists the returned terminal outcome in the app-owned store. Benchmark draft
   list/read/save/publish commands accept only typed local requests and use optimistic revision checks. Browser preview
   never reads or writes desktop records, executes a model, or invents run records. No account, cloud, or telemetry
   capability is enabled.
@@ -131,7 +132,7 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   prices, budget decisions can allow/confirm/deny, and sanitization discards unknown credential-like fields. No provider
   adapter, API-key input, secure storage, outbound request, cost history, or external execution exists.
 - The Phase 17 boundary checker reads only reviewed repository configuration and Git-tracked paths, reports no file contents,
-  and validates Windows/Linux CI, non-macOS inactive packaging, exact reviewed Tauri CSP source lists, every tracked
+  and validates Windows/Linux CI, deterministic worker sidecar packaging, exact reviewed Tauri CSP source lists, every tracked
   capability JSON's empty/allowlisted permissions, local fonts/loopback, secret ignores, lockfiles, and obvious key-material
   absence. Pull-request CI also runs `npm audit --omit=dev --audit-level=high`; no release or deployment workflow is present.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical

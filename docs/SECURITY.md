@@ -26,7 +26,7 @@ decisions never authorize execution by themselves. Unknown provider-selection fi
 are discarded before a sanitized summary is returned. Local Ollama remains the only executable runtime.
 
 Phase 17 adds a dependency-free review checker. It reads fixed repository configuration and Git-tracked paths, never emits
-file contents, and validates the Windows/Linux pull-request matrix, inactive non-macOS packaging, local-only CSP/font and
+file contents, and validates the Windows/Linux pull-request matrix, deterministic worker sidecar packaging, local-only CSP/font and
 loopback invariants, secret-file ignore rules, lockfiles, and obvious key-material absence. CI also runs a high-severity
 production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
 repository state.
@@ -44,7 +44,8 @@ model paths, download files, or send telemetry.
   the pure appearance normalizer before reaching CSS data attributes or local webview storage.
 - Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or path.
 - Worker input is untrusted JSON and is rejected on malformed JSON, unsupported protocol versions, or unsafe job IDs.
-- The execution command resolves only the fixed worker binary beside the current app executable, supplies no shell or
+- The execution command checks only the fixed dev worker sibling and then the target-triple-suffixed
+  `binaries/prompt-arena-worker-<TARGET_TRIPLE>` Tauri resource, supplies no shell, PATH lookup, user path, download, or
   arbitrary command arguments, and bounds both request and response bytes.
 - Benchmark documents are capped at 256 KiB of raw input before serde parsing or canonicalization, then deserialized and
   manually validated at the domain boundary; oversized input returns a typed `benchmark_too_large` error and unknown
@@ -130,6 +131,26 @@ model paths, download files, or send telemetry.
   Ollama, or invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output
   is untrusted content and must be sanitized before Markdown/HTML rendering. Appearance changes remain in memory and do
   not write browser localStorage.
+
+## Residual local filesystem races
+
+These controls are defensive bounds for the local single-user model, not portable no-follow-handle semantics. Production
+commands derive the database and artifact roots from the fixed app-owned app-data directory, but a concurrent local
+process that can modify app-owned files can still race separate path checks and later opens:
+
+- The `prompt-arena.sqlite3` database path is reached through the fixed app-owned root and the root rejects symlinks and
+  non-directories, but the database path itself can be replaced after those checks and before SQLite opens it.
+- Artifact references reject traversal, absolute paths, drive prefixes, backslashes, and empty segments; parent and target
+  symlink checks protect the normal path walk. Reads are bounded and hash-verified. Writes use a synced temporary file
+  and immutable hard-link finalization that never replaces an existing name. The metadata/read checks and later file
+  operations are still separate, so artifact metadata/read TOCTOU remains possible.
+- Worker execution selects only the fixed app-owned development sibling or the target-triple-suffixed Tauri resource and
+  supplies no shell, PATH lookup, or user path. Its `is_file` validation and subsequent spawn are separate, so the
+  selected worker executable can still be replaced between validation and spawn.
+
+Portable no-follow handles or equivalent OS-specific open/execute primitives would be required to close these races; they
+are not implemented in this bounded cycle. Benchmark input is not a parsing-order finding: the raw document size is
+checked against 256 KiB before `serde_json::from_str`, and draft input is size-checked before request serialization.
 
 ## Required future controls
 

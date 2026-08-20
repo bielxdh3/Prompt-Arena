@@ -261,7 +261,7 @@ External providers are secondary and must not block the local-first core.
 
 ### Phase 17 — Bounded boundary and review-readiness checks — DONE (bounded)
 
-- A dependency-free Node checker validates the Windows/Linux pull-request matrix, inactive non-macOS Tauri packaging,
+- A dependency-free Node checker validates the Windows/Linux pull-request matrix, fixed worker sidecar packaging,
   local-font/CSP/loopback invariants, secret-file ignore rules, required lockfiles, and tracked secret-like/key material
   absence without printing file contents.
 - Deterministic checker fixtures cover accepted/rejected workflow and packaging states, ignore rules, and generated key

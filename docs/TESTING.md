@@ -43,8 +43,10 @@ Validation is proportional to the foundation and must remain honest about what i
 - One optional live Ollama health test uses the default loopback endpoint and self-skips when Ollama is unavailable; it
   does not make the runtime a test or application prerequisite.
 - Worker storage-boundary smoke: send one `foundation_check` JSON request to `prompt-arena-worker` and verify one
-  completed JSON response. The worker also accepts a bounded `GenerateOnce` request; the desktop command resolves the
-  fixed sibling worker executable and owns persistence of its returned terminal outcome.
+  completed JSON response. Resolver tests cover the fixed dev sibling and the target-triple-suffixed packaged
+  `binaries/prompt-arena-worker-<TARGET_TRIPLE>` Tauri resource, while the config test checks the Windows/Linux sidecar
+  manifest and release preparation hook. The worker also accepts a bounded `GenerateOnce` request; the desktop command
+  owns persistence of its returned terminal outcome.
 
 ## Not claimed yet
 
