@@ -4,6 +4,7 @@ import {
   isDesktopEnvironment,
   readLocalOllamaModels,
   readBenchmarkVersion,
+  readRunAttempts,
   readProfileRevisions,
   registerProfileRevision,
   publishBenchmarkDraft,
@@ -15,6 +16,7 @@ import {
   validateBenchmarkDocument,
   readAppStatus,
   type AppStatus,
+  type AttemptRecord,
   type BenchmarkDraftSummary,
   type BenchmarkVersion,
   type BenchmarkVersionSummary,
@@ -23,6 +25,13 @@ import {
   type ProfileRevision,
   type RunRecord,
 } from "./bridge";
+import {
+  attemptStatusLabel,
+  attemptStatusTone,
+  formatByteCount,
+  formatCount,
+  formatDurationNs,
+} from "./results-ui";
 import {
   arenaEmptyCopy,
   arenaPreviewCopy,
@@ -1317,8 +1326,16 @@ type RunsState =
   | { status: "ready"; runs: RunRecord[] }
   | { status: "error"; message: string };
 
+type AttemptsState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; attempts: AttemptRecord[] }
+  | { status: "error"; message: string };
+
 function RunsView() {
   const [state, setState] = useState<RunsState>({ status: "loading" });
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [attemptsState, setAttemptsState] = useState<AttemptsState>({ status: "idle" });
 
   useEffect(() => {
     let current = true;
@@ -1345,6 +1362,44 @@ function RunsView() {
       current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (state.status !== "ready" || !state.runs.some((run) => run.runId === selectedRunId)) {
+      setSelectedRunId("");
+    }
+  }, [state, selectedRunId]);
+
+  const selectedRun = state.status === "ready"
+    ? state.runs.find((run) => run.runId === selectedRunId)
+    : undefined;
+
+  useEffect(() => {
+    let current = true;
+    if (!selectedRun || !isDesktopEnvironment()) {
+      setAttemptsState({ status: "idle" });
+      return () => {
+        current = false;
+      };
+    }
+
+    setAttemptsState({ status: "loading" });
+    void readRunAttempts(selectedRun.runId)
+      .then((attempts) => {
+        if (current) setAttemptsState({ status: "ready", attempts });
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          setAttemptsState({
+            status: "error",
+            message: error instanceof Error ? error.message : "The selected run attempts are unavailable.",
+          });
+        }
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [selectedRun]);
 
   return (
     <div className="view-stack">
@@ -1375,24 +1430,146 @@ function RunsView() {
           />
         )}
         {state.status === "ready" && state.runs.length > 0 && (
-          <div className="runs-list">
-            {state.runs.map((run) => (
-              <article className="run-row" key={run.runId}>
-                <div>
-                  <p className="eyebrow">{run.benchmarkVersionId}</p>
-                  <h3>{run.runId}</h3>
-                  <p className="run-meta">
-                    {run.attemptIds.length} attempt{run.attemptIds.length === 1 ? "" : "s"} · started {run.startedAt}
-                  </p>
+          <div className="runs-layout">
+            <div className="runs-list" aria-label="Run records">
+              {state.runs.map((run) => (
+                <button
+                  className={`run-row ${selectedRunId === run.runId ? "is-selected" : ""}`}
+                  key={run.runId}
+                  type="button"
+                  aria-pressed={selectedRunId === run.runId}
+                  onClick={() => setSelectedRunId(run.runId)}
+                >
+                  <div>
+                    <p className="eyebrow">{run.benchmarkVersionId}</p>
+                    <h3>{run.runId}</h3>
+                    <p className="run-meta">
+                      {run.attemptIds.length} attempt{run.attemptIds.length === 1 ? "" : "s"} · started {run.startedAt}
+                    </p>
+                  </div>
+                  <span className={`run-status run-status-${attemptStatusTone(run.status)}`}>
+                    {attemptStatusLabel(run.status)}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <section className="attempts-panel" aria-live="polite" aria-label="Attempt evidence">
+              {!selectedRun && (
+                <StateMessage icon="◇" title="Select a run" description="Choose one existing run to read its immutable attempt evidence." />
+              )}
+              {selectedRun && attemptsState.status === "loading" && (
+                <StateMessage icon="…" title="Loading attempts" description="Reading typed attempt records from the app-owned store." />
+              )}
+              {selectedRun && attemptsState.status === "error" && (
+                <StateMessage icon="!" title="Attempts unavailable" description={attemptsState.message} error />
+              )}
+              {selectedRun && attemptsState.status === "ready" && attemptsState.attempts.length === 0 && (
+                <EmptyState title="No attempts for this run" description="The local store returned no attempt records; this view does not invent them." />
+              )}
+              {selectedRun && attemptsState.status === "ready" && attemptsState.attempts.length > 0 && (
+                <div className="attempts-list">
+                  {attemptsState.attempts.map((attempt) => (
+                    <AttemptDetail key={attempt.attemptId} attempt={attempt} />
+                  ))}
                 </div>
-                <span className="run-status">{run.status}</span>
-              </article>
-            ))}
+              )}
+            </section>
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
+  const summary = attempt.responseSummary;
+  const tone = attemptStatusTone(attempt.status);
+  const artifacts = attempt.artifacts.length > 0
+    ? attempt.artifacts
+    : attempt.result?.artifact
+      ? [attempt.result.artifact]
+      : [];
+
+  return (
+    <article className="attempt-card">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Attempt evidence</p>
+          <h3>{attempt.attemptId}</h3>
+        </div>
+        <span className={`run-status run-status-${tone}`}>{attemptStatusLabel(attempt.status)}</span>
+      </div>
+      <div className="results-facts">
+        <BoundaryRow label="Run ID" value={attempt.runId} />
+        <BoundaryRow label="Profile revision" value={attempt.profileRevisionId} />
+        <BoundaryRow label="Case" value={attempt.caseId} />
+      </div>
+
+      <div className="results-section">
+        <p className="eyebrow">Response summary</p>
+        {summary ? (
+          <div className="results-facts">
+            <BoundaryRow label="Model" value={summary.model} />
+            <BoundaryRow label="Finish reason" value={summary.finishReason ?? "Not recorded"} />
+            <BoundaryRow label="Response size" value={formatByteCount(summary.responseTextByteCount)} />
+            <BoundaryRow label="Tool calls" value={formatCount(summary.toolCallCount)} />
+            {summary.usage && (
+              <>
+                <BoundaryRow label="Prompt tokens" value={formatCount(summary.usage.promptTokens)} />
+                <BoundaryRow label="Completion tokens" value={formatCount(summary.usage.completionTokens)} />
+                <BoundaryRow label="Total tokens" value={formatCount(summary.usage.totalTokens)} />
+              </>
+            )}
+            {summary.timing && (
+              <>
+                <BoundaryRow label="Total duration" value={formatDurationNs(summary.timing.totalDurationNs)} />
+                <BoundaryRow label="Load duration" value={formatDurationNs(summary.timing.loadDurationNs)} />
+                <BoundaryRow label="Prompt eval duration" value={formatDurationNs(summary.timing.promptEvalDurationNs)} />
+                <BoundaryRow label="Eval duration" value={formatDurationNs(summary.timing.evalDurationNs)} />
+              </>
+            )}
+          </div>
+        ) : (
+          <p className="field-help">No response summary was persisted for this terminal attempt.</p>
+        )}
+      </div>
+
+      <div className="results-section">
+        <p className="eyebrow">Effective configuration boundary</p>
+        <div className="results-facts">
+          <BoundaryRow label="Provider" value={effectiveConfigText(attempt.effectiveConfig, "provider")} />
+          <BoundaryRow label="Runtime" value={effectiveConfigText(attempt.effectiveConfig, "runtime")} />
+          <BoundaryRow label="Endpoint" value={effectiveConfigText(attempt.effectiveConfig, "endpoint")} />
+          <BoundaryRow label="Model" value={effectiveConfigText(attempt.effectiveConfig, "model")} />
+          <BoundaryRow label="Snapshot fields" value={formatCount(Object.keys(attempt.effectiveConfig).length)} />
+        </div>
+        <p className="field-help">The stored configuration snapshot is read-only; request and response payloads are not rendered here.</p>
+      </div>
+
+      <div className="results-section">
+        <p className="eyebrow">Immutable artifact evidence</p>
+        {artifacts.length === 0 ? (
+          <p className="field-help">No immutable artifact reference is recorded for this attempt.</p>
+        ) : (
+          <ul className="artifact-evidence-list">
+            {artifacts.map((artifact) => (
+              <li key={artifact.artifactId}>
+                <strong>{artifact.artifactId}</strong>
+                <span>{artifact.relativePath} · {artifact.sha256 ? "SHA-256 recorded" : "SHA-256 not recorded"}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="field-help">Scoring and evaluation are outside this evidence slice.</p>
+      </div>
+    </article>
+  );
+}
+
+function effectiveConfigText(config: Record<string, unknown>, key: string): string {
+  const value = config[key];
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return value === null || value === undefined ? "Not recorded" : "Recorded";
 }
 
 function StateMessage({

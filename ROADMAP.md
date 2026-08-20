@@ -106,14 +106,22 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
   no bridge command and creates no state. Broader run authoring, cancellation, process lifecycle, evaluation, and runtime
   controls remain planned.
 
+### Phase 09 — Bounded results and attempt evidence read slice — DONE (bounded)
+
+- Completed attempts persist a bounded flattened `responseSummary` with model, finish reason, response byte count,
+  tool-call count, and optional usage/timing counters. Response text remains solely in the immutable result artifact;
+  failed and cancelled attempts do not receive a completed-response summary.
+- The typed bridge reads the existing `list_run_attempts` command. Runs provides honest loading/error/empty states and
+  read-only attempt detail for status, profile/case IDs, summary metrics, effective-configuration boundary, and
+  artifact/hash presence without reading artifact payloads.
+- No scoring, objective verification, human or AI evaluation, ranking, mutation, arbitrary file read, download, cloud,
+  endpoint, credential, cancellation, or process-lifecycle surface is added; browser preview remains no-write.
+
 ### Remaining Phase B work
 
 - `PLANNED` — Broader run authoring/controls, interruption recovery, and evaluation beyond the bounded Arena entry flow.
 - `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
-- Metrics and effective configuration snapshots.
-- Objective verification.
-- Blind human evaluation.
-- Results and history.
+- Broader metrics, objective verification, blind human evaluation, scoring, ranking, and results analysis.
 
 ## Phase C — Official Benchmark Packs — PLANNED
 

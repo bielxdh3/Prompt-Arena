@@ -59,6 +59,10 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 - The Arena view accepts only selected identities returned by typed immutable version/profile reads and the selected
   stored document. It exposes no raw JSON, endpoint, credential, cancellation, or process-lifecycle input; progress and
   terminal text are rendered as text and no run record exists until explicit one-shot execution.
+- Completed attempt summaries are bounded metadata only: they omit response text, are stored in the immutable attempt's
+  flattened extra fields, and are rejected when they exceed the 8 KiB summary bound. The Runs view uses the existing
+  typed `list_run_attempts` read and displays artifact/hash references without resolving or rendering artifact files.
+  Failed/cancelled attempts have no completed-response summary, and no score or evaluation is inferred.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/Arena commands, validate benchmarks, query Ollama, or invent
   records. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
@@ -66,7 +70,7 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 ## Required future controls
 
 External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, evaluation, official benchmark packs, full model-library management,
+model execution UI beyond the bounded Arena flow, scoring/evaluation, official benchmark packs, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.

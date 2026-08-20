@@ -7,12 +7,12 @@ Validation is proportional to the foundation and must remain honest about what i
 - TypeScript project references: `npm run typecheck`.
 - Frontend bundle: `npm run build`.
 - Frontend unit tests for fonts, benchmark authoring bounds/shape handling, Phase 06 profile identity/bounds, bounded
-  Arena option extraction/selection/preview behavior, and browser-preview surface states:
+  Arena option extraction/selection/preview behavior, read-only results status/metric formatting, and browser-preview surface states:
   `npm run test`.
 - Rust formatting: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`.
 - Rust compilation: `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`.
 - Rust command, worker, typed benchmark validation, path-safety, migration, immutable persistence/replay, bounded
-  artifact/response, draft revision/bounds/publish behavior, Runs read-API, orchestration, and runtime-contract tests:
+  artifact/response/response-summary, draft revision/bounds/publish behavior, Runs read-API, orchestration, and runtime-contract tests:
   `cargo test --manifest-path src-tauri/Cargo.toml --all-targets`.
 - Ollama mock tests cover health, local model listing/metadata, 512-record and per-record 256 KiB metadata bounds,
   deterministic name/digest sorting, chat/text generation mapping, NDJSON streaming, typed unavailable/remote/protocol
@@ -33,8 +33,9 @@ Validation is proportional to the foundation and must remain honest about what i
 ## Not claimed yet
 
 The tests exercise the local SQLite service and immutable artifact writer using temporary app-owned roots, the bounded
-one-shot orchestration contract, the Phase 05 draft boundary, the Phase 06 profile/discovery slice, the bounded Arena
-helper, and the normalized runtime/Ollama adapter through a local mock server. There is no desktop integration test
+one-shot orchestration contract including response-summary replay/conflict/bounds, the Phase 05 draft boundary, the
+Phase 06 profile/discovery slice, the bounded Arena helper, the read-only results helpers, and the normalized
+runtime/Ollama adapter through a local mock server. There is no desktop integration test
 that launches the Tauri app and worker together, no broader run authoring/control UI, app-managed long-lived runtime
 lifecycle, full model download/catalog/deletion flow, external or cloud provider test, bundled official benchmark pack,
 or production-data migration test. Those checks belong with the phases that implement each behavior; the current tests
@@ -44,5 +45,6 @@ desktop UI integration.
 For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, reduced motion, the
 structured editor’s bounded text-only expectation behavior, the Models view’s unavailable/protocol/empty states, and
 the Arena view’s loading, bridge-error, malformed-document, empty, deterministic preview, busy, terminal success/
-failure/cancelled, attempt/progress, history-navigation, and browser no-write states in both browser preview and the
-Windows/Linux desktop shell.
+failure/cancelled, attempt/progress, history-navigation, and browser no-write states; and the Runs view’s loading,
+bridge-error, empty, run selection, attempt loading/error/empty, summary, effective-configuration, artifact/hash,
+no-score/evaluation, and browser no-write states in both browser preview and the Windows/Linux desktop shell.

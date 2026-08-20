@@ -20,6 +20,44 @@ export type RunRecord = {
   [key: string]: unknown;
 };
 
+export type UsageMetrics = {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+};
+
+export type TimingMetrics = {
+  totalDurationNs: number | null;
+  loadDurationNs: number | null;
+  promptEvalDurationNs: number | null;
+  evalDurationNs: number | null;
+};
+
+export type ResponseSummary = {
+  model: string;
+  finishReason: string | null;
+  responseTextByteCount: number;
+  toolCallCount: number;
+  usage: UsageMetrics | null;
+  timing: TimingMetrics | null;
+};
+
+export type ArtifactRef = {
+  artifactId: string;
+  relativePath: string;
+  schemaVersion: number;
+  sha256: string | null;
+  [key: string]: unknown;
+};
+
+export type ImmutableResultReference = {
+  resultId: string;
+  contentHash: string;
+  artifact: ArtifactRef;
+  score: unknown | null;
+  [key: string]: unknown;
+};
+
 export type BenchmarkVersionSummary = {
   versionId: string;
   benchmarkId: string;
@@ -118,8 +156,9 @@ export type AttemptRecord = {
   caseId: string;
   status: string;
   effectiveConfig: Record<string, unknown>;
-  result: unknown | null;
-  artifacts: unknown[];
+  result: ImmutableResultReference | null;
+  artifacts: ArtifactRef[];
+  responseSummary?: ResponseSummary;
   [key: string]: unknown;
 };
 
@@ -210,6 +249,15 @@ export async function readAppStatus(): Promise<AppStatus> {
 export async function readRuns(): Promise<RunRecord[]> {
   if (!isDesktopEnvironment()) throw new Error("Runs are available only in the local desktop workspace.");
   return invokeDesktop<RunRecord[]>("list_runs", "The local run history could not be reached.");
+}
+
+export async function readRunAttempts(runId: string): Promise<AttemptRecord[]> {
+  if (!isDesktopEnvironment()) throw new Error("Run attempts are available only in the local desktop workspace.");
+  return invokeDesktop<AttemptRecord[]>(
+    "list_run_attempts",
+    "The selected run attempts could not be reached.",
+    { runId },
+  );
 }
 
 export async function readBenchmarkVersions(): Promise<BenchmarkVersionSummary[]> {

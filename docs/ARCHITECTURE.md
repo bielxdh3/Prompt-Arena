@@ -4,7 +4,7 @@ Prompt Arena is a standalone local-first desktop application with three delibera
 
 ```text
 React/TypeScript UI
-        │ typed status, validation, draft/version persistence, profile/model reads, Arena execution, and Runs reads
+        │ typed status, validation, draft/version persistence, profile/model reads, Arena execution, and Runs evidence reads
 Tauri 2 desktop boundary
         ├─ app-owned local storage service
         │  ├─ SQLite metadata migrations
@@ -93,6 +93,13 @@ renders the deterministic prompt/system/model preview and fixed runtime boundary
 existing one-shot command for one repetition. Loading, malformed-document, bridge-error, busy, terminal, progress, and
 history-navigation states are explicit; browser preview invokes no bridge command and creates no records. The view does
 not add raw JSON editing, endpoint or credential fields, cancellation, or process-lifecycle controls.
+
+Phase 09 adds bounded attempt evidence to the Runs read surface. Completed orchestration persists a `responseSummary`
+object in the Attempt's serde-flattened extra fields. It contains only model, finish reason, response byte count,
+tool-call count, and optional usage/timing counters under an 8 KiB summary bound; response text remains solely in the
+immutable result artifact. The typed UI calls the existing `list_run_attempts` command only after selecting a real run,
+then renders status, immutable IDs, safe effective-configuration facts, and artifact/hash references without opening
+artifact files. Failed and cancelled attempts remain unchanged, and scoring/evaluation/ranking are not implied.
 
 ## Future boundaries
 

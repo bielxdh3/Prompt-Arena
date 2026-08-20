@@ -519,11 +519,21 @@ h3 {
 
 .run-row {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
   padding: 18px 0;
+  color: var(--color-text);
+  text-align: left;
+  background: transparent;
+  border: 0;
   border-bottom: 1px solid var(--color-border);
+}
+
+.run-row:hover,
+.run-row.is-selected {
+  color: var(--color-accent-strong);
 }
 
 .run-row:first-child {
@@ -549,6 +559,67 @@ h3 {
   font-weight: 700;
   border: 1px solid rgb(154 198 164 / 0.36);
   border-radius: 999px;
+}
+
+.run-status-neutral {
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.run-status-failure {
+  color: var(--color-danger);
+  border-color: rgb(224 160 154 / 0.38);
+}
+
+.runs-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.28fr);
+  gap: 26px;
+  align-items: start;
+}
+
+.attempts-panel {
+  min-width: 0;
+  padding-left: 26px;
+  border-left: 1px solid var(--color-border);
+}
+
+.attempts-list {
+  display: grid;
+  gap: 28px;
+}
+
+.attempt-card {
+  min-width: 0;
+}
+
+.results-facts {
+  border-top: 1px solid var(--color-border);
+}
+
+.results-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+
+.artifact-evidence-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.artifact-evidence-list strong,
+.artifact-evidence-list span {
+  display: block;
+}
+
+.artifact-evidence-list strong {
+  color: var(--color-text);
 }
 
 .section-heading {
@@ -1127,6 +1198,17 @@ button.benchmark-record-row:hover {
 
   .models-layout {
     grid-template-columns: 1fr;
+  }
+
+  .runs-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .attempts-panel {
+    padding-top: 26px;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
   }
 
   .arena-layout {
