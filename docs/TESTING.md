@@ -6,6 +6,9 @@ Validation is proportional to the foundation and must remain honest about what i
 
 - TypeScript project references: `npm run typecheck`.
 - Frontend bundle: `npm run build`.
+- Repository boundary policy: `npm run check:boundaries`.
+- Dependency-free boundary fixtures: `npm run test:boundaries`.
+- Production dependency audit: `npm audit --omit=dev --audit-level=high`.
 - Frontend unit tests for fonts, benchmark authoring bounds/shape handling, Phase 06 profile identity/bounds, bounded
   Arena option extraction/selection/preview behavior, RunPlan objective-expectation extraction/bounds/no-gold-metadata,
   read-only results status/metric formatting, blind-review evidence suppression states, official-pack browser-preview
@@ -58,6 +61,10 @@ Docker-backed coding sandbox, desktop integration for the official-pack UI, or p
 checks belong with the phases that implement each behavior; the current tests
 verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
 desktop UI integration.
+
+The Phase 17 boundary checker is tested with deterministic in-memory workflow, Tauri configuration, ignore-rule, and
+generated-key fixtures. It does not print file contents. Remote pull-request CI remains the authoritative Windows/Linux
+matrix check; this local environment does not provide remote CI provenance.
 
 For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, bounded font scale,
 allowlisted accent/surface/radius previews, restore defaults, reduced motion, the read-only external-provider boundary
