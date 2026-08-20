@@ -91,6 +91,11 @@ import {
   type AppearancePreferences,
 } from "./appearance";
 import {
+  PROVIDER_CATALOG,
+  providerPreviewCopy,
+  type ProviderCatalogEntry,
+} from "./provider-foundation";
+import {
   boundedRecommendationThresholds,
   classifyModelRecommendation,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
@@ -2409,7 +2414,64 @@ function Settings({
           </div>
         </div>
       </section>
+
+      <section className="panel provider-panel" aria-labelledby="provider-foundation-heading">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Phase F foundation</p>
+            <h3 id="provider-foundation-heading">External providers, clearly bounded</h3>
+          </div>
+          <span className="section-index">C</span>
+        </div>
+        <p className="provider-intro">
+          BYOK means a future adapter would use credentials owned by you. This read-only catalog documents the boundary;
+          it does not accept API keys, read environment variables, call a provider, or make external execution available.
+          Local Ollama remains the only executable runtime.
+        </p>
+
+        <div className="provider-grid">
+          {PROVIDER_CATALOG.map((provider) => <ProviderStatusCard key={provider.id} provider={provider} />)}
+        </div>
+
+        <div className="provider-safety-note">
+          <p className="eyebrow">Future paid-work safety contract</p>
+          <p>
+            A later adapter must estimate from a dated price-table snapshot, ask for confirmation at a configured
+            threshold, and refuse new paid work past a budget ceiling. Missing or invalid prices fail closed. Actual
+            cost history, secure credential storage, user-selected network calls, and provider identity verification are
+            still pending.
+          </p>
+        </div>
+
+        <p className="field-help provider-boundary-copy">
+          {desktop
+            ? "Desktop mode is still local-only: providers are unconfigured, and no key, network, telemetry, or provider state is stored."
+            : providerPreviewCopy()}
+        </p>
+      </section>
     </div>
+  );
+}
+
+function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
+  const kindLabel = provider.kind === "generic_openai_compatible" ? "Generic compatibility boundary" : "Native adapter boundary";
+  return (
+    <article className="provider-card" data-provider={provider.id}>
+      <div className="provider-card-heading">
+        <div>
+          <p className="eyebrow">{kindLabel}</p>
+          <h4>{provider.label}</h4>
+        </div>
+        <span className="provider-state">Unconfigured</span>
+      </div>
+      <div className="provider-facts">
+        <div><span>Transport</span><strong>External · not wired</strong></div>
+        <div><span>Credentials</span><strong>Not configured</strong></div>
+        <div><span>Identity</span><strong>Unverified</strong></div>
+        <div><span>Execution</span><strong>Not wired</strong></div>
+        <div><span>Cost</span><strong>Catalog only</strong></div>
+      </div>
+    </article>
   );
 }
 

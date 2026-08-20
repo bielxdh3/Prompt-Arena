@@ -218,15 +218,23 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - Optional deliberation tracked separately.
 - Historical cost snapshots and current-price simulation.
 
-## Phase F — External Providers
+## Phase F — External Providers — IN PROGRESS
 
-- Generic OpenAI-compatible provider.
-- OpenAI.
-- Anthropic.
-- Gemini.
-- BYOK credential storage.
-- Cost estimate/threshold/budget controls.
-- Best-effort provider model identity with explicit uncertainty.
+### Phase 16 — External-provider architecture and cost-safety foundation — DONE (bounded)
+
+- A pure TypeScript catalog covers generic OpenAI-compatible, OpenAI, Anthropic, and Gemini identities with explicit
+  capability, transport, credential-source, and identity-confidence states. All external execution remains not wired.
+- Pure helpers define dated USD price-table snapshots, bounded token-cost estimates, and allow/confirm/deny budget
+  decisions. Missing or invalid prices fail closed, and provider selection sanitization retains no credential-like fields.
+- Settings exposes only a read-only explanation of BYOK, unconfigured providers, estimate/confirmation/ceiling concepts,
+  and the local-only boundary. No API key input, environment read, network call, telemetry, or persistence is added.
+
+### Future Phase F work
+
+- Generic OpenAI-compatible, native OpenAI, Anthropic, and Gemini adapters with explicit user-selected network consent.
+- OS secure credential storage and bounded session/environment credential policy.
+- Provider-reported model identity, actual usage/cost capture, historical dated price snapshots, and paid-work controls.
+- Streaming, cancellation, retries, provider-specific errors, and integration tests using safe mock transports.
 
 External providers are secondary and must not block the local-first core.
 

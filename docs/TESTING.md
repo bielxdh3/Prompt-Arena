@@ -11,7 +11,9 @@ Validation is proportional to the foundation and must remain honest about what i
   read-only results status/metric formatting, blind-review evidence suppression states, official-pack browser-preview
   no-write states, model metadata compatibility, bounded hardware recommendation classification/thresholds, missing
   telemetry, hardware browser-preview no-read states, bounded comparability readiness/order/tie states, and browser-preview
-  surface states, and appearance preference normalization/allowlists/defaults:
+  surface states, appearance preference normalization/allowlists/defaults, provider catalog completeness, credential and
+  identity uncertainty, price arithmetic, budget decisions, credential-like field sanitization, and provider browser
+  no-write copy:
   `npm run test`.
 - Rust formatting: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`.
 - Rust compilation: `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`.
@@ -48,17 +50,18 @@ draft boundary, the Phase 06 profile/discovery slice, the bounded model-library 
 the bounded Arena helper and objective RunPlan contract, the bounded single-run comparability diagnostic, the blind
 evaluation artifact/presentation/lock boundary, the official source-pack catalog, the read-only results helpers, the
 bounded local appearance normalizer, and the normalized
-runtime/Ollama adapter through a local mock server. There is no desktop integration test
+runtime/Ollama adapter through a local mock server, plus the pure external-provider catalog/cost foundation. There is no desktop integration test
 that launches the Tauri app and worker together, no broader run authoring/control UI, app-managed long-lived runtime
 app-managed long-lived runtime lifecycle, unified model search/download/duplicate flow, empirical hardware history,
-cross-run ranking/regression/tournament/AI-judge comparability flow, full model download/catalog/deletion flow, external or cloud provider test,
+cross-run ranking/regression/tournament/AI-judge comparability flow, full model download/catalog/deletion flow, external provider transport/credential/paid-execution test,
 Docker-backed coding sandbox, desktop integration for the official-pack UI, or production-data migration test. Those
 checks belong with the phases that implement each behavior; the current tests
 verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
 desktop UI integration.
 
 For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, bounded font scale,
-allowlisted accent/surface/radius previews, restore defaults, reduced motion, the
+allowlisted accent/surface/radius previews, restore defaults, reduced motion, the read-only external-provider boundary
+and browser no-write copy, the
 structured editor’s bounded text-only expectation behavior, the Models view’s unavailable/protocol/empty states, hardware
 snapshot source/confidence/unavailable states, recommendation thresholds and explanations, and
 the Arena view’s loading, bridge-error, malformed-document, empty, deterministic preview, busy, terminal success/
