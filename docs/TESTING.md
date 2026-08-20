@@ -6,11 +6,12 @@ Validation is proportional to the foundation and must remain honest about what i
 
 - TypeScript project references: `npm run typecheck`.
 - Frontend bundle: `npm run build`.
-- Font contract unit test: `npm run test`.
+- Frontend unit tests for fonts, benchmark authoring bounds/shape handling, and browser-preview surface states:
+  `npm run test`.
 - Rust formatting: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`.
 - Rust compilation: `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`.
 - Rust command, worker, typed benchmark validation, path-safety, migration, immutable persistence/replay, bounded
-  artifact/response, Runs read-API, orchestration, and runtime-contract tests:
+  artifact/response, draft revision/bounds/publish behavior, Runs read-API, orchestration, and runtime-contract tests:
   `cargo test --manifest-path src-tauri/Cargo.toml --all-targets`.
 - Ollama mock tests cover health, model listing/metadata, chat/text generation mapping, NDJSON streaming, typed remote
   and protocol errors, loopback-only endpoint validation, credentials/query/fragment/non-loopback rejection, stream
@@ -27,11 +28,13 @@ Validation is proportional to the foundation and must remain honest about what i
 ## Not claimed yet
 
 The tests exercise the local SQLite service and immutable artifact writer using temporary app-owned roots, the bounded
-one-shot orchestration contract, and the normalized runtime/Ollama adapter through a local mock server. There is no
-desktop integration test that launches the Tauri app and worker together, no run authoring or model execution UI,
-app-managed long-lived runtime lifecycle, model download/catalog flow, external or cloud provider test, bundled
-benchmark fixture, or production-data migration test. Those checks belong with the phases that implement each behavior;
-the current tests verify the live command/worker contracts and local evidence boundaries without claiming a full Arena UI.
+one-shot orchestration contract, the Phase 05 draft boundary, and the normalized runtime/Ollama adapter through a local
+mock server. There is no desktop integration test that launches the Tauri app and worker together, no run authoring or
+model execution UI, app-managed long-lived runtime lifecycle, model download/catalog flow, external or cloud provider
+test, bundled official benchmark pack, or production-data migration test. Those checks belong with the phases that
+implement each behavior; the current tests verify the live command/worker contracts and local evidence boundaries
+without claiming a full Arena UI.
 
-For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, reduced motion, and
-the loading, bridge-error, and empty states in both browser preview and the Windows/Linux desktop shell.
+For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, reduced motion, the
+structured editor’s bounded text-only expectation behavior, and the loading, bridge-error, empty, and browser no-write
+states in both browser preview and the Windows/Linux desktop shell.

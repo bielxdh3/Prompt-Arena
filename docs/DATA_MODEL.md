@@ -1,16 +1,18 @@
 # Data model
 
 Phase 01 established storage vocabulary and contracts. Phase 02 adds local metadata persistence and immutable artifact
-writes. Phase 04 adds one-shot orchestration evidence while keeping the store local-first and append-only.
+writes. Phase 04 adds one-shot orchestration evidence while keeping the store local-first and append-only. Phase 05 adds
+bounded editable benchmark drafts without changing immutable benchmark-version history.
 
 ## Foundation records
 
 `schema_migrations` records applied migration versions and timestamps. `artifact_records` identifies an app-owned
 artifact by stable ID, kind, portable relative path, artifact schema version, optional SHA-256, and creation time.
-`packs` and `benchmark_versions` store canonical JSON snapshots and content hashes. `profile_revisions`, `runs`,
-`attempts`, and `result_records` use the same immutable JSON-plus-hash pattern; result records reference an attempt.
-Replaying identical content returns `AlreadyPresent`; changing content under an existing ID returns an immutable
-conflict. Metadata records are capped at 1 MiB.
+`packs` and `benchmark_versions` store canonical JSON snapshots and content hashes. `benchmark_drafts` stores mutable
+authoring state separately from those immutable snapshots. `profile_revisions`, `runs`, `attempts`, and
+`result_records` use the same immutable JSON-plus-hash pattern; result records reference an attempt. Replaying identical
+content returns `AlreadyPresent`; changing content under an existing ID returns an immutable conflict. Metadata records
+are capped at 1 MiB.
 
 The filesystem contract maps one app-owned storage root to:
 
@@ -30,6 +32,20 @@ backslashes, or empty segments.
 then applies deterministic manual checks for required shape, identifiers, version identity, ranges, rubric/task
 invariants, and case artifact references. The checked-in JSON Schema documents the same boundary; it is not executed by
 a runtime schema engine in this phase.
+
+## Phase 05 draft boundary
+
+Draft rows are created and edited through typed desktop commands. Draft IDs and benchmark IDs use the same portable
+bounded identifier rule as local records; titles are capped at 256 UTF-8 bytes, canonical draft documents at 256 KiB,
+and encoded draft requests at 512 KiB. Save requests include an expected revision. A matching replay is idempotent;
+stale edits are rejected, and a changed draft advances its revision without touching any published version.
+
+Draft saves canonicalize JSON but intentionally allow incomplete benchmark-v1 documents so the editor can save progress.
+Publishing revalidates the stored document and then writes an immutable benchmark version. The Phase 05 structured
+editor supports one narrow shape and stores an optional text expected answer or null. Benchmark-v1 can represent
+arbitrary JSON expected values, but this UI does not author or silently convert non-text values; such drafts are rejected
+when loaded into the structured editor. Browser preview shows unsaved form state only and never reads or writes these
+records.
 
 ## Benchmark vocabulary for later phases
 
