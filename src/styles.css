@@ -597,6 +597,14 @@ h3 {
   border-top: 1px solid var(--color-border);
 }
 
+.results-facts .boundary-row strong {
+  overflow-wrap: anywhere;
+}
+
+.results-facts .objective-status-fail {
+  color: var(--color-danger);
+}
+
 .results-section {
   margin-top: 24px;
   padding-top: 20px;

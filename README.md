@@ -36,6 +36,11 @@ Phase 09 — DONE (bounded) — adds read-only attempt evidence to Runs. Complet
 timing counters); response text remains only in the immutable result artifact. Runs can list real attempts and show their
 status, immutable IDs, effective-configuration boundary, summary metrics, and artifact/hash presence without reading or
 rendering artifact payloads. No scoring, evaluation, ranking, mutation, or browser-side attempt records are added.
+Phase 10 — DONE (bounded) — adds objective exact-text verification for string expectations. The bounded expected text
+travels only as explicit RunPlan policy, never in GenerationRequest metadata; after generation, deterministic line-ending
+and surrounding-whitespace normalization produces only pass/fail, normalized byte counts, and SHA-256 evidence in the
+immutable result reference. Runs shows that evidence without rendering expected/actual response text; human/AI evaluation,
+rankings, and broader scoring remain outside this slice.
 
 ## Run locally
 
@@ -84,12 +89,15 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   process-lifecycle control.
 - Completed attempts add only a bounded flattened `responseSummary` metadata object; it never contains response text,
   and the Runs detail reads typed attempt metadata and artifact/hash references without opening artifact files. Failed
-  and cancelled attempts retain their existing semantics and do not receive a completed-response summary. Scoring,
-  objective verification, human evaluation, AI judging, and rankings remain outside this slice.
+  and cancelled attempts retain their existing semantics and do not receive a completed-response summary. String expected
+  values add only a bounded top-level RunPlan policy input and immutable result score/evidence; the gold answer is not
+  sent through generation metadata or to Ollama, and response text remains only in the artifact. Human evaluation, AI
+  judging, rankings, and broader scoring remain outside this slice.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.
-- Metadata is capped at 1 MiB; persisted response summaries are additionally capped at 8 KiB. Draft IDs and benchmark IDs are portable and bounded, draft titles are capped at 256
+- Metadata is capped at 1 MiB; persisted response summaries are additionally capped at 8 KiB, and objective expected text
+  is capped at 64 KiB. Draft IDs and benchmark IDs are portable and bounded, draft titles are capped at 256
   UTF-8 bytes, canonical draft documents at 256 KiB, and draft requests at 512 KiB. Profile IDs are bounded and
   deterministic revision IDs are immutable; the complete serialized profile request, including `parameters` and
   flattened `extra`, is capped at 256 KiB. Ollama discovery caps the list at 512 records and each returned model

@@ -15,6 +15,7 @@ const MAX_RUN_ID_BYTES = 96;
 const MAX_CASE_ID_BYTES = 96;
 const MAX_MODEL_BYTES = 256;
 const MAX_SYSTEM_PROMPT_BYTES = 64 * 1024;
+export const MAX_OBJECTIVE_EXPECTATION_BYTES = 64 * 1024;
 const MAX_U32 = 4_294_967_295;
 const PROFILE_REVISION_FIELDS = new Set([
   "profileId",
@@ -103,6 +104,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   const benchmarkCase = record(matchingCases[0], "Benchmark case");
   identifier(benchmarkCase.caseId, "Case ID", MAX_PROFILE_ID_BYTES);
   const casePrompt = optionalPrompt(benchmarkCase.prompt, "Case prompt", MAX_RUN_PLAN_BYTES);
+  const objectiveExpectation = objectiveExpectationValue(benchmarkCase.expected);
 
   const profile = normalizeProfile(input.profileRevision);
   const prompt = combinePrompts([taskPrompt, casePrompt]);
@@ -126,6 +128,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
       metadata: {},
     },
     runtimeConfig: defaultOllamaConfig(),
+    objectiveExpectation,
   };
   if (bytes(JSON.stringify(plan)) > MAX_RUN_PLAN_BYTES) {
     throw new Error("Run plan exceeds the one-shot request size limit.");
@@ -248,6 +251,14 @@ function optionalPrompt(value: unknown, label: string, maxBytes: number): string
     throw new Error(`${label} is outside the local bounds.`);
   }
   return prompt;
+}
+
+function objectiveExpectationValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (value.includes("\0") || bytes(value) > MAX_OBJECTIVE_EXPECTATION_BYTES) {
+    throw new Error("Objective expectation is outside the local bounds.");
+  }
+  return value;
 }
 
 function text(value: unknown, label: string, maxBytes: number): string {
