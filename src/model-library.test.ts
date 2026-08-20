@@ -25,7 +25,7 @@ describe("model library profile boundary", () => {
       runtime: "ollama",
     });
     expect(revision.parameters).toEqual({});
-    expect(revision.extra).toEqual({});
+    expect(revision).not.toHaveProperty("extra");
   });
 
   it("keeps profile IDs, revisions, and model names bounded", () => {
