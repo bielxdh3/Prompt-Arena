@@ -50,6 +50,7 @@ import {
   formatDurationNs,
   objectiveVerificationEvidence,
 } from "./results-ui";
+import { assessRunComparability } from "./comparability";
 import {
   arenaEmptyCopy,
   arenaPreviewCopy,
@@ -1747,6 +1748,9 @@ function RunsView() {
                       ))}
                     </div>
                   )}
+                  {attemptsState.status === "ready" && (
+                    <ComparabilityPanel run={selectedRun} attempts={attemptsState.attempts} />
+                  )}
                 </>
               )}
             </section>
@@ -1754,6 +1758,68 @@ function RunsView() {
         )}
       </section>
     </div>
+  );
+}
+
+function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: AttemptRecord[] }) {
+  const diagnostic = assessRunComparability(run, attempts);
+  const { dimensions } = diagnostic;
+  const terminalStatus = dimensions.terminalStatus.runTerminal && dimensions.terminalStatus.attemptsTerminal
+    ? "Terminal"
+    : "Not terminal";
+  const configuration = dimensions.configurationConsistency === "consistent"
+    ? "Consistent"
+    : dimensions.configurationConsistency === "inconsistent"
+      ? "Inconsistent"
+      : "Unavailable";
+
+  return (
+    <section className="comparability-panel results-section" aria-live="polite" aria-label="Comparability diagnostic">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Read-only diagnostic</p>
+          <h3>Comparability foundation</h3>
+        </div>
+        <span className={`run-status ${diagnostic.status === "ready" ? "" : "run-status-neutral"}`}>
+          {diagnostic.label}
+        </span>
+      </div>
+      <p className="field-help">
+        This bounded single-run diagnostic is not an official ranking, cross-run comparison, regression, tournament,
+        human score, or AI judgment.
+      </p>
+      <div className="results-facts">
+        <BoundaryRow label="Benchmark version identity" value={dimensions.benchmarkVersionIdentity === "declared" ? "Declared" : "Missing"} />
+        <BoundaryRow label="Terminal status" value={terminalStatus} />
+        <BoundaryRow label="Profile/runtime/model" value={configuration} />
+        <BoundaryRow label="Completed attempts" value={`${dimensions.completedAttemptCount} of ${dimensions.attemptCount}`} />
+        <BoundaryRow
+          label="Objective exact-text evidence"
+          value={`${dimensions.objectiveExactTextEvidence.availableCount} of ${dimensions.objectiveExactTextEvidence.requiredCount} available`}
+        />
+      </div>
+      {diagnostic.status === "not_ready" && (
+        <ul className="comparability-reasons">
+          {diagnostic.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+        </ul>
+      )}
+      {diagnostic.status === "ready" && diagnostic.objectiveDiagnostic && (
+        <div className="comparability-diagnostic">
+          <p className="eyebrow">{diagnostic.objectiveDiagnostic.label}</p>
+          <p className="field-help">
+            Exact-text pass/fail groups are shown for completed attempts only; this is diagnostic evidence, not a score.
+          </p>
+          <ol className="comparability-ordering">
+            {diagnostic.objectiveDiagnostic.groups.map((group) => (
+              <li key={`${group.rank}-${group.outcome}`}>
+                <strong>Position {group.rank}: {group.outcome === "passed" ? "objective pass" : "objective fail"}</strong>
+                <span>{group.relation === "tie" ? "Tie" : "Order"} · {group.attemptIds.join(", ")}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
   );
 }
 
