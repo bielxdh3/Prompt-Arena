@@ -193,12 +193,23 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
   and sample size.
 - Cross-runtime grouping, duplicate detection, and safe/advanced deletion workflows.
 
-## Phase E — Advanced Benchmarking
+## Phase E — Advanced Benchmarking — IN PROGRESS
 
-- Rankings by benchmark/category.
-- Multi-dimensional comparability.
-- Regression mode.
-- Tournaments.
+### Phase 14 — Bounded local comparability diagnostics — DONE (bounded)
+
+- Runs exposes a pure read-only diagnostic for one local `RunRecord` and its typed `AttemptRecord` list. It checks
+  declared benchmark identity, terminal status, profile/runtime/model consistency, completed-attempt count, and valid
+  objective exact-text evidence availability.
+- When the completed attempts meet those dimensions, the panel shows a clearly labeled diagnostic objective pass/fail
+  ordering or tie representation. It is not an official ranking, cross-run comparison, regression, tournament, human
+  score, AI judge, calibration result, or cost analysis.
+- The panel is mounted only after the existing blind-evaluation gate permits attempt evidence. Browser preview remains
+  no-read/no-write, and no Rust storage, migration, or new persistence boundary is added.
+
+### Future Phase E work
+
+- Rankings by benchmark/category and cross-run comparability.
+- Regression mode and tournaments.
 - Context compilation policies.
 - Statistics and sample-size visibility.
 - AI judge architecture.

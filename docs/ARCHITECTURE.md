@@ -154,6 +154,19 @@ not a runtime admission check or empirical performance model. Unified search/dow
 overrides, GPU/VRAM parity, and empirical history remain future work. Browser preview invokes no model/profile/hardware
 command and does not invent a hardware snapshot.
 
+## Phase 14 bounded comparability diagnostic
+
+The Runs surface adds a pure TypeScript assessment of one typed local `RunRecord` plus its `AttemptRecord` list. It
+checks that benchmark identity is declared, the run and attempts are terminal, completed attempts share one declared
+profile/runtime/model configuration, at least one completed attempt exists, and every completed attempt has recognized
+objective exact-text evidence. A ready result groups objective passes before failures and represents equal outcomes as
+ties; this is a diagnostic ordering/tie view, not an official ranking or score.
+
+The panel is mounted only inside the existing parent-owned blind-evaluation gate that permits attempt evidence. It does
+not render model/profile/provider/metrics/objective evidence or attempt IDs while that gate suppresses evidence, and
+browser preview reads no runs or attempts. Cross-run ranking, regression, tournaments, AI judging, calibration, cost
+analysis, and persistent comparability records remain future work.
+
 ## Future boundaries
 
 Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human

@@ -84,6 +84,10 @@ model paths, download files, or send telemetry.
   evidence. The parent gate also keeps that evidence hidden for loading, empty, and error states; only a successful lock
   re-enables post-lock audit IDs. The persisted record contains no response text, and scores/ranking are validated at
   the Rust boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
+- Phase 14 comparability is a pure in-memory diagnostic over one local run and its typed attempts. Its panel is nested
+  under the same parent-owned blind-evaluation gate, so it cannot expose model/profile/provider/metrics/objective
+  evidence or attempt IDs while the gate suppresses AttemptDetail. It creates no records, reads no artifacts, and makes
+  no official ranking, cross-run, regression, tournament, AI-judge, calibration, or cost claim.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
   summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
