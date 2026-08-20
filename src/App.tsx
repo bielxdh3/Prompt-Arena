@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   executeRunOnce,
   isDesktopEnvironment,
+  lockBlindEvaluation,
+  prepareBlindEvaluation,
   readLocalOllamaModels,
   readBenchmarkVersion,
+  readBlindEvaluation,
   readRunAttempts,
   readProfileRevisions,
   registerProfileRevision,
@@ -17,6 +20,10 @@ import {
   readAppStatus,
   type AppStatus,
   type AttemptRecord,
+  type BlindEvaluationPreparation,
+  type BlindEvaluationRecord,
+  type BlindEvaluationScore,
+  type BlindEvaluationLockRequest,
   type BenchmarkDraftSummary,
   type BenchmarkVersion,
   type BenchmarkVersionSummary,
@@ -28,6 +35,9 @@ import {
 import {
   attemptStatusLabel,
   attemptStatusTone,
+  blindReviewHidesAttemptEvidence,
+  blindEvaluationScoreLabel,
+  blindEvaluationStatusLabel,
   formatByteCount,
   formatCount,
   formatDurationNs,
@@ -1337,6 +1347,7 @@ function RunsView() {
   const [state, setState] = useState<RunsState>({ status: "loading" });
   const [selectedRunId, setSelectedRunId] = useState("");
   const [attemptsState, setAttemptsState] = useState<AttemptsState>({ status: "idle" });
+  const [blindEvaluationStatus, setBlindEvaluationStatus] = useState<BlindEvaluationSurfaceStatus>("loading");
 
   useEffect(() => {
     let current = true;
@@ -1378,12 +1389,14 @@ function RunsView() {
     let current = true;
     if (!selectedRun || !isDesktopEnvironment()) {
       setAttemptsState({ status: "idle" });
+      setBlindEvaluationStatus("loading");
       return () => {
         current = false;
       };
     }
 
     setAttemptsState({ status: "loading" });
+    setBlindEvaluationStatus("loading");
     void readRunAttempts(selectedRun.runId)
       .then((attempts) => {
         if (current) setAttemptsState({ status: "ready", attempts });
@@ -1439,7 +1452,10 @@ function RunsView() {
                   key={run.runId}
                   type="button"
                   aria-pressed={selectedRunId === run.runId}
-                  onClick={() => setSelectedRunId(run.runId)}
+                  onClick={() => {
+                    setBlindEvaluationStatus("loading");
+                    setSelectedRunId(run.runId);
+                  }}
                 >
                   <div>
                     <p className="eyebrow">{run.benchmarkVersionId}</p>
@@ -1454,31 +1470,265 @@ function RunsView() {
                 </button>
               ))}
             </div>
-            <section className="attempts-panel" aria-live="polite" aria-label="Attempt evidence">
+            <section
+              className="attempts-panel"
+              aria-live="polite"
+              aria-label={selectedRun && blindReviewHidesAttemptEvidence(blindEvaluationStatus) ? "Blind human evaluation" : "Attempt evidence"}
+            >
               {!selectedRun && (
                 <StateMessage icon="◇" title="Select a run" description="Choose one existing run to read its immutable attempt evidence." />
               )}
-              {selectedRun && attemptsState.status === "loading" && (
-                <StateMessage icon="…" title="Loading attempts" description="Reading typed attempt records from the app-owned store." />
-              )}
-              {selectedRun && attemptsState.status === "error" && (
-                <StateMessage icon="!" title="Attempts unavailable" description={attemptsState.message} error />
-              )}
-              {selectedRun && attemptsState.status === "ready" && attemptsState.attempts.length === 0 && (
-                <EmptyState title="No attempts for this run" description="The local store returned no attempt records; this view does not invent them." />
-              )}
-              {selectedRun && attemptsState.status === "ready" && attemptsState.attempts.length > 0 && (
-                <div className="attempts-list">
-                  {attemptsState.attempts.map((attempt) => (
-                    <AttemptDetail key={attempt.attemptId} attempt={attempt} />
-                  ))}
-                </div>
+              {selectedRun && <BlindEvaluationPanel key={selectedRun.runId} runId={selectedRun.runId} onStatusChange={setBlindEvaluationStatus} />}
+              {selectedRun && !blindReviewHidesAttemptEvidence(blindEvaluationStatus) && (
+                <>
+                  {attemptsState.status === "loading" && (
+                    <StateMessage icon="…" title="Loading attempts" description="Reading typed attempt records from the app-owned store." />
+                  )}
+                  {attemptsState.status === "error" && (
+                    <StateMessage icon="!" title="Attempts unavailable" description={attemptsState.message} error />
+                  )}
+                  {attemptsState.status === "ready" && attemptsState.attempts.length === 0 && (
+                    <EmptyState title="No attempts for this run" description="The local store returned no attempt records; this view does not invent them." />
+                  )}
+                  {attemptsState.status === "ready" && attemptsState.attempts.length > 0 && (
+                    <div className="attempts-list">
+                      {attemptsState.attempts.map((attempt) => (
+                        <AttemptDetail key={attempt.attemptId} attempt={attempt} />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </section>
           </div>
         )}
       </section>
     </div>
+  );
+}
+
+type BlindEvaluationState =
+  | { status: "loading" }
+  | { status: "idle" }
+  | { status: "preparing" }
+  | { status: "empty"; preparation: BlindEvaluationPreparation }
+  | { status: "prepared"; preparation: BlindEvaluationPreparation; scores: Record<string, number | null>; rankingTokens: string[] | null }
+  | { status: "locked"; record: BlindEvaluationRecord }
+  | { status: "error"; message: string };
+
+type BlindEvaluationSurfaceStatus = BlindEvaluationState["status"];
+
+function BlindEvaluationPanel({
+  runId,
+  onStatusChange,
+}: {
+  runId: string;
+  onStatusChange: (status: BlindEvaluationSurfaceStatus) => void;
+}) {
+  const [state, setState] = useState<BlindEvaluationState>({ status: "loading" });
+  const [validationMessage, setValidationMessage] = useState("");
+  const updateState = (next: BlindEvaluationState) => {
+    onStatusChange(next.status);
+    setState(next);
+  };
+
+  useEffect(() => {
+    let current = true;
+    setValidationMessage("");
+    if (!isDesktopEnvironment()) {
+      updateState({ status: "idle" });
+      return () => {
+        current = false;
+      };
+    }
+    updateState({ status: "loading" });
+    void readBlindEvaluation(runId)
+      .then((record) => {
+        if (current) updateState(record ? { status: "locked", record } : { status: "idle" });
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          updateState({
+            status: "error",
+            message: error instanceof Error ? error.message : "The selected run evaluation is unavailable.",
+          });
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [runId, onStatusChange]);
+
+  const prepare = async () => {
+    setValidationMessage("");
+    updateState({ status: "preparing" });
+    try {
+      const preparation = await prepareBlindEvaluation(runId);
+      if (preparation.status === "locked") {
+        const record = await readBlindEvaluation(runId);
+        if (record) updateState({ status: "locked", record });
+        else updateState({ status: "error", message: "The evaluation reported locked without a readable record." });
+      } else if (preparation.status === "empty") {
+        updateState({ status: "empty", preparation });
+      } else {
+        const scores: Record<string, number | null> = {};
+        for (const response of preparation.responses) scores[response.token] = null;
+        updateState({ status: "prepared", preparation, scores, rankingTokens: null });
+      }
+    } catch (error: unknown) {
+      updateState({
+        status: "error",
+        message: error instanceof Error ? error.message : "The selected run responses could not be prepared.",
+      });
+    }
+  };
+
+  const setScore = (token: string, value: string) => {
+    if (state.status !== "prepared") return;
+    setValidationMessage("");
+    updateState({
+      ...state,
+      scores: { ...state.scores, [token]: value ? Number(value) : null },
+    });
+  };
+
+  const setRankingToken = (index: number, token: string) => {
+    if (state.status !== "prepared" || !state.rankingTokens) return;
+    const rankingTokens = [...state.rankingTokens];
+    rankingTokens[index] = token;
+    updateState({ ...state, rankingTokens });
+  };
+
+  const lock = async () => {
+    if (state.status !== "prepared") return;
+    const responses = state.preparation.responses;
+    if (responses.some((response) => state.scores[response.token] === null || state.scores[response.token] === undefined)) {
+      setValidationMessage("Score every anonymous response from 1 to 5 before locking.");
+      return;
+    }
+    if (state.rankingTokens && new Set(state.rankingTokens).size !== responses.length) {
+      setValidationMessage("Complete the ranking without duplicate responses, or remove ranking.");
+      return;
+    }
+    if (!window.confirm("Lock this blind evaluation? It becomes immutable and cannot be changed.")) return;
+    const scores: BlindEvaluationScore[] = responses.map((response) => ({
+      token: response.token,
+      overallScore: state.scores[response.token] as number,
+      criterionScores: {},
+    }));
+    const request: BlindEvaluationLockRequest = {
+      evaluationId: state.preparation.evaluationId,
+      runId,
+      scores,
+      ranking: state.rankingTokens ? state.rankingTokens.map((token) => [token]) : null,
+    };
+    try {
+      const record = await lockBlindEvaluation(request);
+      updateState({ status: "locked", record });
+    } catch (error: unknown) {
+      updateState({
+        status: "error",
+        message: error instanceof Error ? error.message : "The blind evaluation could not be locked.",
+      });
+    }
+  };
+
+  return (
+    <section className="evaluation-panel results-section" aria-live="polite" aria-label="Blind human evaluation">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Human evaluation</p>
+          <h3>Blind response review</h3>
+        </div>
+        {state.status !== "idle" && state.status !== "loading" && state.status !== "preparing" && (
+          <span className="run-status run-status-neutral">{blindEvaluationStatusLabel(state.status === "prepared" || state.status === "empty" ? state.preparation.status : state.status)}</span>
+        )}
+      </div>
+      {!isDesktopEnvironment() && (
+        <StateMessage icon="◇" title="Browser preview / no writes" description="Blind evaluation reads real local run artifacts only in the desktop workspace; preview invents no responses." />
+      )}
+      {isDesktopEnvironment() && state.status === "loading" && (
+        <StateMessage icon="…" title="Checking evaluation state" description="Reading only the selected run's immutable evaluation record." />
+      )}
+      {isDesktopEnvironment() && state.status === "idle" && (
+        <>
+          <p className="field-help">Prepare a blind presentation from completed generation responses. Model, profile, provider, endpoint, metrics, objective evidence, and attempt IDs stay out of the presentation.</p>
+          <button className="secondary-button" type="button" onClick={() => void prepare()}>Prepare anonymous responses</button>
+        </>
+      )}
+      {isDesktopEnvironment() && state.status === "preparing" && (
+        <StateMessage icon="…" title="Preparing anonymous responses" description="Verifying app-owned generation artifacts and building a stable anonymous order." />
+      )}
+      {isDesktopEnvironment() && state.status === "error" && (
+        <StateMessage icon="!" title="Evaluation unavailable" description={state.message} error />
+      )}
+      {isDesktopEnvironment() && state.status === "empty" && (
+        <StateMessage icon="—" title={blindEvaluationStatusLabel(state.preparation.status)} description="This run has no completed attempts with verified generation-response artifacts." />
+      )}
+      {isDesktopEnvironment() && state.status === "prepared" && (
+        <div className="blind-review-content">
+          <p className="blind-review-warning">Responses below are untrusted plain text. They are rendered as text only; no identity metadata is available before lock.</p>
+          <div className="blind-response-grid">
+            {state.preparation.responses.map((response) => (
+              <article className="blind-response-card" key={response.token}>
+                <p className="eyebrow">{response.label}</p>
+                <div className="blind-response-text">{response.text}</div>
+                <label className="blind-score-control">
+                  <span>Overall score</span>
+                  <select value={state.scores[response.token] ?? ""} onChange={(event) => setScore(response.token, event.target.value)}>
+                    <option value="">Choose 1–5</option>
+                    {[1, 2, 3, 4, 5].map((score) => <option key={score} value={score}>{score}/5</option>)}
+                  </select>
+                </label>
+              </article>
+            ))}
+          </div>
+          <div className="blind-ranking-controls">
+            <div className="section-heading compact-heading">
+              <div>
+                <p className="eyebrow">Optional ranking</p>
+                <p className="field-help">Choose a complete order; equal positions can be represented by the typed lock request.</p>
+              </div>
+              {state.rankingTokens ? (
+                <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: null })}>Remove ranking</button>
+              ) : (
+                <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: state.preparation.responses.map((response) => response.token) })}>Add ranking</button>
+              )}
+            </div>
+            {state.rankingTokens && state.rankingTokens.map((token, index) => {
+              const current = state.preparation.responses.find((response) => response.token === token);
+              const usedElsewhere = new Set(state.rankingTokens?.filter((_, position) => position !== index));
+              return (
+                <label className="blind-score-control" key={`${token}-${index}`}>
+                  <span>Rank {index + 1}</span>
+                  <select value={token} onChange={(event) => setRankingToken(index, event.target.value)}>
+                    {state.preparation.responses
+                      .filter((response) => response.token === token || !usedElsewhere.has(response.token))
+                      .map((response) => <option key={response.token} value={response.token}>{response.label}</option>)}
+                  </select>
+                  <span className="sr-only">{current?.label}</span>
+                </label>
+              );
+            })}
+          </div>
+          {validationMessage && <p className="field-help evaluation-validation" role="alert">{validationMessage}</p>}
+          <button className="primary-button" type="button" onClick={() => void lock()}>Lock blind evaluation</button>
+          <p className="field-help">Locking stores only anonymous presentation evidence, resolved attempt IDs for audit, scores, ranking, and timestamps. Response text is not stored in the evaluation record.</p>
+        </div>
+      )}
+      {isDesktopEnvironment() && state.status === "locked" && (
+        <div className="locked-evaluation">
+          <p className="blind-review-warning">This evaluation is immutable and read-only. Response text is omitted; audit identity is shown only after lock.</p>
+          <ul className="locked-evaluation-list">
+            {state.record.presentation.map((entry) => {
+              const score = state.record.scores.find((candidate) => candidate.token === entry.token);
+              return <li key={entry.token}><strong>{entry.label}</strong><span>Attempt {entry.attemptId} · {blindEvaluationScoreLabel(score?.overallScore)}</span></li>;
+            })}
+          </ul>
+          {state.record.ranking && <p className="field-help">A complete ranking or tie-group representation is recorded.</p>}
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -189,6 +189,73 @@ pub struct ObjectiveVerificationEvidence {
     pub actual_sha256: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlindEvaluationStatus {
+    Empty,
+    Prepared,
+    Locked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindEvaluationResponse {
+    pub label: String,
+    pub token: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindEvaluationPreparation {
+    pub evaluation_id: String,
+    pub run_id: String,
+    pub status: BlindEvaluationStatus,
+    pub responses: Vec<BlindEvaluationResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindEvaluationScore {
+    pub token: String,
+    pub overall_score: u8,
+    #[serde(default)]
+    pub criterion_scores: BTreeMap<String, u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindEvaluationLockRequest {
+    pub evaluation_id: String,
+    pub run_id: String,
+    pub scores: Vec<BlindEvaluationScore>,
+    #[serde(default)]
+    pub ranking: Option<Vec<Vec<String>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindEvaluationPresentationEntry {
+    pub label: String,
+    pub token: String,
+    pub attempt_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlindEvaluationRecord {
+    pub evaluation_id: String,
+    pub run_id: String,
+    pub status: BlindEvaluationStatus,
+    pub presentation: Vec<BlindEvaluationPresentationEntry>,
+    pub scores: Vec<BlindEvaluationScore>,
+    pub ranking: Option<Vec<Vec<String>>>,
+    pub created_at: String,
+    pub locked_at: String,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactRef {

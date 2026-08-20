@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod domain;
+pub mod evaluation;
 pub mod ollama;
 pub mod orchestration;
 pub mod protocol;
@@ -27,6 +28,9 @@ pub fn run() -> tauri::Result<()> {
             commands::list_local_ollama_models,
             commands::list_runs,
             commands::list_run_attempts,
+            commands::prepare_blind_evaluation,
+            commands::get_blind_evaluation,
+            commands::lock_blind_evaluation,
             commands::get_run_status,
             commands::execute_run_once
         ])

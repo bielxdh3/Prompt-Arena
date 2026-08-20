@@ -2,6 +2,41 @@ import type { ObjectiveVerificationEvidence } from "./bridge";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
 
+export function blindReviewHidesAttemptEvidence(status: string): boolean {
+  switch (status.trim().toLowerCase()) {
+    case "loading":
+    case "preparing":
+    case "prepared":
+    case "empty":
+    case "error":
+      return true;
+    case "idle":
+    case "locked":
+      return false;
+    default:
+      return true;
+  }
+}
+
+export function blindEvaluationStatusLabel(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "prepared":
+      return "Ready for blind review";
+    case "locked":
+      return "Locked and read-only";
+    case "empty":
+      return "No eligible responses";
+    default:
+      return "Evaluation unavailable";
+  }
+}
+
+export function blindEvaluationScoreLabel(score: number | null | undefined): string {
+  return score !== null && score !== undefined && Number.isInteger(score) && score >= 1 && score <= 5
+    ? `${score}/5`
+    : "Not scored";
+}
+
 export function objectiveVerificationEvidence(value: unknown): ObjectiveVerificationEvidence | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;

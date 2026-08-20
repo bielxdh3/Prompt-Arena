@@ -10,8 +10,14 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     domain::{
-        validate_benchmark_document as validate_document, Attempt, ProfileRevision, Run,
+        validate_benchmark_document as validate_document, Attempt, BlindEvaluationLockRequest,
+        BlindEvaluationPreparation, BlindEvaluationRecord, ProfileRevision, Run,
         ValidatedBenchmark, ValidationError,
+    },
+    evaluation::{
+        get_blind_evaluation as get_blind_evaluation_record,
+        lock_blind_evaluation as lock_blind_evaluation_record,
+        prepare_blind_evaluation as prepare_blind_evaluation_record, BlindEvaluationError,
     },
     ollama::OllamaProvider,
     orchestration::{
@@ -74,6 +80,8 @@ impl From<StorageError> for CommandError {
         let code = match error {
             StorageError::ImmutableConflict => "immutable_conflict",
             StorageError::ArtifactAlreadyExists => "artifact_already_exists",
+            StorageError::ArtifactNotFound => "artifact_not_found",
+            StorageError::ArtifactKindMismatch => "artifact_kind_invalid",
             StorageError::ArtifactHashMismatch => "artifact_hash_mismatch",
             StorageError::ArtifactTooLarge => "artifact_too_large",
             StorageError::EmptyArtifactPath
@@ -130,6 +138,22 @@ impl From<OrchestrationError> for CommandError {
             OrchestrationError::UnsupportedRuntime(_) => "runtime_unsupported",
             OrchestrationError::Runtime(_) => "runtime_failed",
             OrchestrationError::Storage(storage_error) => return storage_error.clone().into(),
+        };
+        Self {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<BlindEvaluationError> for CommandError {
+    fn from(error: BlindEvaluationError) -> Self {
+        let code = match &error {
+            BlindEvaluationError::RunNotFound => "run_not_found",
+            BlindEvaluationError::NoResponses => "blind_evaluation_empty",
+            BlindEvaluationError::TooManyResponses => "blind_evaluation_too_large",
+            BlindEvaluationError::InvalidInput(_) => "blind_evaluation_invalid",
+            BlindEvaluationError::Storage(storage_error) => return storage_error.clone().into(),
         };
         Self {
             code,
@@ -298,6 +322,30 @@ pub fn list_run_attempts(app: AppHandle, run_id: String) -> Result<Vec<Attempt>,
     storage_for(&app)?
         .list_attempts(&run_id)
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn prepare_blind_evaluation(
+    app: AppHandle,
+    run_id: String,
+) -> Result<BlindEvaluationPreparation, CommandError> {
+    prepare_blind_evaluation_record(&storage_for(&app)?, &run_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_blind_evaluation(
+    app: AppHandle,
+    run_id: String,
+) -> Result<Option<BlindEvaluationRecord>, CommandError> {
+    get_blind_evaluation_record(&storage_for(&app)?, &run_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn lock_blind_evaluation(
+    app: AppHandle,
+    request: BlindEvaluationLockRequest,
+) -> Result<BlindEvaluationRecord, CommandError> {
+    lock_blind_evaluation_record(&storage_for(&app)?, &request, &now_marker()).map_err(Into::into)
 }
 
 #[tauri::command]

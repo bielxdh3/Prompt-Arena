@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   attemptStatusLabel,
   attemptStatusTone,
+  blindReviewHidesAttemptEvidence,
+  blindEvaluationScoreLabel,
+  blindEvaluationStatusLabel,
   formatByteCount,
   formatCount,
   formatDurationNs,
@@ -39,5 +42,21 @@ describe("read-only results formatting", () => {
     expect(evidence?.expectedNormalizedByteCount).toBe(8);
     expect(objectiveVerificationEvidence({ verifierKind: "human", score: 1 })).toBeNull();
     expect(objectiveVerificationEvidence("response text")).toBeNull();
+  });
+
+  it("keeps blind-evaluation states and score controls bounded", () => {
+    expect(blindReviewHidesAttemptEvidence("loading")).toBe(true);
+    expect(blindReviewHidesAttemptEvidence("preparing")).toBe(true);
+    expect(blindReviewHidesAttemptEvidence("prepared")).toBe(true);
+    expect(blindReviewHidesAttemptEvidence("empty")).toBe(true);
+    expect(blindReviewHidesAttemptEvidence("error")).toBe(true);
+    expect(blindReviewHidesAttemptEvidence("idle")).toBe(false);
+    expect(blindReviewHidesAttemptEvidence("locked")).toBe(false);
+    expect(blindReviewHidesAttemptEvidence("unknown")).toBe(true);
+    expect(blindEvaluationStatusLabel("prepared")).toBe("Ready for blind review");
+    expect(blindEvaluationStatusLabel("locked")).toBe("Locked and read-only");
+    expect(blindEvaluationStatusLabel("unknown")).toBe("Evaluation unavailable");
+    expect(blindEvaluationScoreLabel(5)).toBe("5/5");
+    expect(blindEvaluationScoreLabel(0)).toBe("Not scored");
   });
 });

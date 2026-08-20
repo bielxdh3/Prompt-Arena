@@ -12,18 +12,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{
     canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
-    validate_artifact_ref, validate_benchmark_document, Attempt, ImmutableResultReference,
-    ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+    validate_artifact_ref, validate_benchmark_document, Attempt, BlindEvaluationRecord,
+    ImmutableResultReference, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
 };
+
+use crate::runtime::GenerationResponse;
 
 pub use crate::domain::ArtifactRef;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 3;
+pub const STORAGE_SCHEMA_VERSION: u32 = 4;
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const FOUNDATION_MIGRATION: &str = include_str!("storage/migrations/0001_foundation.sql");
 pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_core_arena.sql");
 pub const BENCHMARK_DRAFTS_MIGRATION: &str =
     include_str!("storage/migrations/0003_benchmark_drafts.sql");
+pub const BLIND_EVALUATIONS_MIGRATION: &str =
+    include_str!("storage/migrations/0004_blind_evaluations.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = 256 * 1024;
@@ -241,6 +245,8 @@ pub enum StorageError {
     InvalidArtifactReference,
     InvalidRecordId,
     ArtifactAlreadyExists,
+    ArtifactNotFound,
+    ArtifactKindMismatch,
     ArtifactHashMismatch,
     ArtifactTooLarge,
     ImmutableConflict,
@@ -271,6 +277,8 @@ impl std::fmt::Display for StorageError {
             Self::InvalidArtifactReference => "artifact reference is invalid",
             Self::InvalidRecordId => "record id is invalid",
             Self::ArtifactAlreadyExists => "immutable artifact already exists",
+            Self::ArtifactNotFound => "artifact was not found in the app-owned store",
+            Self::ArtifactKindMismatch => "artifact kind does not match the requested reader",
             Self::ArtifactHashMismatch => "artifact content hash does not match its reference",
             Self::ArtifactTooLarge => "artifact exceeds the local size limit",
             Self::ImmutableConflict => "immutable metadata already exists with different content",
@@ -344,6 +352,7 @@ impl StorageService {
         apply_migration(&mut connection, 1, FOUNDATION_MIGRATION)?;
         apply_migration(&mut connection, 2, CORE_ARENA_MIGRATION)?;
         apply_migration(&mut connection, 3, BENCHMARK_DRAFTS_MIGRATION)?;
+        apply_migration(&mut connection, 4, BLIND_EVALUATIONS_MIGRATION)?;
         Ok(())
     }
 
@@ -836,6 +845,34 @@ impl StorageService {
         get_json_record(&self.connection()?, JsonTable::Runs, run_id)
     }
 
+    pub fn save_blind_evaluation(
+        &self,
+        evaluation: &BlindEvaluationRecord,
+        created_at: &str,
+    ) -> Result<SaveOutcome, StorageError> {
+        validate_record_id(&evaluation.evaluation_id)?;
+        validate_record_id(&evaluation.run_id)?;
+        save_immutable_json(
+            &self.connection()?,
+            JsonTable::BlindEvaluations,
+            &evaluation.evaluation_id,
+            evaluation,
+            created_at,
+        )
+    }
+
+    pub fn get_blind_evaluation(
+        &self,
+        evaluation_id: &str,
+    ) -> Result<Option<BlindEvaluationRecord>, StorageError> {
+        validate_record_id(evaluation_id)?;
+        get_json_record(
+            &self.connection()?,
+            JsonTable::BlindEvaluations,
+            evaluation_id,
+        )
+    }
+
     pub fn list_attempts(&self, run_id: &str) -> Result<Vec<Attempt>, StorageError> {
         validate_record_id(run_id)?;
         let attempts: Vec<Attempt> = list_json_records(&self.connection()?, JsonTable::Attempts)?;
@@ -927,6 +964,88 @@ impl StorageService {
         Ok(record)
     }
 
+    pub fn read_verified_artifact(
+        &self,
+        kind: &str,
+        artifact: &ArtifactRef,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        validate_artifact_reference(artifact)?;
+        let connection = self.connection()?;
+        let record: ArtifactRecord = connection
+            .query_row(
+                "SELECT artifact_id, kind, relative_path, schema_version, sha256, created_at
+                 FROM artifact_records WHERE artifact_id = ?1",
+                params![artifact.artifact_id],
+                |row| {
+                    Ok(ArtifactRecord {
+                        artifact_id: row.get(0)?,
+                        kind: row.get(1)?,
+                        relative_path: row.get(2)?,
+                        schema_version: row.get(3)?,
+                        sha256: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?
+            .ok_or(StorageError::ArtifactNotFound)?;
+        if record.kind != kind
+            || record.relative_path != artifact.relative_path
+            || record.schema_version != artifact.schema_version
+        {
+            return Err(StorageError::ArtifactKindMismatch);
+        }
+        let record_hash = record.sha256.ok_or(StorageError::ArtifactHashMismatch)?;
+        if artifact
+            .sha256
+            .as_deref()
+            .is_some_and(|hash| !hash.eq_ignore_ascii_case(&record_hash))
+        {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+
+        let target = safe_existing_artifact_path(&self.layout.artifact_root(), artifact)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(StorageError::InvalidArtifactReference);
+        }
+        let limit = max_bytes.min(MAX_ARTIFACT_BYTES);
+        if metadata.len() > limit as u64 {
+            return Err(StorageError::ArtifactTooLarge);
+        }
+        let bytes = fs::read(&target).map_err(StorageError::from_io)?;
+        if bytes.len() > limit {
+            return Err(StorageError::ArtifactTooLarge);
+        }
+        let computed_hash = sha256_hex(&bytes);
+        if !computed_hash.eq_ignore_ascii_case(&record_hash)
+            || artifact
+                .sha256
+                .as_deref()
+                .is_some_and(|hash| !hash.eq_ignore_ascii_case(&computed_hash))
+        {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+        Ok(bytes)
+    }
+
+    pub fn read_generation_response(
+        &self,
+        artifact: &ArtifactRef,
+        max_bytes: usize,
+    ) -> Result<GenerationResponse, StorageError> {
+        let bytes = self.read_verified_artifact("generation-response", artifact, max_bytes)?;
+        serde_json::from_slice(&bytes).map_err(|_| StorageError::InvalidArtifactReference)
+    }
+
     fn connection(&self) -> Result<Connection, StorageError> {
         let connection = Connection::open(self.layout.database_path())
             .map_err(|_| StorageError::DatabaseFailure)?;
@@ -942,6 +1061,7 @@ enum JsonTable {
     ProfileRevisions,
     Runs,
     Attempts,
+    BlindEvaluations,
 }
 
 impl JsonTable {
@@ -950,6 +1070,7 @@ impl JsonTable {
             Self::ProfileRevisions => "profile_revisions",
             Self::Runs => "runs",
             Self::Attempts => "attempts",
+            Self::BlindEvaluations => "blind_evaluations",
         }
     }
 }
@@ -1314,6 +1435,29 @@ fn validate_artifact_reference(artifact: &ArtifactRef) -> Result<(), StorageErro
     Ok(())
 }
 
+fn safe_existing_artifact_path(
+    artifact_root: &Path,
+    artifact: &ArtifactRef,
+) -> Result<PathBuf, StorageError> {
+    let segments: Vec<&str> = artifact.relative_path.split('/').collect();
+    let mut current = artifact_root.to_path_buf();
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        current.push(segment);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(StorageError::InvalidArtifactReference);
+        }
+    }
+    let target = artifact_root.join(&artifact.relative_path);
+    Ok(target)
+}
+
 fn validate_relative_path(relative_path: &str) -> Result<(), StorageError> {
     if relative_path.is_empty() {
         return Err(StorageError::EmptyArtifactPath);
@@ -1361,9 +1505,10 @@ mod tests {
 
     use super::{
         ArtifactRef, ArtifactStore, BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout,
-        StorageService, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, FOUNDATION_MIGRATION,
-        MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
-        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
+        StorageService, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
+        BLIND_EVALUATIONS_MIGRATION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
+        MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES, MAX_PROFILE_MODEL_BYTES,
+        MAX_PROFILE_REQUEST_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1471,15 +1616,19 @@ mod tests {
     fn migration_setup_is_idempotent_and_preserves_history() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
-        assert_eq!(service.migration_versions().unwrap(), vec![1, 2, 3]);
+        assert_eq!(service.migration_versions().unwrap(), vec![1, 2, 3, 4]);
         service.initialize().expect("second migration pass");
-        assert_eq!(service.migration_versions().unwrap(), vec![1, 2, 3]);
+        assert_eq!(service.migration_versions().unwrap(), vec![1, 2, 3, 4]);
         assert!(FOUNDATION_MIGRATION.contains("CREATE TABLE"));
         assert!(!FOUNDATION_MIGRATION
             .to_ascii_uppercase()
             .contains("DROP TABLE"));
         assert!(BENCHMARK_DRAFTS_MIGRATION.contains("benchmark_drafts"));
         assert!(!BENCHMARK_DRAFTS_MIGRATION
+            .to_ascii_uppercase()
+            .contains("DROP TABLE"));
+        assert!(BLIND_EVALUATIONS_MIGRATION.contains("blind_evaluations"));
+        assert!(!BLIND_EVALUATIONS_MIGRATION
             .to_ascii_uppercase()
             .contains("DROP TABLE"));
         let _ = fs::remove_dir_all(root);
@@ -1671,6 +1820,34 @@ mod tests {
         assert_eq!(
             service.write_artifact("run-output", &artifact, b"changed", "200"),
             Err(StorageError::ArtifactAlreadyExists)
+        );
+
+        let payload = b"untrusted plain response";
+        let mut generation_artifact =
+            ArtifactRef::new("generation-output", "runs/run-1/generation.json").unwrap();
+        generation_artifact.sha256 = Some(crate::domain::sha256_hex(payload));
+        service
+            .write_artifact("generation-response", &generation_artifact, payload, "100")
+            .unwrap();
+        assert_eq!(
+            service
+                .read_verified_artifact("generation-response", &generation_artifact, 1024)
+                .unwrap(),
+            payload
+        );
+        let mut wrong_hash = generation_artifact.clone();
+        wrong_hash.sha256 = Some("0".repeat(64));
+        assert_eq!(
+            service.read_verified_artifact("generation-response", &wrong_hash, 1024),
+            Err(StorageError::ArtifactHashMismatch)
+        );
+        assert_eq!(
+            service.read_verified_artifact("generation-response", &generation_artifact, 1),
+            Err(StorageError::ArtifactTooLarge)
+        );
+        assert_eq!(
+            service.read_verified_artifact("other-kind", &generation_artifact, 1024),
+            Err(StorageError::ArtifactKindMismatch)
         );
         let oversized = ArtifactRef::new("oversized-output", "runs/run-1/oversized.json").unwrap();
         let oversized_bytes = vec![b'x'; MAX_ARTIFACT_BYTES + 1];
