@@ -10,7 +10,8 @@ Validation is proportional to the foundation and must remain honest about what i
   Arena option extraction/selection/preview behavior, RunPlan objective-expectation extraction/bounds/no-gold-metadata,
   read-only results status/metric formatting, blind-review evidence suppression states, official-pack browser-preview
   no-write states, model metadata compatibility, bounded hardware recommendation classification/thresholds, missing
-  telemetry, hardware browser-preview no-read states, and browser-preview surface states:
+  telemetry, hardware browser-preview no-read states, bounded comparability readiness/order/tie states, and browser-preview
+  surface states:
   `npm run test`.
 - Rust formatting: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`.
 - Rust compilation: `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`.
@@ -44,12 +45,12 @@ Validation is proportional to the foundation and must remain honest about what i
 The tests exercise the local SQLite service and immutable artifact writer using temporary app-owned roots, the bounded
 one-shot orchestration contract including response-summary and objective-verification replay/conflict/bounds, the Phase 05
 draft boundary, the Phase 06 profile/discovery slice, the bounded model-library hardware baseline/recommendation helper,
-the bounded Arena helper and objective RunPlan contract, the blind evaluation artifact/presentation/lock boundary, the official
-source-pack catalog, the read-only results helpers, and the normalized
+the bounded Arena helper and objective RunPlan contract, the bounded single-run comparability diagnostic, the blind
+evaluation artifact/presentation/lock boundary, the official source-pack catalog, the read-only results helpers, and the normalized
 runtime/Ollama adapter through a local mock server. There is no desktop integration test
 that launches the Tauri app and worker together, no broader run authoring/control UI, app-managed long-lived runtime
 app-managed long-lived runtime lifecycle, unified model search/download/duplicate flow, empirical hardware history,
-full model download/catalog/deletion flow, external or cloud provider test,
+cross-run ranking/regression/tournament/AI-judge comparability flow, full model download/catalog/deletion flow, external or cloud provider test,
 Docker-backed coding sandbox, desktop integration for the official-pack UI, or production-data migration test. Those
 checks belong with the phases that implement each behavior; the current tests
 verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
