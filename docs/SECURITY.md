@@ -13,6 +13,12 @@ and request bound, performs one generation at most, returns one typed terminal r
 The CSP allows the local Vite development origin and Tauri IPC only. It does not allow arbitrary scripts, inline styles,
 or external font loading in the production document. Font choices use local system stacks.
 
+Phase 15 appearance state is a presentation boundary, not a domain-storage boundary. The pure normalizer accepts only
+fixed font/scale/accent/radius/surface choices and a boolean reduced-motion flag. Tauri may persist the normalized JSON in
+the local webview store; browser preview neither reads nor writes localStorage and never creates desktop records. CSS
+uses fixed selectors for normalized data attributes, with no arbitrary style strings, remote themes, imports, accounts,
+credentials, or telemetry.
+
 The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
 command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
 does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
@@ -22,7 +28,8 @@ model paths, download files, or send telemetry.
 
 ## Trust boundaries
 
-- UI input is presentation state; font selection is constrained to a fixed option list.
+- UI input is presentation state; font selection, scale, accent, radius, surface, and reduced motion are constrained by
+  the pure appearance normalizer before reaching CSS data attributes or local webview storage.
 - Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or path.
 - Worker input is untrusted JSON and is rejected on malformed JSON, unsupported protocol versions, or unsafe job IDs.
 - The execution command resolves only the fixed worker binary beside the current app executable, supplies no shell or
@@ -88,6 +95,9 @@ model paths, download files, or send telemetry.
   under the same parent-owned blind-evaluation gate, so it cannot expose model/profile/provider/metrics/objective
   evidence or attempt IDs while the gate suppresses AttemptDetail. It creates no records, reads no artifacts, and makes
   no official ranking, cross-run, regression, tournament, AI-judge, calibration, or cost claim.
+- Phase 15 appearance preferences are sanitized local presentation state only. The browser surface is explicitly
+  no-persistence; desktop storage is limited to one local preference value and contains no prompts, runs, attempts,
+  models, profiles, metrics, or credentials.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
   summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
@@ -95,7 +105,8 @@ model paths, download files, or send telemetry.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/hardware/Arena/official-pack commands, validate benchmarks, query
   Ollama, or invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output
-  is untrusted content and must be sanitized before Markdown/HTML rendering.
+  is untrusted content and must be sanitized before Markdown/HTML rendering. Appearance changes remain in memory and do
+  not write browser localStorage.
 
 ## Required future controls
 

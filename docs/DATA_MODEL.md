@@ -199,6 +199,14 @@ attempt IDs and identity/metrics/objective evidence remain suppressed. Browser p
 invents no comparability result. Regression, tournaments, AI judging, calibration, cost analysis, and persistent
 comparability history remain future work.
 
+## Phase 15 bounded appearance state
+
+Appearance preferences are local presentation state, not a SQLite record, benchmark artifact, or desktop domain entity.
+The pure normalizer accepts the existing font IDs, a bounded stepped scale, fixed accent/radius/surface IDs, and a boolean
+reduced-motion flag, then returns defaults for malformed or unsupported values. The UI persists the normalized object only
+in Tauri webview storage; browser preview keeps it in memory for a truthful live preview and never reads or writes
+localStorage. Theme history, import/export, sync, telemetry, and user-generated CSS are not part of this data model.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.
