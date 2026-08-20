@@ -19,6 +19,12 @@ the local webview store; browser preview neither reads nor writes localStorage a
 uses fixed selectors for normalized data attributes, with no arbitrary style strings, remote themes, imports, accounts,
 credentials, or telemetry.
 
+Phase 16 external-provider code is catalog, arithmetic, and explanatory UI only. It accepts no API key, secret, environment
+value, endpoint, credential file, or provider response; it makes no network call and has no persistence boundary. Cost
+estimation validates dated price snapshots and bounded usage, fails closed when prices are missing/invalid, and budget
+decisions never authorize execution by themselves. Unknown provider-selection fields, including credential-like fields,
+are discarded before a sanitized summary is returned. Local Ollama remains the only executable runtime.
+
 The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
 command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
 does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
@@ -98,6 +104,8 @@ model paths, download files, or send telemetry.
 - Phase 15 appearance preferences are sanitized local presentation state only. The browser surface is explicitly
   no-persistence; desktop storage is limited to one local preference value and contains no prompts, runs, attempts,
   models, profiles, metrics, or credentials.
+- Phase 16 provider metadata and cost helpers are ephemeral and read-only. They never accept, log, persist, export, or
+  transmit secrets; all four external identities remain unconfigured, identity-unverified, and network-not-wired.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
   summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
@@ -110,7 +118,7 @@ model paths, download files, or send telemetry.
 
 ## Required future controls
 
-External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
+External/cloud provider adapters, credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
 model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, broader official-pack coverage, Docker-backed coding sandbox execution, unified model search, duplicate management, empirical recommendation history, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
