@@ -14,21 +14,28 @@ This roadmap is the current implementation baseline for Prompt Arena. The author
 
 ## Phase A — Foundation — DONE (bounded contract foundation)
 
-- `DONE` — Tauri 2 + React + TypeScript + Rust workspace with a narrow typed `app_status` command.
+- `DONE` — Tauri 2 + React + TypeScript + Rust workspace with a narrow typed desktop command boundary.
 - `DONE` — App-owned one-shot worker protocol and executable skeleton; no daemon lifecycle yet.
 - `DONE` — Windows/Linux-only CI definition.
-- `DONE` — Versioned SQLite foundation migration and path-safe filesystem artifact-store contract; execution/I/O is
-  intentionally deferred until the storage phase.
+- `DONE` — Versioned SQLite foundation migration and path-safe filesystem artifact-store contract.
 - `DONE` — Semantic dark-neutral-gray tokens, strongly rounded shell, keyboard focus states, reduced-motion handling,
   and truthful loading/error/empty UI states.
 - `DONE` — Times New Roman default intent with explicit Linux fallbacks and seven selectable local font stacks.
 - `DONE` — Foundation theme configuration hook and concise architecture, development, security, privacy, data-model,
   testing, and design-system documentation.
 
-The foundation does not claim live benchmark persistence, worker spawning from the app, model execution, or historical
-data. Those are later-phase behaviors and must consume these contracts without deleting or rewriting history.
+Phase A does not claim worker spawning from the app, model execution, providers, or benchmark authoring UI. Phase B
+currently owns the bounded local domain/storage implementation below and must consume the Phase A contracts without
+deleting or rewriting history.
 
-## Phase B — Core Arena
+## Phase B — Core Arena — IN PROGRESS
+
+- `DONE` — Benchmark v1 typed/manual validation with deterministic IDs, unknown-field preservation, and artifact-reference checks.
+- `DONE` — Local SQLite migrations for benchmark metadata, immutable profile/run/attempt/result records, and artifact metadata.
+- `DONE` — Atomic immutable artifact writes with portable path, size, and hash controls.
+- `DONE` — Typed validation, benchmark-version save, and benchmark-version list commands.
+- `PLANNED` — Benchmark Draft and authoring UI.
+- `PLANNED` — Runtime execution, provider adapters, orchestration, streaming, cancellation, and evaluation.
 
 - Generic provider/runtime adapter contracts.
 - Ollama integration.
