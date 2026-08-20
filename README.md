@@ -10,11 +10,16 @@ normalized runtime contract and a backend-only Ollama adapter for loopback healt
 and NDJSON streaming. Phase 04 adds bounded one-shot orchestration through the app-owned worker, immutable terminal
 evidence persistence/replay, and a local Runs read surface. It does not add run authoring controls, downloads, cloud
 services, accounts, or telemetry.
-Phase 05 adds a bounded structured benchmark-draft editor, migration `0003_benchmark_drafts.sql`, and typed desktop
+Phase 05 — DONE (bounded) — adds a structured benchmark-draft editor, migration `0003_benchmark_drafts.sql`, and typed desktop
 commands to list, read, save, validate, and publish local drafts. Drafts are editable records with revision checks;
 publishing validates benchmark-v1 and creates an immutable benchmark version. The browser preview shows only unsaved
 editor state and performs no draft/version reads or writes. This slice does not add raw JSON editing, importing,
 cloning, run controls, evaluation, official benchmark packs, model-library management, or external/cloud providers.
+Phase 06 — DONE (bounded) — adds a Models surface for immutable local profile-revision listing/registration and installed-model
+discovery through the existing Ollama adapter. Discovery uses only the fixed `http://127.0.0.1:11434` loopback
+endpoint and returns bounded, sorted metadata with typed unavailable/protocol errors. There are no endpoint or
+credential fields, downloads, deletion, cloud providers, or browser-side profile/model records; full model-library
+management remains planned.
 
 ## Run locally
 
@@ -45,7 +50,8 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 
 - Local data belongs to the app-owned storage root. Migrations `0001_foundation.sql`, `0002_core_arena.sql`, and
   `0003_benchmark_drafts.sql` create SQLite metadata tables; large payloads remain immutable filesystem artifacts.
-- The registered Tauri commands remain typed, including profile registration, run execution, and Runs read commands.
+- The registered Tauri commands remain typed, including profile-revision listing/registration, fixed-loopback Ollama
+  model discovery, run execution, and Runs read commands.
   `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
   shell or arbitrary arguments, and persists the returned terminal outcome in the app-owned store. Benchmark draft
   list/read/save/publish commands accept only typed local requests and use optimistic revision checks. Browser preview
@@ -55,15 +61,18 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.
 - Metadata is capped at 1 MiB. Draft IDs and benchmark IDs are portable and bounded, draft titles are capped at 256
-  UTF-8 bytes, canonical draft documents at 256 KiB, and draft requests at 512 KiB. Artifact paths are portable
-  relative paths, and existing artifact names/history are never replaced or rewritten.
+  UTF-8 bytes, canonical draft documents at 256 KiB, and draft requests at 512 KiB. Profile IDs are bounded and
+  deterministic revision IDs are immutable; the complete serialized profile request, including `parameters` and
+  flattened `extra`, is capped at 256 KiB. Ollama discovery caps the list at 512 records and each returned model
+  metadata map at 256 KiB. Artifact paths are portable relative paths, and existing artifact names/history are never
+  replaced or rewritten.
 - Runtime requests use typed capability/parameter negotiation and typed errors. The Ollama adapter uses only the
   standard-library HTTP client against an explicit `http://` loopback endpoint; it rejects credentials, query strings,
   fragments, and non-loopback hosts. It has 64 KiB line, 16 MiB non-stream body, and 16 MiB cumulative stream limits.
 - Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
   process. The narrow authoring editor writes only optional text expected answers; arbitrary JSON expectations remain
-  outside this UI. External/cloud providers, credentials, downloads, run authoring, evaluation, official packs, model
-  library management, and full runtime UI remain future work.
+  outside this UI. External/cloud providers, credentials, downloads, run authoring, evaluation, official packs, full
+  model-library management, and broader runtime UI remain future work.
 - Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
   selectable local font stacks; proprietary fonts are not bundled.
 

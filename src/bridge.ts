@@ -59,17 +59,57 @@ export type SavedBenchmarkVersion = {
   summary: BenchmarkVersionSummary;
 };
 
+export type ProfileRevision = {
+  profileId: string;
+  profileRevisionId: string;
+  revision: number;
+  model: string;
+  runtime: string;
+  parameters: Record<string, unknown>;
+  systemPrompt: string | null;
+  extra: Record<string, unknown>;
+};
+
+export type ProfileRevisionRegistration = {
+  profileRevisionId: string;
+  saveOutcome: "saved" | "already_present";
+};
+
+export type ModelInfo = {
+  name: string;
+  digest: string | null;
+  sizeBytes: number | null;
+  modifiedAt: string | null;
+  family: string | null;
+  parameterSize: string | null;
+  quantizationLevel: string | null;
+  contextLength: number | null;
+  metadata: Record<string, unknown>;
+};
+
 export function isDesktopEnvironment(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function bridgeError(error: unknown, fallback: string): Error {
-  if (typeof error === "string" && error.trim()) return new Error(error);
-  if (error !== null && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return new Error(message);
+export class DesktopBridgeError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "DesktopBridgeError";
+    this.code = code;
   }
-  return new Error(fallback);
+}
+
+function bridgeError(error: unknown, fallback: string): DesktopBridgeError {
+  if (typeof error === "string" && error.trim()) return new DesktopBridgeError(error);
+  if (error !== null && typeof error === "object" && "message" in error) {
+    const typedError = error as { message?: unknown; code?: unknown };
+    const message = typedError.message;
+    const code = typeof typedError.code === "string" ? typedError.code : undefined;
+    if (typeof message === "string" && message.trim()) return new DesktopBridgeError(message, code);
+  }
+  return new DesktopBridgeError(fallback);
 }
 
 async function invokeDesktop<T>(command: string, fallback: string, args?: Record<string, unknown>): Promise<T> {
@@ -136,5 +176,29 @@ export async function publishBenchmarkDraft(draftId: string): Promise<SavedBench
     "publish_benchmark_draft",
     "The local benchmark draft could not be published.",
     { draftId },
+  );
+}
+
+export async function readProfileRevisions(): Promise<ProfileRevision[]> {
+  return invokeDesktop<ProfileRevision[]>(
+    "list_profile_revisions",
+    "The local profile revisions could not be reached.",
+  );
+}
+
+export async function registerProfileRevision(
+  revision: ProfileRevision,
+): Promise<ProfileRevisionRegistration> {
+  return invokeDesktop<ProfileRevisionRegistration>(
+    "register_profile_revision",
+    "The local profile revision could not be registered.",
+    { revision },
+  );
+}
+
+export async function readLocalOllamaModels(): Promise<ModelInfo[]> {
+  return invokeDesktop<ModelInfo[]>(
+    "list_local_ollama_models",
+    "The local Ollama model list could not be reached.",
   );
 }

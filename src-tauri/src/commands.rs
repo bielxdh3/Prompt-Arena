@@ -13,6 +13,7 @@ use crate::{
         validate_benchmark_document as validate_document, Attempt, ProfileRevision, Run,
         ValidatedBenchmark, ValidationError,
     },
+    ollama::OllamaProvider,
     orchestration::{
         persist_terminal_outcome, OrchestrationError, PersistedExecution, RunPlan, TerminalOutcome,
     },
@@ -20,9 +21,11 @@ use crate::{
         WorkerErrorCode, WorkerOutcome, WorkerRequest, WorkerResponse, WorkerResult,
         MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, WORKER_PROTOCOL_VERSION,
     },
+    runtime::{ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
         now_marker, BenchmarkDraft, BenchmarkDraftInput, BenchmarkDraftSummary,
         BenchmarkVersionSummary, StorageError, StorageService, MAX_DRAFT_REQUEST_BYTES,
+        MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -86,9 +89,31 @@ impl From<StorageError> for CommandError {
             StorageError::DraftNotFound => "draft_not_found",
             StorageError::DraftRevisionConflict => "draft_revision_conflict",
             StorageError::BenchmarkInvalid(_) => "benchmark_invalid",
+            StorageError::InvalidProfileRevision => "profile_revision_invalid",
+            StorageError::ProfileRequestTooLarge => "profile_request_too_large",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<RuntimeError> for CommandError {
+    fn from(error: RuntimeError) -> Self {
+        let code = match &error {
+            RuntimeError::Unavailable { .. } => "runtime_unavailable",
+            RuntimeError::InvalidConfiguration { .. } => "runtime_invalid_configuration",
+            RuntimeError::UnsupportedCapability { .. } => "runtime_unsupported_capability",
+            RuntimeError::UnsupportedParameter { .. } => "runtime_unsupported_parameter",
+            RuntimeError::Transport { .. } => "runtime_transport",
+            RuntimeError::Protocol { .. } => "runtime_protocol",
+            RuntimeError::ModelNotFound { .. } => "model_not_found",
+            RuntimeError::Cancelled => "runtime_cancelled",
+            RuntimeError::Remote { .. } => "runtime_remote",
         };
         Self {
             code,
@@ -222,12 +247,36 @@ pub fn register_profile_revision(
     app: AppHandle,
     revision: ProfileRevision,
 ) -> Result<ProfileRevisionRegistration, CommandError> {
+    let request_bytes = serde_json::to_vec(&revision).map_err(|_| CommandError {
+        code: "profile_request_too_large",
+        message: "the profile revision request could not be encoded".to_owned(),
+    })?;
+    if request_bytes.len() > MAX_PROFILE_REQUEST_BYTES {
+        return Err(CommandError {
+            code: "profile_request_too_large",
+            message: "the profile revision request exceeds the size limit".to_owned(),
+        });
+    }
     let profile_revision_id = revision.profile_revision_id.clone();
     let save_outcome = storage_for(&app)?.save_profile_revision(&revision, &now_marker())?;
     Ok(ProfileRevisionRegistration {
         profile_revision_id,
         save_outcome,
     })
+}
+
+#[tauri::command]
+pub fn list_profile_revisions(app: AppHandle) -> Result<Vec<ProfileRevision>, CommandError> {
+    storage_for(&app)?
+        .list_profile_revisions()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
+    OllamaProvider::default_local()?
+        .list_models()
+        .map_err(Into::into)
 }
 
 #[tauri::command]

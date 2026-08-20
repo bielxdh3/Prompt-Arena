@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   isDesktopEnvironment,
+  readLocalOllamaModels,
+  readProfileRevisions,
+  registerProfileRevision,
   publishBenchmarkDraft,
   readBenchmarkDraft,
   readBenchmarkDrafts,
@@ -12,6 +15,8 @@ import {
   type AppStatus,
   type BenchmarkDraftSummary,
   type BenchmarkVersionSummary,
+  type ModelInfo,
+  type ProfileRevision,
   type RunRecord,
 } from "./bridge";
 import {
@@ -24,9 +29,20 @@ import {
   type DraftFormState,
 } from "./benchmark-authoring";
 import { benchmarkEmptyCopy, benchmarkPreviewCopy, classifyBenchmarkSurface } from "./benchmark-ui";
+import {
+  EMPTY_PROFILE_FORM,
+  modelEmptyCopy,
+  modelMetadataLabel,
+  modelPreviewCopy,
+  profileEmptyCopy,
+  profilePreviewCopy,
+  profileRevisionFromForm,
+  profileRevisionIdPreview,
+  type ProfileFormState,
+} from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 
-type ViewId = "overview" | "benchmarks" | "runs" | "settings";
+type ViewId = "overview" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -35,6 +51,7 @@ type ConnectionState =
 const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] = [
   { id: "overview", label: "Overview", description: "Workspace status" },
   { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
+  { id: "models", label: "Models", description: "Profiles and local models" },
   { id: "runs", label: "Runs", description: "Execution history" },
   { id: "settings", label: "Settings", description: "Appearance and boundaries" },
 ];
@@ -143,6 +160,7 @@ function App() {
         <main className="main-content" id="main-content">
           {activeView === "overview" && <Overview onOpenBenchmarks={() => setActiveView("benchmarks")} />}
           {activeView === "benchmarks" && <BenchmarksView />}
+          {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView />}
           {activeView === "settings" && <Settings fontId={fontId} onFontChange={setFontId} />}
         </main>
@@ -594,6 +612,214 @@ function FormTextArea({
       <textarea id={id} value={value} onChange={(event) => onChange(event.currentTarget.value)} rows={3} />
     </label>
   );
+}
+
+type ProfileState =
+  | { status: "loading" }
+  | { status: "ready"; profiles: ProfileRevision[] }
+  | { status: "error"; message: string }
+  | { status: "preview" };
+
+type ModelsState =
+  | { status: "loading" }
+  | { status: "ready"; models: ModelInfo[] }
+  | { status: "error"; message: string }
+  | { status: "preview" };
+
+function ModelsView() {
+  const [profileState, setProfileState] = useState<ProfileState>({ status: "loading" });
+  const [modelState, setModelState] = useState<ModelsState>({ status: "loading" });
+  const [form, setForm] = useState<ProfileFormState>(EMPTY_PROFILE_FORM);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refreshProfiles() {
+    if (!isDesktopEnvironment()) {
+      setProfileState({ status: "preview" });
+      return;
+    }
+    setProfileState({ status: "loading" });
+    try {
+      setProfileState({ status: "ready", profiles: await readProfileRevisions() });
+    } catch (error: unknown) {
+      setProfileState({
+        status: "error",
+        message: error instanceof Error ? error.message : "The local profile revisions are unavailable.",
+      });
+    }
+  }
+
+  async function refreshModels() {
+    if (!isDesktopEnvironment()) {
+      setModelState({ status: "preview" });
+      return;
+    }
+    setModelState({ status: "loading" });
+    try {
+      setModelState({ status: "ready", models: await readLocalOllamaModels() });
+    } catch (error: unknown) {
+      setModelState({
+        status: "error",
+        message: error instanceof Error ? error.message : "The local Ollama model list is unavailable.",
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!isDesktopEnvironment()) {
+      setProfileState({ status: "preview" });
+      setModelState({ status: "preview" });
+      return;
+    }
+    void refreshProfiles();
+    void refreshModels();
+  }, []);
+
+  function updateField(field: keyof ProfileFormState, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFeedback(null);
+  }
+
+  async function handleRegister() {
+    if (!isDesktopEnvironment()) {
+      setFeedback({ kind: "info", message: profilePreviewCopy() });
+      return;
+    }
+    setBusy(true);
+    try {
+      const revision = profileRevisionFromForm(form);
+      const result = await registerProfileRevision(revision);
+      setFeedback({
+        kind: "success",
+        message:
+          result.saveOutcome === "already_present"
+            ? `Immutable ${result.profileRevisionId} is already registered.`
+            : `Registered immutable ${result.profileRevisionId}.`,
+      });
+      await refreshProfiles();
+    } catch (error: unknown) {
+      setFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The profile revision could not be registered.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="view-stack">
+      <section className="panel page-intro">
+        <p className="eyebrow">Model library</p>
+        <h2>Profiles and local models</h2>
+        <p>
+          Register immutable local profile revisions and inspect installed Ollama models through the fixed
+          127.0.0.1:11434 boundary. This slice has no endpoint field, credentials, downloads, deletion, or cloud
+          provider.
+        </p>
+      </section>
+
+      <div className="models-layout">
+        <section className="panel model-list-panel" aria-live="polite">
+          <div className="section-heading compact-heading">
+            <div>
+              <p className="eyebrow">Ollama / local only</p>
+              <h3>Installed models</h3>
+            </div>
+            <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!isDesktopEnvironment() || busy}>
+              Refresh
+            </button>
+          </div>
+          {modelState.status === "preview" && (
+            <StateMessage icon="◇" title="Browser preview" description={modelPreviewCopy()} />
+          )}
+          {modelState.status === "loading" && (
+            <StateMessage icon="…" title="Checking local Ollama" description="Reading installed model metadata from the fixed loopback runtime." />
+          )}
+          {modelState.status === "error" && (
+            <StateMessage icon="!" title="Ollama unavailable" description={modelState.message} error />
+          )}
+          {modelState.status === "ready" && modelState.models.length === 0 && (
+            <EmptyState title="No installed models" description={modelEmptyCopy()} />
+          )}
+          {modelState.status === "ready" && modelState.models.length > 0 && (
+            <div className="model-list">
+              {modelState.models.map((model) => (
+                <article className="model-row" key={`${model.name}-${model.digest ?? "unknown"}`}>
+                  <div>
+                    <h3>{model.name}</h3>
+                    <p className="model-meta">{modelMetadataLabel(model)}</p>
+                    <p className="model-meta">
+                      {model.digest ? `${model.digest.slice(0, 12)}…` : "Digest unavailable"}
+                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
+                    </p>
+                  </div>
+                  <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
+                </article>
+              ))}
+            </div>
+          )}
+          {!isDesktopEnvironment() && <p className="field-help">Desktop storage and a local Ollama runtime are required. Preview never invents model rows.</p>}
+        </section>
+
+        <section className="panel profile-panel" aria-live="polite">
+          <div className="section-heading compact-heading">
+            <div>
+              <p className="eyebrow">Immutable profile revisions</p>
+              <h3>Register a profile</h3>
+            </div>
+            <span className="section-index">06</span>
+          </div>
+          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          <div className="profile-form form-section">
+            <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
+            <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
+            <FormInput id="profile-model" label="Ollama model" value={form.model} onChange={(value) => updateField("model", value)} />
+            <p className="field-help">Runtime is fixed to local Ollama. Derived immutable ID: <strong>{profileRevisionIdPreview(form)}</strong></p>
+            <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>
+              Register immutable revision
+            </button>
+            {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
+          </div>
+
+          <div className="profile-records">
+            <div className="section-heading compact-heading">
+              <div>
+                <p className="eyebrow">Local records</p>
+                <h3>Registered profiles</h3>
+              </div>
+              <button className="text-button" type="button" onClick={() => void refreshProfiles()} disabled={!isDesktopEnvironment() || busy}>
+                Refresh
+              </button>
+            </div>
+            {profileState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={profilePreviewCopy()} />}
+            {profileState.status === "loading" && <StateMessage icon="…" title="Loading profiles" description="Reading immutable profile revisions from SQLite." />}
+            {profileState.status === "error" && <StateMessage icon="!" title="Profiles unavailable" description={profileState.message} error />}
+            {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title="No registered profiles" description={profileEmptyCopy()} />}
+            {profileState.status === "ready" && profileState.profiles.length > 0 && (
+              <div className="profile-record-list">
+                {profileState.profiles.map((profile) => (
+                  <article className="profile-record-row" key={profile.profileRevisionId}>
+                    <span>
+                      <strong>{profile.profileRevisionId}</strong>
+                      <small>{profile.model} · {profile.runtime} · registered revision {profile.revision}</small>
+                    </span>
+                    <span className="run-status">immutable</span>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function formatModelSize(sizeBytes: number | null): string {
+  if (sizeBytes === null) return "size unavailable";
+  if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
+  return `${(sizeBytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
 type RunsState =

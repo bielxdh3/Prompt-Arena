@@ -28,6 +28,10 @@ const MAX_METADATA_BYTES: usize = 1_048_576;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = 256 * 1024;
 pub const MAX_DRAFT_REQUEST_BYTES: usize = 512 * 1024;
 pub const MAX_DRAFT_TITLE_BYTES: usize = 256;
+pub const MAX_PROFILE_REQUEST_BYTES: usize = 256 * 1024;
+pub const MAX_PROFILE_MODEL_BYTES: usize = 256;
+pub const MAX_PROFILE_RUNTIME_BYTES: usize = 64;
+pub const MAX_PROFILE_SYSTEM_PROMPT_BYTES: usize = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -239,6 +243,8 @@ pub enum StorageError {
     DraftNotFound,
     DraftRevisionConflict,
     BenchmarkInvalid(ValidationError),
+    InvalidProfileRevision,
+    ProfileRequestTooLarge,
 }
 
 impl std::fmt::Display for StorageError {
@@ -267,6 +273,8 @@ impl std::fmt::Display for StorageError {
             Self::DraftNotFound => "benchmark draft was not found",
             Self::DraftRevisionConflict => "benchmark draft revision is stale",
             Self::BenchmarkInvalid(_) => unreachable!("handled above"),
+            Self::InvalidProfileRevision => "profile revision is invalid",
+            Self::ProfileRequestTooLarge => "profile revision request exceeds the local size limit",
         };
         formatter.write_str(message)
     }
@@ -615,11 +623,7 @@ impl StorageService {
         revision: &ProfileRevision,
         created_at: &str,
     ) -> Result<SaveOutcome, StorageError> {
-        let expected_id = stable_profile_revision_id(&revision.profile_id, revision.revision)
-            .map_err(|_| StorageError::InvalidArtifactReference)?;
-        if revision.profile_revision_id != expected_id {
-            return Err(StorageError::ImmutableConflict);
-        }
+        validate_profile_revision(revision)?;
         save_immutable_json(
             &self.connection()?,
             JsonTable::ProfileRevisions,
@@ -1010,6 +1014,32 @@ fn validate_record_id(record_id: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
+fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageError> {
+    validate_record_id(&revision.profile_id).map_err(|_| StorageError::InvalidProfileRevision)?;
+    let expected_id = stable_profile_revision_id(&revision.profile_id, revision.revision)
+        .map_err(|_| StorageError::InvalidProfileRevision)?;
+    if revision.profile_revision_id != expected_id {
+        return Err(StorageError::InvalidProfileRevision);
+    }
+    if revision.model.trim().is_empty()
+        || revision.model.len() > MAX_PROFILE_MODEL_BYTES
+        || revision.model.chars().any(char::is_control)
+        || revision.runtime.trim().is_empty()
+        || revision.runtime.len() > MAX_PROFILE_RUNTIME_BYTES
+        || revision.runtime.chars().any(char::is_control)
+        || revision.system_prompt.as_deref().is_some_and(|prompt| {
+            prompt.len() > MAX_PROFILE_SYSTEM_PROMPT_BYTES || prompt.contains('\0')
+        })
+    {
+        return Err(StorageError::InvalidProfileRevision);
+    }
+    let request_bytes = serde_json::to_vec(revision).map_err(|_| StorageError::DatabaseFailure)?;
+    if request_bytes.len() > MAX_PROFILE_REQUEST_BYTES {
+        return Err(StorageError::ProfileRequestTooLarge);
+    }
+    Ok(())
+}
+
 fn query_benchmark_draft(
     connection: &Connection,
     draft_id: &str,
@@ -1279,6 +1309,7 @@ mod tests {
         ArtifactRef, ArtifactStore, BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout,
         StorageService, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, FOUNDATION_MIGRATION,
         MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
+        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1779,6 +1810,70 @@ mod tests {
             .unwrap();
         assert_eq!(artifact_count, 1);
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_revision_listing_is_ordered_and_identity_checked() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+
+        let mut first = profile_revision();
+        first.profile_id = "profile-a".to_owned();
+        first.profile_revision_id = "profile-a@1".to_owned();
+        service
+            .save_profile_revision(&first, "200")
+            .expect("first profile saves");
+
+        let mut second = profile_revision();
+        second.profile_id = "profile-b".to_owned();
+        second.profile_revision_id = "profile-b@1".to_owned();
+        service
+            .save_profile_revision(&second, "100")
+            .expect("second profile saves");
+
+        let listed = service.list_profile_revisions().expect("profiles list");
+        assert_eq!(
+            listed
+                .iter()
+                .map(|revision| revision.profile_revision_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["profile-b@1", "profile-a@1"]
+        );
+
+        let mut mismatched = profile_revision();
+        mismatched.profile_revision_id = "profile-1@2".to_owned();
+        assert_eq!(
+            service.save_profile_revision(&mismatched, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut oversized_model = profile_revision();
+        oversized_model.model = "x".repeat(MAX_PROFILE_MODEL_BYTES + 1);
+        assert_eq!(
+            service.save_profile_revision(&oversized_model, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut oversized_parameters = profile_revision();
+        oversized_parameters.parameters.insert(
+            "padding".to_owned(),
+            serde_json::Value::String("x".repeat(MAX_PROFILE_REQUEST_BYTES)),
+        );
+        assert_eq!(
+            service.save_profile_revision(&oversized_parameters, "300"),
+            Err(StorageError::ProfileRequestTooLarge)
+        );
+
+        let mut oversized_request = profile_revision();
+        oversized_request.extra.insert(
+            "padding".to_owned(),
+            serde_json::Value::String("x".repeat(MAX_PROFILE_REQUEST_BYTES)),
+        );
+        assert_eq!(
+            service.save_profile_revision(&oversized_request, "300"),
+            Err(StorageError::ProfileRequestTooLarge)
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
