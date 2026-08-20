@@ -19,10 +19,10 @@ Rust runtime modules (Phase 03 adapter; invoked by the bounded worker)
 ```
 
 The UI owns presentation state only. The Tauri entrypoint registers the small command set explicitly: status and
-benchmark validation/version persistence, typed benchmark draft list/read/save/publish commands, profile-revision
-list/register commands, fixed local Ollama model discovery, `execute_run_once`, and the Runs read commands `list_runs`,
-`list_run_attempts`, and `get_run_status`. It does not expose an arbitrary shell, filesystem browser, configurable
-provider proxy, account flow, endpoint or credential input, or telemetry path.
+benchmark validation/version persistence, typed benchmark draft list/read/save/publish commands, one published benchmark
+version read, profile-revision list/register commands, fixed local Ollama model discovery, `execute_run_once`, and the
+Runs read commands `list_runs`, `list_run_attempts`, and `get_run_status`. It does not expose an arbitrary shell,
+filesystem browser, configurable provider proxy, account flow, endpoint or credential input, or telemetry path.
 `app_status` reports `storageState: "local"` because the commands initialize and use the app-owned SQLite/artifact
 store.
 
@@ -62,6 +62,10 @@ the general serialized metadata ceiling remains 1 MiB. Artifact bytes are writte
 hard-link, so an existing artifact name is never replaced. Artifact paths reject traversal, absolute paths, drive
 prefixes, empty segments, and backslashes.
 
+Published benchmark versions are read by their bounded deterministic `benchmark-id@version` identity. The read path
+returns the existing summary and stored canonical document JSON only; it does not canonicalize, rewrite, or publish a
+record.
+
 The checked-in benchmark JSON Schema is a versioned contract/reference. Runtime enforcement is serde deserialization
 plus deterministic manual validation in `domain.rs`; Phase 02 intentionally does not add a JSON Schema engine.
 
@@ -76,10 +80,17 @@ fixed-loopback Ollama metadata. Browser preview enters explicit no-write preview
 fields and explanatory empty/loading/error copy only, never invokes profile/model commands, reads SQLite, queries
 Ollama, or invents profile or model records.
 
+Phase 07 adds no new UI. A pure TypeScript run-plan helper validates a published version record, selects one existing
+task and case, validates their identities and prompt bounds, and combines profile/task system prompts plus task/case
+prompts in a deterministic order. It derives `generation.model` from the immutable profile, maps only bounded supported
+profile generation parameters, uses exactly one repetition, and emits the existing `RunPlan` with a fresh fixed
+`http://127.0.0.1:11434` Ollama configuration. The typed bridge can send that plan to the existing one-shot command;
+browser preview helpers remain no-write.
+
 ## Future boundaries
 
-Run authoring and model execution controls, evaluation, full model-library management/downloads/deletion, official
-benchmark packs, imports and broader benchmark-authoring flows, external/cloud provider adapters, interruption
-recovery, and any long-lived worker/runtime lifecycle remain later phases. They must keep provenance, effective
-configuration, error taxonomy, and historical records explicit rather than smuggling behavior into the current command
-or worker boundary.
+Run authoring and model execution controls beyond this one-plan helper, evaluation, full model-library
+management/downloads/deletion, official benchmark packs, imports and broader benchmark-authoring flows, external/cloud
+provider adapters, interruption recovery, and any long-lived worker/runtime lifecycle remain later phases. They must keep
+provenance, effective configuration, error taxonomy, and historical records explicit rather than smuggling behavior
+into the current command or worker boundary.
