@@ -172,6 +172,20 @@ criteria for instruction following, clarity, evidence discipline, and usefulness
 canonical document for a known pack ID and `None` for an unknown ID. The desktop Benchmarks surface renders the metadata
 and document as read-only plain text. Browser preview does not invoke either command or expose the source JSON.
 
+## Phase 13 bounded hardware and recommendation state
+
+Hardware is a read-only ephemeral snapshot, not a SQLite record or artifact. `read_hardware_snapshot` returns the target
+platform plus typed metrics for logical CPU count, RAM bytes, GPU name, and VRAM bytes. Each metric carries a value or
+`null`, an available/unavailable status, a source, and a confidence. The baseline uses standard-library CPU detection,
+fixed Linux `/proc/meminfo`, and a narrow Windows physical-memory API; GPU/VRAM remain unavailable when safe feature
+detection is absent. No hardware telemetry, model-path inspection, shell/process spawning, or persistence is involved.
+
+The Models view derives per-model Ideal/Acceptable/Heavy/Unavailable labels from existing bounded Ollama `ModelInfo`
+size metadata and detected RAM. Ideal and acceptable percentage thresholds are bounded and held in UI state only; the
+pure helper explains its RAM-size heuristic and refuses to guess when either input is unavailable. Thresholds, hardware
+overrides, empirical measurements, unified search/download state, duplicate state, and deletion state are not data-model
+records in this phase.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.

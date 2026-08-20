@@ -139,6 +139,21 @@ state and invokes no catalog command. The programming pack is intentionally limi
 `sandboxStatus: unavailable`; Docker-backed code execution, filesystem access, and unsafe local execution remain outside
 this phase.
 
+## Phase 13 bounded model-library baseline
+
+The existing Models surface remains the only fixed-loopback Ollama discovery/profile boundary. A separate read-only
+`read_hardware_snapshot` command returns a typed local baseline: platform, logical CPU count, RAM bytes when the safe
+platform source provides them, and explicit GPU/VRAM unavailable metrics when feature detection is not implemented.
+Logical CPUs use `std::thread::available_parallelism`; Linux RAM reads only the bounded fixed `/proc/meminfo` file; Windows
+RAM uses a narrow `GetPhysicallyInstalledSystemMemory` binding. The command does not spawn processes, inspect model paths,
+download files, or emit telemetry.
+
+The UI keeps recommendation thresholds in React state only. A pure helper compares bounded Ollama-reported model size
+with detected RAM and returns Ideal, Acceptable, Heavy, or Unavailable plus an explanation. This is a transparent heuristic,
+not a runtime admission check or empirical performance model. Unified search/downloads, duplicate management, hardware
+overrides, GPU/VRAM parity, and empirical history remain future work. Browser preview invokes no model/profile/hardware
+command and does not invent a hardware snapshot.
+
 ## Future boundaries
 
 Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human

@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod domain;
 pub mod evaluation;
+pub mod hardware;
 pub mod official_packs;
 pub mod ollama;
 pub mod orchestration;
@@ -29,6 +30,7 @@ pub fn run() -> tauri::Result<()> {
             commands::register_profile_revision,
             commands::list_profile_revisions,
             commands::list_local_ollama_models,
+            commands::read_hardware_snapshot,
             commands::list_runs,
             commands::list_run_attempts,
             commands::prepare_blind_evaluation,

@@ -19,6 +19,7 @@ use crate::{
         lock_blind_evaluation as lock_blind_evaluation_record,
         prepare_blind_evaluation as prepare_blind_evaluation_record, BlindEvaluationError,
     },
+    hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
     official_packs::{
         get_official_pack as get_official_pack_record,
         list_official_packs as list_official_pack_records, OfficialPackDocument, OfficialPackError,
@@ -334,6 +335,11 @@ pub fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
     OllamaProvider::default_local()?
         .list_models()
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn read_hardware_snapshot() -> HardwareSnapshot {
+    read_hardware_snapshot_record()
 }
 
 #[tauri::command]

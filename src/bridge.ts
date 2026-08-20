@@ -288,6 +288,26 @@ export type ModelInfo = {
   metadata: Record<string, unknown>;
 };
 
+export type HardwarePlatform = "windows" | "linux" | "other";
+export type HardwareMetricStatus = "available" | "unavailable";
+export type HardwareSource = "stdlib" | "linux_procfs" | "windows_kernel32" | "not_detected";
+export type HardwareConfidence = "high" | "medium" | "low" | "unavailable";
+
+export type HardwareMetric<T> = {
+  value: T | null;
+  status: HardwareMetricStatus;
+  source: HardwareSource;
+  confidence: HardwareConfidence;
+};
+
+export type HardwareSnapshot = {
+  platform: HardwarePlatform;
+  logicalCpuCount: HardwareMetric<number>;
+  memoryBytes: HardwareMetric<number>;
+  gpuName: HardwareMetric<string>;
+  vramBytes: HardwareMetric<number>;
+};
+
 export function isDesktopEnvironment(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -462,6 +482,13 @@ export async function readLocalOllamaModels(): Promise<ModelInfo[]> {
   return invokeDesktop<ModelInfo[]>(
     "list_local_ollama_models",
     "The local Ollama model list could not be reached.",
+  );
+}
+
+export async function readHardwareSnapshot(): Promise<HardwareSnapshot> {
+  return invokeDesktop<HardwareSnapshot>(
+    "read_hardware_snapshot",
+    "The local hardware baseline could not be reached.",
   );
 }
 
