@@ -67,6 +67,52 @@ export type ObjectiveVerificationEvidence = {
   actualSha256: string;
 };
 
+export type BlindEvaluationStatus = "empty" | "prepared" | "locked";
+
+export type BlindEvaluationResponse = {
+  label: string;
+  token: string;
+  text: string;
+};
+
+export type BlindEvaluationPreparation = {
+  evaluationId: string;
+  runId: string;
+  status: BlindEvaluationStatus;
+  responses: BlindEvaluationResponse[];
+};
+
+export type BlindEvaluationScore = {
+  token: string;
+  overallScore: number;
+  criterionScores: Record<string, number>;
+};
+
+export type BlindEvaluationLockRequest = {
+  evaluationId: string;
+  runId: string;
+  scores: BlindEvaluationScore[];
+  ranking: string[][] | null;
+};
+
+export type BlindEvaluationPresentationEntry = {
+  label: string;
+  token: string;
+  attemptId: string;
+};
+
+export type BlindEvaluationRecord = {
+  evaluationId: string;
+  runId: string;
+  status: "locked";
+  presentation: BlindEvaluationPresentationEntry[];
+  scores: BlindEvaluationScore[];
+  ranking: string[][] | null;
+  createdAt: string;
+  lockedAt: string;
+  [key: string]: unknown;
+};
+
 export type BenchmarkVersionSummary = {
   versionId: string;
   benchmarkId: string;
@@ -267,6 +313,35 @@ export async function readRunAttempts(runId: string): Promise<AttemptRecord[]> {
     "list_run_attempts",
     "The selected run attempts could not be reached.",
     { runId },
+  );
+}
+
+export async function readBlindEvaluation(runId: string): Promise<BlindEvaluationRecord | null> {
+  if (!isDesktopEnvironment()) throw new Error("Blind evaluations are available only in the local desktop workspace.");
+  return invokeDesktop<BlindEvaluationRecord | null>(
+    "get_blind_evaluation",
+    "The selected run evaluation could not be reached.",
+    { runId },
+  );
+}
+
+export async function prepareBlindEvaluation(runId: string): Promise<BlindEvaluationPreparation> {
+  if (!isDesktopEnvironment()) throw new Error("Blind evaluations are available only in the local desktop workspace.");
+  return invokeDesktop<BlindEvaluationPreparation>(
+    "prepare_blind_evaluation",
+    "The selected run responses could not be prepared for evaluation.",
+    { runId },
+  );
+}
+
+export async function lockBlindEvaluation(
+  request: BlindEvaluationLockRequest,
+): Promise<BlindEvaluationRecord> {
+  if (!isDesktopEnvironment()) throw new Error("Blind evaluations are available only in the local desktop workspace.");
+  return invokeDesktop<BlindEvaluationRecord>(
+    "lock_blind_evaluation",
+    "The blind evaluation could not be locked.",
+    { request },
   );
 }
 
