@@ -17,8 +17,9 @@ Record the exact command, result, and environment for each check; do not include
 
 ## Package/build smoke boundary
 
-- [ ] Confirm the reviewed Tauri configuration remains Windows/Linux-only, with bundling inactive unless separately
-      authorized; do not run packaging, signing, release, deployment, or macOS targets in this phase.
+- [ ] Confirm the reviewed Tauri configuration remains Windows/Linux-only and the release hook prepares only the
+      target-triple-suffixed worker sidecar; do not run packaging, signing, release, deployment, or macOS targets in this
+      phase.
 - [ ] Confirm the frontend build is the only package-adjacent smoke performed by this slice.
 
 ## Security and privacy scan

@@ -28,9 +28,10 @@ store.
 
 The worker reads one JSON request from stdin, emits one typed JSON response, and exits. It has no daemon loop, shell
 escape, hosted inference client, or implicit background persistence. `execute_run_once` resolves only the fixed worker
-binary beside the app executable, sends one bounded `GenerateOnce` request without arbitrary arguments, waits for the
-child to exit, and persists the returned terminal outcome in the app-owned store. Browser preview cannot invoke this
-command and never creates sample runs.
+binary beside the app executable in development or the target-triple-suffixed `binaries/prompt-arena-worker-<TARGET_TRIPLE>`
+Tauri resource when packaged, sends one bounded `GenerateOnce` request without arbitrary arguments, waits for the child
+to exit, and persists the returned terminal outcome in the app-owned store. Browser preview cannot invoke this command
+and never creates sample runs.
 
 `runtime.rs` defines the normalized request, response, chunk, model, health, capability, cancellation, and typed error
 contracts. Providers negotiate both capabilities and generation parameters before sending a request. `ollama.rs`
