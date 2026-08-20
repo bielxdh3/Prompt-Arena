@@ -25,6 +25,10 @@ const DEFAULT_READ_TIMEOUT_MS: u64 = 500;
 const DEFAULT_READ_DEADLINE_MS: u64 = 10 * 60 * 1000;
 const MAX_READ_DEADLINE_MS: u64 = 60 * 60 * 1000;
 const MAX_HTTP_LINE_BYTES: usize = 64 * 1024;
+const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
+const MAX_HTTP_HEADER_COUNT: usize = 128;
+const MAX_HTTP_CHUNK_TRAILER_BYTES: usize = 64 * 1024;
+const MAX_HTTP_CHUNK_TRAILER_COUNT: usize = 128;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum total NDJSON payload bytes consumed and accumulated for one stream.
 const MAX_STREAMED_RESPONSE_BYTES: usize = MAX_RESPONSE_BYTES;
@@ -976,6 +980,13 @@ fn read_http_response(
     }
 
     let mut headers = BTreeMap::new();
+    let mut header_bytes = status_line.len().saturating_add(2);
+    let mut header_count = 0_usize;
+    if header_bytes > MAX_HTTP_HEADER_BYTES {
+        return Err(RuntimeError::Protocol {
+            message: "runtime response headers exceeded the aggregate byte limit".to_owned(),
+        });
+    }
     loop {
         let line =
             read_line_with_cancel(&mut reader, cancellation, read_deadline)?.ok_or_else(|| {
@@ -983,8 +994,20 @@ fn read_http_response(
                     message: "runtime closed before HTTP headers were complete".to_owned(),
                 }
             })?;
+        header_bytes = header_bytes.saturating_add(line.len().saturating_add(2));
+        if header_bytes > MAX_HTTP_HEADER_BYTES {
+            return Err(RuntimeError::Protocol {
+                message: "runtime response headers exceeded the aggregate byte limit".to_owned(),
+            });
+        }
         if line.is_empty() {
             break;
+        }
+        header_count = header_count.saturating_add(1);
+        if header_count > MAX_HTTP_HEADER_COUNT {
+            return Err(RuntimeError::Protocol {
+                message: "runtime response headers exceeded the aggregate count limit".to_owned(),
+            });
         }
         let (name, value) = line.split_once(':').ok_or_else(|| RuntimeError::Protocol {
             message: "runtime returned a malformed HTTP header".to_owned(),
@@ -999,6 +1022,8 @@ fn read_http_response(
         BodyMode::Chunked {
             remaining: 0,
             finished: false,
+            trailer_bytes: 0,
+            trailer_count: 0,
         }
     } else if let Some(length) = headers.get("content-length") {
         let length = length
@@ -1133,7 +1158,12 @@ fn is_retryable_read(error: &io::Error) -> bool {
 
 enum BodyMode {
     ContentLength(usize),
-    Chunked { remaining: usize, finished: bool },
+    Chunked {
+        remaining: usize,
+        finished: bool,
+        trailer_bytes: usize,
+        trailer_count: usize,
+    },
     UntilEof,
 }
 
@@ -1163,6 +1193,8 @@ impl Read for HttpBody {
             BodyMode::Chunked {
                 remaining,
                 finished,
+                trailer_bytes,
+                trailer_count,
             } => {
                 if *finished {
                     return Ok(0);
@@ -1179,14 +1211,31 @@ impl Read for HttpBody {
                     })?;
                     if size == 0 {
                         loop {
-                            if read_io_line(
+                            let line = read_io_line(
                                 &mut self.reader,
                                 &self.cancellation,
                                 self.read_deadline,
-                            )?
-                            .is_none_or(|line| line.is_empty())
-                            {
+                            )?;
+                            let Some(line) = line else {
                                 break;
+                            };
+                            *trailer_bytes =
+                                trailer_bytes.saturating_add(line.len().saturating_add(2));
+                            if *trailer_bytes > MAX_HTTP_CHUNK_TRAILER_BYTES {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "chunk trailer bytes exceeded the aggregate limit",
+                                ));
+                            }
+                            if line.is_empty() {
+                                break;
+                            }
+                            *trailer_count = trailer_count.saturating_add(1);
+                            if *trailer_count > MAX_HTTP_CHUNK_TRAILER_COUNT {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "chunk trailer count exceeded the aggregate limit",
+                                ));
                             }
                         }
                         *finished = true;
@@ -1278,8 +1327,9 @@ mod tests {
 
     use super::{
         OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_READ_DEADLINE_MS,
-        MAX_HTTP_LINE_BYTES, MAX_LOCAL_MODEL_COUNT, MAX_LOCAL_MODEL_METADATA_BYTES,
-        MAX_STREAMED_RESPONSE_BYTES,
+        MAX_HTTP_CHUNK_TRAILER_BYTES, MAX_HTTP_CHUNK_TRAILER_COUNT, MAX_HTTP_HEADER_BYTES,
+        MAX_HTTP_HEADER_COUNT, MAX_HTTP_LINE_BYTES, MAX_LOCAL_MODEL_COUNT,
+        MAX_LOCAL_MODEL_METADATA_BYTES, MAX_STREAMED_RESPONSE_BYTES,
     };
 
     struct MockServer {
@@ -1291,7 +1341,9 @@ mod tests {
     enum MockReply {
         Json(u16, Value),
         Raw(u16, String),
+        RawResponse(String),
         Chunked(u16, Vec<String>, Option<Duration>),
+        ChunkedWithTrailers(u16, Vec<String>, Vec<String>),
         Silent,
     }
 
@@ -1390,27 +1442,14 @@ mod tests {
             }
             MockReply::Raw(status, body) => write_fixed(stream, status, &body),
             MockReply::Chunked(status, lines, delay) => {
-                let reason = if (200..300).contains(&status) {
-                    "OK"
-                } else {
-                    "Error"
-                };
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-                );
-                for (index, line) in lines.iter().enumerate() {
-                    let chunk = format!("{line}\n");
-                    let _ = write!(stream, "{:X}\r\n{chunk}\r\n", chunk.len());
-                    let _ = stream.flush();
-                    if index == 0 {
-                        if let Some(delay) = delay {
-                            thread::sleep(delay);
-                        }
-                    }
-                }
-                let _ = write!(stream, "0\r\n\r\n");
+                write_chunked(stream, status, &lines, delay, &[]);
+            }
+            MockReply::RawResponse(response) => {
+                let _ = stream.write_all(response.as_bytes());
                 let _ = stream.flush();
+            }
+            MockReply::ChunkedWithTrailers(status, lines, trailers) => {
+                write_chunked(stream, status, &lines, None, &trailers);
             }
             MockReply::Silent => {
                 let _ = write!(
@@ -1422,6 +1461,40 @@ mod tests {
                 while stream.read(&mut byte).is_ok_and(|read| read > 0) {}
             }
         }
+    }
+
+    fn write_chunked(
+        stream: &mut TcpStream,
+        status: u16,
+        lines: &[String],
+        delay: Option<Duration>,
+        trailers: &[String],
+    ) {
+        let reason = if (200..300).contains(&status) {
+            "OK"
+        } else {
+            "Error"
+        };
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        );
+        for (index, line) in lines.iter().enumerate() {
+            let chunk = format!("{line}\n");
+            let _ = write!(stream, "{:X}\r\n{chunk}\r\n", chunk.len());
+            let _ = stream.flush();
+            if index == 0 {
+                if let Some(delay) = delay {
+                    thread::sleep(delay);
+                }
+            }
+        }
+        let _ = write!(stream, "0\r\n");
+        for trailer in trailers {
+            let _ = write!(stream, "{trailer}\r\n");
+        }
+        let _ = write!(stream, "\r\n");
+        let _ = stream.flush();
     }
 
     fn write_fixed(stream: &mut TcpStream, status: u16, body: &str) {
@@ -1728,6 +1801,84 @@ mod tests {
             ),
             Err(RuntimeError::Protocol { message })
                 if message.contains("response exceeded the local size limit")
+        ));
+    }
+
+    #[test]
+    fn aggregate_http_header_bytes_and_count_are_bounded() {
+        let wide_headers = (0..100)
+            .map(|index| format!("X-Fill-{index}: {}\r\n", "x".repeat(700)))
+            .collect::<String>();
+        assert!(wide_headers.len() < MAX_HTTP_HEADER_BYTES * 2);
+        let byte_server = MockServer::start(vec![MockReply::RawResponse(format!(
+            "HTTP/1.1 200 OK\r\n{wide_headers}Content-Length: 2\r\n\r\nok"
+        ))]);
+        assert!(matches!(
+            byte_server.provider().health(),
+            Err(RuntimeError::Protocol { message })
+                if message.contains("headers exceeded the aggregate byte limit")
+        ));
+
+        let boundary_headers = (0..(MAX_HTTP_HEADER_COUNT - 1))
+            .map(|index| format!("X-Count-{index}: 1\r\n"))
+            .collect::<String>();
+        let boundary_body = r#"{"version":"test"}"#;
+        let boundary_server = MockServer::start(vec![MockReply::RawResponse(format!(
+            "HTTP/1.1 200 OK\r\n{boundary_headers}Content-Length: {}\r\n\r\n{boundary_body}",
+            boundary_body.len()
+        ))]);
+        assert!(boundary_server.provider().health().is_ok());
+
+        let many_headers = (0..=MAX_HTTP_HEADER_COUNT)
+            .map(|index| format!("X-Count-{index}: 1\r\n"))
+            .collect::<String>();
+        let count_server = MockServer::start(vec![MockReply::RawResponse(format!(
+            "HTTP/1.1 200 OK\r\n{many_headers}Content-Length: 2\r\n\r\nok"
+        ))]);
+        assert!(matches!(
+            count_server.provider().health(),
+            Err(RuntimeError::Protocol { message })
+                if message.contains("headers exceeded the aggregate count limit")
+        ));
+    }
+
+    #[test]
+    fn aggregate_chunk_trailer_bytes_and_count_are_bounded() {
+        let incomplete_line =
+            json!({"model": "model", "message": {"content": "x"}, "done": false}).to_string();
+        let wide_trailers = (0..100)
+            .map(|index| format!("X-Trailer-{index}: {}", "x".repeat(700)))
+            .collect::<Vec<_>>();
+        assert!(
+            wide_trailers.iter().map(String::len).sum::<usize>() < MAX_HTTP_CHUNK_TRAILER_BYTES * 2
+        );
+        let byte_server = MockServer::start(vec![MockReply::ChunkedWithTrailers(
+            200,
+            vec![incomplete_line.clone()],
+            wide_trailers,
+        )]);
+        assert!(matches!(
+            byte_server
+                .provider()
+                .stream(&chat_request(), &CancellationToken::new(), &mut |_| Ok(())),
+            Err(RuntimeError::Transport { message })
+                if message.contains("chunk trailer bytes exceeded the aggregate limit")
+        ));
+
+        let many_trailers = (0..=MAX_HTTP_CHUNK_TRAILER_COUNT)
+            .map(|index| format!("X-Trailer-{index}: 1"))
+            .collect::<Vec<_>>();
+        let count_server = MockServer::start(vec![MockReply::ChunkedWithTrailers(
+            200,
+            vec![incomplete_line],
+            many_trailers,
+        )]);
+        assert!(matches!(
+            count_server
+                .provider()
+                .stream(&chat_request(), &CancellationToken::new(), &mut |_| Ok(())),
+            Err(RuntimeError::Transport { message })
+                if message.contains("chunk trailer count exceeded the aggregate limit")
         ));
     }
 

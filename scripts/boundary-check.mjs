@@ -23,6 +23,15 @@ const REQUIRED_IGNORE_RULES = [
   "secrets/",
 ];
 const REQUIRED_PACKAGING_TARGETS = ["appimage", "deb", "nsis"];
+const ALLOWED_TAURI_PERMISSIONS = new Set();
+const REVIEWED_CSP_ALLOWLISTS = {
+  "default-src": ["'self'"],
+  "script-src": ["'self'"],
+  "style-src": ["'self'"],
+  "font-src": ["'self'"],
+  "connect-src": ["'self'", "http://localhost:1420", "ws://localhost:1420", "ipc:", "http://ipc.localhost"],
+  "img-src": ["'self'", "asset:", "https://asset.localhost", "data:"],
+};
 const SECRET_PATH_PATTERNS = [
   /(^|\/)\.env(?:\..*)?$/i,
   /(^|\/)(?:id_rsa|id_ed25519|auth\.json|credentials(?:\.[^/]+)?|secrets?\.(?:json|ya?ml|txt)|token\.(?:json|txt))$/i,
@@ -87,17 +96,85 @@ export function checkTauriConfig(config) {
     failures.push("Tauri CSP must be present");
     return failures;
   }
-  for (const directive of ["style-src 'self'", "font-src 'self'", "script-src 'self'"]) {
-    if (!csp.includes(directive)) failures.push(`Tauri CSP must retain ${directive}`);
+  const { directives, duplicateDirectives } = parseCspDirectives(csp);
+  for (const [directive, expectedSources] of Object.entries(REVIEWED_CSP_ALLOWLISTS)) {
+    if (duplicateDirectives.has(directive)) {
+      failures.push(`Tauri CSP must not duplicate ${directive}`);
+      continue;
+    }
+    const actualSources = directives.get(directive);
+    if (!actualSources || !sameAllowlist(actualSources, expectedSources)) {
+      failures.push(`Tauri CSP ${directive} must equal the reviewed local allowlist`);
+    }
   }
-  for (const source of ["http://localhost:1420", "ws://localhost:1420", "ipc:", "http://ipc.localhost"]) {
-    if (!csp.includes(source)) failures.push(`Tauri CSP must retain its local source ${source}`);
-  }
-  const fontDirective = csp.match(/(?:^|;)\s*font-src\s+([^;]+)/i)?.[1] ?? "";
-  if (fontDirective !== "'self'" || /https?:|data:|\*/i.test(fontDirective)) {
-    failures.push("Tauri CSP fonts must remain local-only");
+  for (const directive of directives.keys()) {
+    if (!Object.hasOwn(REVIEWED_CSP_ALLOWLISTS, directive)) {
+      failures.push(`Tauri CSP directive is outside the reviewed allowlist: ${directive}`);
+    }
   }
   if (/fonts\.(?:googleapis|gstatic)\./i.test(csp)) failures.push("Tauri CSP must not allow external font services");
+  return failures;
+}
+
+function parseCspDirectives(csp) {
+  const directives = new Map();
+  const duplicateDirectives = new Set();
+  for (const segment of csp.split(";")) {
+    const tokens = segment.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const directive = tokens.shift().toLowerCase();
+    if (directives.has(directive)) {
+      duplicateDirectives.add(directive);
+    } else {
+      directives.set(directive, tokens);
+    }
+  }
+  return { directives, duplicateDirectives };
+}
+
+function sameAllowlist(actual, expected) {
+  return actual.length === expected.length
+    && new Set(actual).size === actual.length
+    && actual.every((source) => expected.includes(source));
+}
+
+export function checkCapabilityDocuments(entries) {
+  const failures = [];
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return ["tracked Tauri capability JSON files are required"];
+  }
+  for (const entry of entries) {
+    const filePath = Array.isArray(entry) ? entry[0] : "unknown";
+    const contents = Array.isArray(entry) ? entry[1] : null;
+    const normalized = String(filePath).replaceAll("\\", "/");
+    if (!normalized.startsWith("src-tauri/capabilities/") || !normalized.endsWith(".json")) {
+      failures.push(`unexpected Tauri capability path: ${normalized}`);
+      continue;
+    }
+    let capability;
+    try {
+      capability = JSON.parse(contents);
+    } catch {
+      failures.push(`Tauri capability JSON is invalid: ${normalized}`);
+      continue;
+    }
+    if (capability === null || typeof capability !== "object" || Array.isArray(capability)) {
+      failures.push(`Tauri capability JSON must be an object: ${normalized}`);
+      continue;
+    }
+    if (typeof capability.identifier !== "string" || capability.identifier.trim() === "") {
+      failures.push(`Tauri capability identifier is missing: ${normalized}`);
+    }
+    if (!Array.isArray(capability.permissions)) {
+      failures.push(`Tauri capability permissions must be an array: ${normalized}`);
+      continue;
+    }
+    if (capability.permissions.some((permission) => (
+      typeof permission !== "string" || !ALLOWED_TAURI_PERMISSIONS.has(permission)
+    ))) {
+      failures.push(`Tauri capability contains a permission outside the reviewed allowlist: ${normalized}`);
+    }
+  }
   return failures;
 }
 
@@ -196,6 +273,11 @@ export function checkRepository(repositoryRoot = REPOSITORY_ROOT) {
   }
 
   const tracked = trackedPaths(repositoryRoot);
+  const capabilityEntries = tracked
+    .map((filePath) => filePath.replaceAll("\\", "/"))
+    .filter((filePath) => filePath.startsWith("src-tauri/capabilities/") && filePath.endsWith(".json"))
+    .map((filePath) => [filePath, readText(repositoryRoot, filePath)]);
+  failures.push(...checkCapabilityDocuments(capabilityEntries));
   const secretPaths = findSecretLikePaths(tracked);
   if (secretPaths.length > 0) failures.push(`tracked secret-like paths found: ${secretPaths.join(", ")}`);
   const entries = tracked.map((filePath) => [filePath, readText(repositoryRoot, filePath)]);

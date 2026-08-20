@@ -501,12 +501,6 @@ fn effective_config_snapshot(
         })?,
     );
     snapshot.insert(
-        "generation".to_owned(),
-        serde_json::to_value(&plan.generation).map_err(|_| {
-            OrchestrationError::InvalidPlan("generation is not serializable".to_owned())
-        })?,
-    );
-    snapshot.insert(
         "capabilities".to_owned(),
         serde_json::to_value(provider.capabilities()).map_err(|_| {
             OrchestrationError::InvalidPlan("runtime capabilities are not serializable".to_owned())
@@ -686,17 +680,19 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        execute_once_with_provider, objective_verification, persist_terminal_outcome,
-        stable_attempt_id, OrchestrationError, ProgressKind, RunPlan, TerminalOutcome,
-        MAX_OBJECTIVE_EXPECTATION_BYTES, MAX_PROGRESS_EVENTS, MAX_RESPONSE_SUMMARY_BYTES,
+        build_attempt, effective_config_snapshot, execute_once_with_provider,
+        objective_verification, persist_terminal_outcome, stable_attempt_id, OrchestrationError,
+        ProgressKind, RunPlan, TerminalOutcome, MAX_OBJECTIVE_EXPECTATION_BYTES,
+        MAX_PROGRESS_EVENTS, MAX_RESPONSE_SUMMARY_BYTES,
     };
     use crate::{
         domain::{ObjectiveVerifierKind, ProfileRevision},
         ollama::OllamaConfig,
         runtime::{
-            CancellationToken, Capability, GenerationChunk, GenerationParameter, GenerationRequest,
-            GenerationResponse, ModelInfo, RuntimeCapabilities, RuntimeError, RuntimeHealth,
-            RuntimeProvider, TimingMetrics, UsageMetrics,
+            CancellationToken, Capability, ChatMessage, GenerationChunk, GenerationParameter,
+            GenerationRequest, GenerationResponse, MessageRole, ModelInfo, RuntimeCapabilities,
+            RuntimeError, RuntimeHealth, RuntimeProvider, TimingMetrics, ToolDefinition,
+            ToolPolicy, UsageMetrics,
         },
         storage::{StorageError, StorageService, MAX_ARTIFACT_BYTES},
     };
@@ -831,6 +827,58 @@ mod tests {
             attempt.effective_config["profileRevisionId"],
             json!("profile-1@1")
         );
+        assert!(!attempt.effective_config.contains_key("generation"));
+    }
+
+    #[test]
+    fn serialized_attempt_metadata_omits_generation_content() {
+        let mut plan = plan();
+        plan.generation.prompt = Some("sensitive prompt".to_owned());
+        plan.generation.messages = vec![ChatMessage {
+            role: MessageRole::User,
+            content: "sensitive message".to_owned(),
+            name: None,
+            tool_call_id: None,
+        }];
+        plan.generation.system_prompt = Some("sensitive system prompt".to_owned());
+        plan.generation.stop_sequences = vec!["sensitive stop".to_owned()];
+        plan.generation.tools = vec![ToolDefinition {
+            name: "sensitive tool".to_owned(),
+            description: Some("sensitive tool description".to_owned()),
+            parameters: json!({"description": "sensitive schema"}),
+        }];
+        plan.generation.tool_policy = ToolPolicy::Named("sensitive tool".to_owned());
+        plan.generation.metadata.insert(
+            "sensitiveMetadata".to_owned(),
+            json!("sensitive metadata value"),
+        );
+        let snapshot = effective_config_snapshot(
+            &plan,
+            &MockProvider {
+                error: None,
+                chunks: 0,
+            },
+        )
+        .unwrap();
+        let attempt = build_attempt(&plan, &plan.attempt_id(), "completed", snapshot, None, None);
+        let serialized = serde_json::to_string(&attempt).unwrap();
+        for sensitive in [
+            "sensitive prompt",
+            "sensitive message",
+            "sensitive system prompt",
+            "sensitive stop",
+            "sensitive tool",
+            "sensitive tool description",
+            "sensitive schema",
+            "sensitive metadata value",
+        ] {
+            assert!(
+                !serialized.contains(sensitive),
+                "serialized attempt leaked {sensitive}"
+            );
+        }
+        assert!(!serialized.contains("\"generation\""));
+        assert!(serialized.contains("\"capabilities\""));
     }
 
     #[test]
