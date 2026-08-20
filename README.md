@@ -72,9 +72,9 @@ Gemini provider identities plus pure dated-price cost and budget helpers. Every 
 network-not-wired, identity-unverified, and non-executable; no API keys, environment reads, network calls, telemetry, or
 provider persistence are added. Local Ollama remains the only executable runtime.
 Phase 17 — DONE (bounded hardening) — adds a dependency-free boundary checker and deterministic fixtures for the reviewed
-Windows/Linux CI matrix, inactive non-macOS packaging targets, Tauri CSP/local-font/loopback invariants, secret ignores,
-lockfiles, and tracked key-material screening. Pull-request CI runs the checker and high-severity production dependency
-audit after install; no release, signing, deployment, publication, or merge behavior is enabled.
+Windows/Linux CI matrix, inactive non-macOS packaging targets, exact Tauri CSP/capability/local-font/loopback invariants,
+secret ignores, lockfiles, and tracked key-material screening. Pull-request CI runs the checker and high-severity
+production dependency audit after install; no release, signing, deployment, publication, or merge behavior is enabled.
 
 ## Run locally
 
@@ -131,9 +131,9 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   prices, budget decisions can allow/confirm/deny, and sanitization discards unknown credential-like fields. No provider
   adapter, API-key input, secure storage, outbound request, cost history, or external execution exists.
 - The Phase 17 boundary checker reads only reviewed repository configuration and Git-tracked paths, reports no file contents,
-  and validates Windows/Linux CI, non-macOS inactive packaging, local Tauri CSP/fonts/loopback, secret ignores, lockfiles,
-  and obvious key-material absence. Pull-request CI also runs `npm audit --omit=dev --audit-level=high`; no release or
-  deployment workflow is present.
+  and validates Windows/Linux CI, non-macOS inactive packaging, exact reviewed Tauri CSP source lists, every tracked
+  capability JSON's empty/allowlisted permissions, local fonts/loopback, secret ignores, lockfiles, and obvious key-material
+  absence. Pull-request CI also runs `npm audit --omit=dev --audit-level=high`; no release or deployment workflow is present.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
   document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
@@ -144,10 +144,12 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   bridge command and creates no sample state; the view exposes no raw JSON, endpoint, credential, cancellation, or
   process-lifecycle control.
 - Completed attempts add only a bounded flattened `responseSummary` metadata object; it never contains response text,
-  and the Runs detail reads typed attempt metadata and artifact/hash references without opening artifact files. Failed
-  and cancelled attempts retain their existing semantics and do not receive a completed-response summary. String expected
-  values add only a bounded top-level RunPlan policy input and immutable result score/evidence; the gold answer is not
-  sent through generation metadata or to Ollama, and response text remains only in the artifact. Phase 11 adds one
+  and the effective-configuration snapshot keeps only approved runtime/provider/model/profile/capability fields, never
+  the GenerationRequest prompt, messages, system prompt, metadata, or tools. The Runs detail reads typed attempt metadata
+  and artifact/hash references without opening artifact files. Failed and cancelled attempts retain their existing semantics
+  and do not receive a completed-response summary. String expected values add only a bounded top-level RunPlan policy input
+  and immutable result score/evidence; the gold answer is not sent through generation metadata or to Ollama, and response
+  text remains only in the artifact. Phase 11 adds one
   bounded blind human-evaluation lock over verified response artifacts; AI judging, cross-run rankings, and broader
   scoring remain outside this slice.
 - Blind human evaluation is local and single-user for one run: preparation derives only anonymous cards from completed
@@ -159,8 +161,9 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   blind-evaluation gate permits attempt evidence, keeps browser preview no-read/no-write, and never claims official
   ranking, cross-run comparability, regression, tournament, AI judging, calibration, or cost analysis.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
-  hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
-  engine.
+  hash invariants. Raw benchmark-document input is capped at 256 KiB before parsing/canonicalization and oversized input
+  returns a typed `benchmark_too_large` boundary error. The checked-in JSON Schema is the versioned contract/reference;
+  Phase 02 does not run a JSON Schema engine.
 - Metadata is capped at 1 MiB; persisted response summaries are additionally capped at 8 KiB, and objective expected text
   is capped at 64 KiB. Draft IDs and benchmark IDs are portable and bounded, draft titles are capped at 256
   UTF-8 bytes, canonical draft documents at 256 KiB, and draft requests at 512 KiB. Profile IDs are bounded and
@@ -170,7 +173,8 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   replaced or rewritten.
 - Runtime requests use typed capability/parameter negotiation and typed errors. The Ollama adapter uses only the
   standard-library HTTP client against an explicit `http://` loopback endpoint; it rejects credentials, query strings,
-  fragments, and non-loopback hosts. It has 64 KiB line, 16 MiB non-stream body, and 16 MiB cumulative stream limits.
+  fragments, and non-loopback hosts. It has 64 KiB line, aggregate header byte/count and chunk-trailer byte/count,
+  16 MiB non-stream body, and 16 MiB cumulative stream limits.
 - Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
   process. The narrow authoring editor writes only optional text expected answers; arbitrary JSON expectations remain
   outside this UI. External/cloud providers, credentials, downloads, run authoring, AI judging, multi-rater evaluation,

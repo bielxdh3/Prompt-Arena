@@ -23,7 +23,8 @@ Validation is proportional to the foundation and must remain honest about what i
 - Rust command, worker, typed benchmark validation, path-safety, migration, immutable persistence/replay, bounded
   artifact/response/response-summary/objective-verification evidence, blind-evaluation artifact verification,
   anonymous deterministic preparation, score/ranking bounds, immutable evaluation replay, official-pack full-document
-  validation, deterministic IDs/hashes, catalog lookup/not-found, execution metadata, and generic score compatibility,
+  validation and raw pre-parse benchmark-document size rejection, deterministic IDs/hashes, catalog lookup/not-found,
+  execution metadata, generation-content exclusion from serialized Attempt metadata, and generic score compatibility,
   draft revision/bounds/publish behavior, Runs read-API,
   orchestration, and runtime-contract tests:
   `cargo test --manifest-path src-tauri/Cargo.toml --all-targets`.
@@ -33,7 +34,7 @@ Validation is proportional to the foundation and must remain honest about what i
   deterministic name/digest sorting, chat/text generation mapping, NDJSON streaming, typed unavailable/remote/protocol
   errors, loopback-only endpoint validation, credentials/query/fragment/non-loopback rejection, stream overflow, and
   cooperative cancellation between socket reads/chunks. Direct reader tests cover the 64 KiB line and bounded-body
-  guards.
+  guards, aggregate response-header bytes/count, and chunk-trailer bytes/count.
 - Storage tests cover typed profile list/register behavior, deterministic `profile-id@revision` identity validation,
   idempotent replay, immutable conflict, and the complete 256 KiB profile request bound covering `parameters` and
   flattened `extra`; immutable metadata remains covered by the shared 1 MiB ceiling.
@@ -62,9 +63,9 @@ checks belong with the phases that implement each behavior; the current tests
 verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
 desktop UI integration.
 
-The Phase 17 boundary checker is tested with deterministic in-memory workflow, Tauri configuration, ignore-rule, and
-generated-key fixtures. It does not print file contents. Remote pull-request CI remains the authoritative Windows/Linux
-matrix check; this local environment does not provide remote CI provenance.
+The Phase 17 boundary checker is tested with deterministic in-memory workflow, Tauri exact-CSP, capability-permission,
+ignore-rule, and generated-key fixtures. It does not print file contents. Remote pull-request CI remains the authoritative
+Windows/Linux matrix check; this local environment does not provide remote CI provenance.
 
 For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, bounded font scale,
 allowlisted accent/surface/radius previews, restore defaults, reduced motion, the read-only external-provider boundary
