@@ -154,6 +154,24 @@ profile, provider, endpoint, metric, objective, or attempt-ID evidence. Only a s
 attempt read surface and resolved audit IDs. This is a local single-user overall-score/ranking lock for one run, with no
 AI judge, multi-rater workflow, cross-run ranking, rubric authoring, or broader scoring semantics.
 
+## Phase 12 bounded official packs
+
+The repository bundles three read-only benchmark-v1 source documents under `packs/official`. They are not rows in
+`benchmark_drafts` or `benchmark_versions`, and catalog reads do not mutate SQLite, Attempts, Results, artifacts, or
+installed historical records. The Rust catalog uses `include_str!` for fixed source paths, validates the complete document
+with `validate_benchmark_document`, and returns the validator's canonical JSON plus its stable SHA-256 content hash.
+
+Each document carries an explicit top-level `execution` metadata object preserved by benchmark-v1's unknown-field policy.
+It declares the typed text-generation capability/status, evaluation mode, sandbox status, and human-readable requirement.
+The programming/software-engineering pack is intentionally static text reasoning and sets `sandboxStatus` to `unavailable`;
+Docker-backed code execution is not implemented and no code, filesystem, or network execution is implied. The math pack
+uses normalized exact-text expectations where appropriate. The writing pack uses `expected: null` and explicit human
+criteria for instruction following, clarity, evidence discipline, and usefulness.
+
+`list_official_packs` returns deterministic summaries ordered by pack ID. `get_official_pack` returns the validated full
+canonical document for a known pack ID and `None` for an unknown ID. The desktop Benchmarks surface renders the metadata
+and document as read-only plain text. Browser preview does not invoke either command or expose the source JSON.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.
