@@ -11,9 +11,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
-    canonical_json_value, sha256_hex, stable_profile_revision_id, validate_artifact_ref,
-    validate_benchmark_document, Attempt, ImmutableResultReference, ProfileRevision, Run,
-    ValidatedBenchmark, ValidationError,
+    canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
+    validate_artifact_ref, validate_benchmark_document, Attempt, ImmutableResultReference,
+    ProfileRevision, Run, ValidatedBenchmark, ValidationError,
 };
 
 pub use crate::domain::ArtifactRef;
@@ -25,6 +25,7 @@ pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_cor
 pub const BENCHMARK_DRAFTS_MIGRATION: &str =
     include_str!("storage/migrations/0003_benchmark_drafts.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
+const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = 256 * 1024;
 pub const MAX_DRAFT_REQUEST_BYTES: usize = 512 * 1024;
 pub const MAX_DRAFT_TITLE_BYTES: usize = 256;
@@ -187,6 +188,13 @@ pub struct BenchmarkVersionSummary {
     pub version_number: u32,
     pub content_hash: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BenchmarkVersion {
+    pub summary: BenchmarkVersionSummary,
+    pub document_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,6 +381,34 @@ impl StorageService {
             .map_err(|_| StorageError::DatabaseFailure)?
             .collect::<Result<Vec<_>, _>>();
         rows.map_err(|_| StorageError::DatabaseFailure)
+    }
+
+    pub fn get_benchmark_version(
+        &self,
+        version_id: &str,
+    ) -> Result<Option<BenchmarkVersion>, StorageError> {
+        validate_benchmark_version_id(version_id)?;
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT version_id, benchmark_id, version_number, content_hash, document_json, created_at
+                 FROM benchmark_versions WHERE version_id = ?1",
+                params![version_id],
+                |row| {
+                    Ok(BenchmarkVersion {
+                        summary: BenchmarkVersionSummary {
+                            version_id: row.get(0)?,
+                            benchmark_id: row.get(1)?,
+                            version_number: row.get(2)?,
+                            content_hash: row.get(3)?,
+                            created_at: row.get(5)?,
+                        },
+                        document_json: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)
     }
 
     pub fn list_benchmark_drafts(&self) -> Result<Vec<BenchmarkDraftSummary>, StorageError> {
@@ -1014,6 +1050,24 @@ fn validate_record_id(record_id: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
+fn validate_benchmark_version_id(version_id: &str) -> Result<(), StorageError> {
+    if version_id.is_empty() || version_id.len() > MAX_BENCHMARK_VERSION_ID_BYTES {
+        return Err(StorageError::InvalidRecordId);
+    }
+    let (benchmark_id, version_number) = version_id
+        .split_once('@')
+        .ok_or(StorageError::InvalidRecordId)?;
+    let version_number = version_number
+        .parse::<u32>()
+        .map_err(|_| StorageError::InvalidRecordId)?;
+    let expected = stable_version_id(benchmark_id, version_number)
+        .map_err(|_| StorageError::InvalidRecordId)?;
+    if expected != version_id {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
 fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageError> {
     validate_record_id(&revision.profile_id).map_err(|_| StorageError::InvalidProfileRevision)?;
     let expected_id = stable_profile_revision_id(&revision.profile_id, revision.revision)
@@ -1638,6 +1692,49 @@ mod tests {
         );
         assert_eq!(ARTIFACT_SCHEMA_VERSION, 1);
         assert_eq!(service.list_benchmark_versions().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn published_version_read_validates_id_and_returns_canonical_document() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let validated = validate_benchmark_document(&valid_document()).unwrap();
+        let summary = service.save_benchmark_version(&validated, "100").unwrap();
+
+        let version = service
+            .get_benchmark_version("logic@1")
+            .expect("version read succeeds")
+            .expect("published version exists");
+        assert_eq!(version.summary, summary);
+        assert_eq!(version.document_json, validated.canonical_json);
+        assert_eq!(service.get_benchmark_version("missing@1").unwrap(), None);
+        for invalid_id in [
+            "",
+            "logic",
+            "logic@0",
+            "logic@01",
+            "../logic@1",
+            "logic@1@2",
+        ] {
+            assert_eq!(
+                service.get_benchmark_version(invalid_id),
+                Err(StorageError::InvalidRecordId)
+            );
+        }
+
+        let long_benchmark_id = "b".repeat(128);
+        let long_document = valid_document()
+            .replace("\"logic\"", &format!("\"{long_benchmark_id}\""))
+            .replace("logic@1", &format!("{long_benchmark_id}@1"));
+        let long_validated = validate_benchmark_document(&long_document).unwrap();
+        service
+            .save_benchmark_version(&long_validated, "200")
+            .expect("maximum benchmark identifier publishes");
+        assert!(service
+            .get_benchmark_version(&format!("{long_benchmark_id}@1"))
+            .unwrap()
+            .is_some());
         let _ = fs::remove_dir_all(root);
     }
 

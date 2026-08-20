@@ -84,6 +84,17 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - Browser preview never invokes profile/model commands and never invents profile or model records. Full model-library
   management, cross-runtime grouping, hardware recommendations, downloads, and deletion remain planned.
 
+### Phase 07 — Published version loading and bounded run-plan contract — DONE (bounded)
+
+- One typed desktop read validates a bounded portable `benchmark-id@version` identity and returns the immutable
+  published version summary plus its stored canonical document JSON without rewriting history.
+- A pure, tested TypeScript helper selects an existing task and case from that document and combines them with a real
+  immutable profile revision into the existing `RunPlan` shape. It derives the generation model from the profile,
+  combines profile/task system prompts and task/case prompts deterministically, and permits exactly one repetition.
+- The helper and typed bridge use the fixed/default `http://127.0.0.1:11434` Ollama configuration and existing one-shot
+  worker command. This slice has no run-authoring UI, fake records, arbitrary endpoint or credential input, cancellation,
+  process lifecycle, downloads, cloud providers, or browser writes; broader run controls remain planned.
+
 ### Remaining Phase B work
 
 - `PLANNED` — Run authoring/controls, interruption recovery, and evaluation.

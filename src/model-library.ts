@@ -73,7 +73,6 @@ export function profileRevisionFromForm(form: ProfileFormState): ProfileRevision
     runtime: PROFILE_RUNTIME,
     parameters: {},
     systemPrompt: null,
-    extra: {},
   };
 }
 

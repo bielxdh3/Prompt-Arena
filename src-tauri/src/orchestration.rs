@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 
 use crate::{
     domain::{
-        sha256_hex, stable_profile_revision_id, ArtifactRef, Attempt, ImmutableResultReference,
-        ProfileRevision, Run,
+        sha256_hex, stable_profile_revision_id, stable_version_id, ArtifactRef, Attempt,
+        ImmutableResultReference, ProfileRevision, Run,
     },
     ollama::{OllamaConfig, OllamaProvider},
     runtime::{
@@ -149,7 +149,7 @@ impl RunPlan {
 
         validate_identifier(&self.run_id, "run id")?;
         validate_identifier(&self.case_id, "case id")?;
-        validate_reference_id(&self.benchmark_version_id, "benchmark version id")?;
+        validate_benchmark_version_id(&self.benchmark_version_id)?;
         let expected_profile_revision_id = stable_profile_revision_id(
             &self.profile_revision.profile_id,
             self.profile_revision.revision,
@@ -490,16 +490,17 @@ fn validate_identifier(value: &str, label: &str) -> Result<(), OrchestrationErro
     Ok(())
 }
 
-fn validate_reference_id(value: &str, label: &str) -> Result<(), OrchestrationError> {
-    if value.is_empty()
-        || value.len() > 128
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte == b' ')
-    {
-        return Err(OrchestrationError::InvalidPlan(format!(
-            "{label} must be bounded and free of control characters"
-        )));
+fn validate_benchmark_version_id(value: &str) -> Result<(), OrchestrationError> {
+    let invalid = || {
+        OrchestrationError::InvalidPlan(
+            "benchmark version id must be a deterministic benchmark-id@version identity".to_owned(),
+        )
+    };
+    let (benchmark_id, version_number) = value.split_once('@').ok_or_else(invalid)?;
+    let version_number = version_number.parse::<u32>().map_err(|_| invalid())?;
+    let expected = stable_version_id(benchmark_id, version_number).map_err(|_| invalid())?;
+    if expected != value {
+        return Err(invalid());
     }
     Ok(())
 }
@@ -740,6 +741,20 @@ mod tests {
             attempt.effective_config["profileRevisionId"],
             json!("profile-1@1")
         );
+    }
+
+    #[test]
+    fn plan_validation_requires_deterministic_benchmark_version_ids() {
+        let mut plan = plan();
+        assert!(plan.validate().is_ok());
+        for invalid_id in ["logic", "logic@0", "logic@01", "../logic@1", "logic@1@2"] {
+            plan.benchmark_version_id = invalid_id.to_owned();
+            assert!(plan.validate().is_err(), "{invalid_id} must be rejected");
+        }
+
+        let long_benchmark_id = "b".repeat(128);
+        plan.benchmark_version_id = format!("{long_benchmark_id}@1");
+        assert!(plan.validate().is_ok());
     }
 
     #[test]
