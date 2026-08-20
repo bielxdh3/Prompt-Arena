@@ -109,10 +109,25 @@ only exact-text pass/fail, verifier kind, normalized byte counts, and expected/a
 supported string expectation exists it remains null. Runs renders those facts only when the exact-text shape is present,
 never reads artifact payloads, and makes no human/AI evaluation or ranking claim.
 
+Phase 11 adds one bounded blind human-evaluation flow for a single completed run. The desktop preparation path resolves
+only completed attempts whose generation-response artifact is registered in the app-owned store, then validates the
+portable path, registered kind/schema/path, regular-file boundary, size limit, and SHA-256 before parsing the response.
+Anonymous labels, tokens, and order are deterministic from the run and attempt identities. The Runs parent owns an
+explicit blind-surface gate: while evaluation is loading, preparing, prepared, empty, or in error, the AttemptDetail
+subtree is not mounted, so model/profile/provider/endpoint/metrics/objective/attempt-ID evidence cannot share the review
+surface with anonymous cards. A successful lock is the only transition that re-enables the existing attempt evidence and
+post-lock audit IDs.
+
+The bridge exposes preparation and lock commands only in desktop mode. Prepared response text is untrusted and rendered
+as plain text; it is not persisted in `blind_evaluations`. The separate immutable record stores the anonymous
+presentation/audit mapping, bounded 1–5 scores, optional token ranking, and timestamps without changing Attempts,
+Results, or artifacts. This remains a local single-user overall-score/ranking lock for one run, not AI judging,
+multi-rater review, cross-run ranking, rubric authoring, or broader scoring/analysis.
+
 ## Future boundaries
 
-Broader run authoring and model execution controls beyond this bounded Arena entry flow, human/AI evaluation, full model-library
-management/downloads/deletion, official benchmark packs, imports and broader benchmark-authoring flows, external/cloud
-provider adapters, interruption recovery, and any long-lived worker/runtime lifecycle remain later phases. They must keep
-provenance, effective configuration, error taxonomy, and historical records explicit rather than smuggling behavior
-into the current command or worker boundary.
+Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human
+evaluation, AI judging, cross-run ranking, full model-library management/downloads/deletion, official benchmark packs,
+imports and broader benchmark-authoring flows, external/cloud provider adapters, interruption recovery, and any
+long-lived worker/runtime lifecycle remain later phases. They must keep provenance, effective configuration, error
+taxonomy, and historical records explicit rather than smuggling behavior into the current command or worker boundary.

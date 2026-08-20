@@ -3,9 +3,9 @@
 ## Foundation verdict
 
 The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
-typed status, benchmark/profile/draft persistence, fixed-loopback Ollama discovery, one-shot execution, and Runs read
-operations plus a read-only published benchmark-version command; they operate only on typed data and the app-owned local
-storage root. Draft saves use bounded requests and
+typed status, benchmark/profile/draft persistence, fixed-loopback Ollama discovery, one-shot execution, Runs read
+operations, and bounded blind-evaluation preparation/lock plus a read-only published benchmark-version command; they
+operate only on typed data and the app-owned local storage root. Draft saves use bounded requests and
 optimistic revisions; publishing revalidates the stored document before creating an immutable benchmark version. The
 capability file contains no plugin permissions. The worker accepts a tagged protocol, validates its version, job ID,
 and request bound, performs one generation at most, returns one typed terminal response, and exits.
@@ -70,6 +70,14 @@ from an already-running local Ollama service; it does not spawn or forcibly term
   a supported string expectation, and this slice writes only the bounded verifier kind, status, counts, and hashes. The
   persisted score field remains extensible generic JSON, while Runs displays objective details only for the recognized
   exact-text shape and preserves unknown/future score values without rendering them.
+- Blind human evaluation is a separate local immutable record, not a mutation of Attempts, Results, or artifacts. Its
+  preparation reader accepts only completed attempts pointing to registered `generation-response` artifacts, checks the
+  app-owned relative path, kind/schema/path metadata, regular-file boundary, size, and SHA-256, and parses the bounded
+  response as untrusted plain text. Stable anonymous tokens/order are derived from run and attempt IDs, while the
+  prepared UI does not mount AttemptDetail or identifying model/profile/provider/endpoint/metric/objective/attempt-ID
+  evidence. The parent gate also keeps that evidence hidden for loading, empty, and error states; only a successful lock
+  re-enables post-lock audit IDs. The persisted record contains no response text, and scores/ranking are validated at
+  the Rust boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/Arena commands, validate benchmarks, query Ollama, or invent
   records. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
@@ -77,7 +85,7 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 ## Required future controls
 
 External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, human/AI evaluation, rankings, broader scoring/analysis, official benchmark packs, full model-library management,
+model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, official benchmark packs, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.

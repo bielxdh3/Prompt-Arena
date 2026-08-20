@@ -41,6 +41,13 @@ travels only as explicit RunPlan policy, never in GenerationRequest metadata; af
 and surrounding-whitespace normalization produces only pass/fail, normalized byte counts, and SHA-256 evidence in the
 immutable result reference. Runs shows that evidence without rendering expected/actual response text; human/AI evaluation,
 rankings, and broader scoring remain outside this slice.
+Phase 11 — DONE (bounded) — adds a single-user local blind human-evaluation lock for one completed run. Desktop mode
+reads only registered, hash-verified generation-response artifacts, presents a deterministic anonymous order with stable
+labels/tokens, and removes AttemptDetail and all identifying attempt evidence from the review surface while evaluation is
+preparing or prepared. The user can submit bounded overall scores and an optional complete token ranking; the separate
+immutable evaluation record stores anonymous presentation/audit mapping, scores, ranking, and timestamps, never response
+text. Browser preview remains no-write. This slice has no AI judging, multi-rater workflow, cross-run ranking, rubric
+authoring, or broader scoring/analysis.
 
 ## Run locally
 
@@ -70,7 +77,8 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 ## Boundaries
 
 - Local data belongs to the app-owned storage root. Migrations `0001_foundation.sql`, `0002_core_arena.sql`, and
-  `0003_benchmark_drafts.sql` create SQLite metadata tables; large payloads remain immutable filesystem artifacts.
+  `0003_benchmark_drafts.sql`, and `0004_blind_evaluations.sql` create SQLite metadata tables; large payloads remain
+  immutable filesystem artifacts.
 - The registered Tauri commands remain typed, including published benchmark-version read, profile-revision
   listing/registration, fixed-loopback Ollama model discovery, one-shot run execution, and Runs read commands.
   `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
@@ -91,8 +99,14 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   and the Runs detail reads typed attempt metadata and artifact/hash references without opening artifact files. Failed
   and cancelled attempts retain their existing semantics and do not receive a completed-response summary. String expected
   values add only a bounded top-level RunPlan policy input and immutable result score/evidence; the gold answer is not
-  sent through generation metadata or to Ollama, and response text remains only in the artifact. Human evaluation, AI
-  judging, rankings, and broader scoring remain outside this slice.
+  sent through generation metadata or to Ollama, and response text remains only in the artifact. Phase 11 adds one
+  bounded blind human-evaluation lock over verified response artifacts; AI judging, cross-run rankings, and broader
+  scoring remain outside this slice.
+- Blind human evaluation is local and single-user for one run: preparation derives only anonymous cards from completed
+  generation-response artifacts after app-owned path, kind, size, and SHA-256 verification. The parent Runs surface
+  suppresses AttemptDetail and identifying evidence for loading/preparing/prepared/error/empty states; within that blind
+  review surface, identity becomes available only in the immutable post-lock audit record. Scores are overall 1–5 with bounded optional criterion maps,
+  and ranking is token-based and must cover the prepared response set. Evaluation records never persist response text.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.
@@ -108,8 +122,8 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   fragments, and non-loopback hosts. It has 64 KiB line, 16 MiB non-stream body, and 16 MiB cumulative stream limits.
 - Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
   process. The narrow authoring editor writes only optional text expected answers; arbitrary JSON expectations remain
-  outside this UI. External/cloud providers, credentials, downloads, run authoring, evaluation, official packs, full
-  model-library management, and broader runtime UI remain future work.
+  outside this UI. External/cloud providers, credentials, downloads, run authoring, AI judging, multi-rater evaluation,
+  cross-run ranking, official packs, full model-library management, and broader runtime UI remain future work.
 - Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
   selectable local font stacks; proprietary fonts are not bundled.
 
