@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  executeRunOnce,
   isDesktopEnvironment,
   readLocalOllamaModels,
+  readBenchmarkVersion,
   readProfileRevisions,
   registerProfileRevision,
   publishBenchmarkDraft,
@@ -14,11 +16,26 @@ import {
   readAppStatus,
   type AppStatus,
   type BenchmarkDraftSummary,
+  type BenchmarkVersion,
   type BenchmarkVersionSummary,
   type ModelInfo,
+  type PersistedExecution,
   type ProfileRevision,
   type RunRecord,
 } from "./bridge";
+import {
+  arenaEmptyCopy,
+  arenaPreviewCopy,
+  arenaPreviewFromPlan,
+  caseOptions,
+  parseArenaDocument,
+  profileOptions,
+  taskOptions,
+  versionOptions,
+  type ArenaDocument,
+  type ArenaPreview,
+} from "./arena-ui";
+import { buildRunPlan } from "./run-plan";
 import {
   documentJsonForDraft,
   documentToForm,
@@ -42,7 +59,7 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 
-type ViewId = "overview" | "benchmarks" | "models" | "runs" | "settings";
+type ViewId = "overview" | "arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -50,6 +67,7 @@ type ConnectionState =
 
 const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] = [
   { id: "overview", label: "Overview", description: "Workspace status" },
+  { id: "arena", label: "Arena", description: "Run one bounded case" },
   { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
   { id: "models", label: "Models", description: "Profiles and local models" },
   { id: "runs", label: "Runs", description: "Execution history" },
@@ -158,7 +176,8 @@ function App() {
         )}
 
         <main className="main-content" id="main-content">
-          {activeView === "overview" && <Overview onOpenBenchmarks={() => setActiveView("benchmarks")} />}
+          {activeView === "overview" && <Overview onOpenArena={() => setActiveView("arena")} />}
+          {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView />}
@@ -181,7 +200,7 @@ function ConnectionBadge({ connection }: { connection: ConnectionState }) {
   return <span className="status-chip is-ready">Local app ready</span>;
 }
 
-function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
+function Overview({ onOpenArena }: { onOpenArena: () => void }) {
   return (
     <div className="view-stack">
       <section className="hero-panel panel">
@@ -189,12 +208,12 @@ function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
           <p className="eyebrow">A quiet place for reproducible work</p>
           <h2>Compare models with evidence, not noise.</h2>
           <p>
-            Prompt Arena is a standalone local-first desktop workspace. Local persistence and the bounded one-shot
-            execution boundary are ready, as is a bounded structured benchmark-draft editor. Run controls, evaluation,
-            official packs, and the model library arrive in later phases.
+            Prompt Arena is a standalone local-first desktop workspace. Local persistence, immutable records, and a
+            bounded Arena one-shot flow are ready, as is a structured benchmark-draft editor. Broader run controls,
+            evaluation, official packs, and the model library arrive in later phases.
           </p>
-          <button className="primary-button" type="button" onClick={onOpenBenchmarks}>
-            Explore benchmarks
+          <button className="primary-button" type="button" onClick={onOpenArena}>
+            Open Arena
             <span aria-hidden="true">→</span>
           </button>
         </div>
@@ -221,9 +240,9 @@ function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
         </div>
         <EmptyState
           title="No benchmark versions yet"
-          description="This installation has no local benchmark records yet. Use the bounded editor to create a draft; run controls and evaluation remain planned."
-          actionLabel="Open benchmark area"
-          onAction={onOpenBenchmarks}
+          description="This installation has no local benchmark records yet. Publish an immutable version before selecting a case in Arena."
+          actionLabel="Open Arena"
+          onAction={onOpenArena}
         />
       </section>
     </div>
@@ -820,6 +839,477 @@ function formatModelSize(sizeBytes: number | null): string {
   if (sizeBytes === null) return "size unavailable";
   if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
   return `${(sizeBytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+type ArenaRecordsState =
+  | { status: "loading" }
+  | { status: "ready"; versions: BenchmarkVersionSummary[]; profiles: ProfileRevision[] }
+  | { status: "error"; message: string }
+  | { status: "preview" };
+
+type ArenaDocumentState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; version: BenchmarkVersion; document: ArenaDocument }
+  | { status: "malformed"; message: string }
+  | { status: "error"; message: string };
+
+type ArenaExecutionState =
+  | { status: "idle" }
+  | { status: "busy" }
+  | { status: "error"; message: string }
+  | { status: "terminal"; execution: PersistedExecution };
+
+function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
+  const [records, setRecords] = useState<ArenaRecordsState>(() => (
+    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+  ));
+  const [documentState, setDocumentState] = useState<ArenaDocumentState>({ status: "idle" });
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [selectedProfileRevisionId, setSelectedProfileRevisionId] = useState("");
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedCaseId, setSelectedCaseId] = useState("");
+  const [execution, setExecution] = useState<ArenaExecutionState>({ status: "idle" });
+  const recordsRequestRef = useRef(0);
+
+  async function refreshRecords() {
+    const requestId = recordsRequestRef.current + 1;
+    recordsRequestRef.current = requestId;
+    if (!isDesktopEnvironment()) {
+      setRecords({ status: "preview" });
+      return;
+    }
+    setRecords({ status: "loading" });
+    setDocumentState({ status: "idle" });
+    try {
+      const [versions, profiles] = await Promise.all([readBenchmarkVersions(), readProfileRevisions()]);
+      if (requestId !== recordsRequestRef.current) return;
+      setRecords({ status: "ready", versions, profiles });
+    } catch (error: unknown) {
+      if (requestId !== recordsRequestRef.current) return;
+      setRecords({
+        status: "error",
+        message: error instanceof Error ? error.message : "The Arena records are unavailable.",
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!isDesktopEnvironment()) {
+      setRecords({ status: "preview" });
+      return () => {
+        recordsRequestRef.current += 1;
+      };
+    }
+    void refreshRecords();
+    return () => {
+      recordsRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (records.status !== "ready") return;
+    const versions = versionOptions(records.versions);
+    const profiles = profileOptions(records.profiles);
+    setSelectedVersionId((current) => (
+      versions.some((option) => option.value === current) ? current : versions[0]?.value ?? ""
+    ));
+    setSelectedProfileRevisionId((current) => (
+      profiles.some((option) => option.value === current) ? current : profiles[0]?.value ?? ""
+    ));
+  }, [records]);
+
+  useEffect(() => {
+    let current = true;
+    const selectedVersionIsAvailable = records.status === "ready"
+      && versionOptions(records.versions).some((option) => option.value === selectedVersionId);
+    if (
+      records.status !== "ready"
+      || !selectedVersionId
+      || !selectedVersionIsAvailable
+      || !isDesktopEnvironment()
+    ) {
+      setDocumentState({ status: "idle" });
+      return () => {
+        current = false;
+      };
+    }
+
+    setDocumentState({ status: "loading" });
+    void readBenchmarkVersion(selectedVersionId)
+      .then((version) => {
+        if (!current) return;
+        if (!version) {
+          setDocumentState({ status: "error", message: "The selected immutable version no longer exists locally." });
+          return;
+        }
+        try {
+          setDocumentState({
+            status: "ready",
+            version,
+            document: parseArenaDocument(version.documentJson),
+          });
+        } catch (error: unknown) {
+          setDocumentState({
+            status: "malformed",
+            message: error instanceof Error ? error.message : "The published document could not be read.",
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          setDocumentState({
+            status: "error",
+            message: error instanceof Error ? error.message : "The selected version could not be reached.",
+          });
+        }
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [records, selectedVersionId]);
+
+  useEffect(() => {
+    if (documentState.status !== "ready") {
+      setSelectedTaskId("");
+      return;
+    }
+    const tasks = taskOptions(documentState.document);
+    setSelectedTaskId((current) => (
+      tasks.some((option) => option.value === current) ? current : tasks[0]?.value ?? ""
+    ));
+  }, [documentState]);
+
+  useEffect(() => {
+    if (documentState.status !== "ready") {
+      setSelectedCaseId("");
+      return;
+    }
+    const cases = caseOptions(documentState.document, selectedTaskId);
+    setSelectedCaseId((current) => (
+      cases.some((option) => option.value === current) ? current : cases[0]?.value ?? ""
+    ));
+  }, [documentState, selectedTaskId]);
+
+  useEffect(() => {
+    setExecution({ status: "idle" });
+  }, [selectedVersionId, selectedProfileRevisionId, selectedTaskId, selectedCaseId]);
+
+  const selectedProfile = records.status === "ready"
+    ? records.profiles.find((profile) => profile.profileRevisionId === selectedProfileRevisionId)
+    : undefined;
+  const activeDocument = records.status === "ready"
+    && documentState.status === "ready"
+    && documentState.version.summary.versionId === selectedVersionId
+    ? documentState
+    : null;
+  const taskSelectionOptions = activeDocument ? taskOptions(activeDocument.document) : [];
+  const caseSelectionOptions = activeDocument
+    ? caseOptions(activeDocument.document, selectedTaskId)
+    : [];
+  let preview: ArenaPreview | null = null;
+  let previewError: string | null = null;
+
+  if (
+    activeDocument
+    && selectedProfile
+    && selectedTaskId
+    && selectedCaseId
+  ) {
+    try {
+      preview = arenaPreviewFromPlan(
+        buildRunPlan({
+          runId: "arena-preview",
+          version: activeDocument.version,
+          taskId: selectedTaskId,
+          caseId: selectedCaseId,
+          profileRevision: selectedProfile,
+        }),
+        selectedTaskId,
+      );
+    } catch (error: unknown) {
+      previewError = error instanceof Error ? error.message : "The selected Arena inputs are not runnable.";
+    }
+  }
+
+  async function handleExecute() {
+    if (!isDesktopEnvironment()) {
+      setExecution({ status: "error", message: arenaPreviewCopy() });
+      return;
+    }
+    if (!activeDocument || !selectedProfile || !selectedTaskId || !selectedCaseId) {
+      setExecution({ status: "error", message: "Select one existing version, profile revision, task, and case." });
+      return;
+    }
+
+    setExecution({ status: "busy" });
+    try {
+      const plan = buildRunPlan({
+        runId: `arena-${crypto.randomUUID()}`,
+        version: activeDocument.version,
+        taskId: selectedTaskId,
+        caseId: selectedCaseId,
+        profileRevision: selectedProfile,
+      });
+      setExecution({ status: "terminal", execution: await executeRunOnce(plan) });
+    } catch (error: unknown) {
+      setExecution({
+        status: "error",
+        message: error instanceof Error ? error.message : "The bounded one-shot run could not be started.",
+      });
+    }
+  }
+
+  const hasRecords = records.status === "ready" && records.versions.length > 0 && records.profiles.length > 0;
+  const recordsAreEmpty = records.status === "ready" && (records.versions.length === 0 || records.profiles.length === 0);
+
+  return (
+    <div className="view-stack">
+      <section className="panel page-intro">
+        <p className="eyebrow">Core Arena</p>
+        <h2>Select evidence, then run one case.</h2>
+        <p>
+          Arena reads existing immutable benchmark versions and profile revisions, loads the selected canonical document,
+          and prepares one real task/case for the fixed local Ollama one-shot boundary. There is no raw JSON editor,
+          endpoint field, credential input, cancellation control, or invented record.
+        </p>
+      </section>
+
+      {records.status === "preview" && (
+        <section className="panel arena-state-panel" aria-live="polite">
+          <StateMessage icon="◇" title="Browser preview / no writes" description={arenaPreviewCopy()} />
+        </section>
+      )}
+      {records.status === "loading" && (
+        <section className="panel arena-state-panel" aria-live="polite">
+          <StateMessage icon="…" title="Loading Arena records" description="Reading immutable versions and profile revisions from the local store." />
+        </section>
+      )}
+      {records.status === "error" && (
+        <section className="panel arena-state-panel" aria-live="polite">
+          <StateMessage icon="!" title="Arena records unavailable" description={records.message} error />
+        </section>
+      )}
+      {recordsAreEmpty && (
+        <section className="panel arena-empty-grid" aria-live="polite">
+          {records.versions.length === 0 && <EmptyState title="No benchmark versions" description={arenaEmptyCopy("versions")} />}
+          {records.profiles.length === 0 && <EmptyState title="No profile revisions" description={arenaEmptyCopy("profiles")} />}
+        </section>
+      )}
+
+      {hasRecords && (
+        <div className="arena-layout">
+          <section className="panel arena-selection-panel" aria-label="Arena selections">
+            <div className="section-heading compact-heading">
+              <div>
+                <p className="eyebrow">Existing records only</p>
+                <h3>Choose the run inputs</h3>
+              </div>
+              <button className="text-button" type="button" onClick={() => void refreshRecords()} disabled={execution.status === "busy"}>
+                Refresh
+              </button>
+            </div>
+            <div className="arena-selection-grid">
+              <ArenaSelect
+                id="arena-version"
+                label="Published benchmark version"
+                value={selectedVersionId}
+                options={versionOptions(records.versions)}
+                placeholder="Select an existing version"
+                disabled={execution.status === "busy"}
+                onChange={setSelectedVersionId}
+              />
+              <ArenaSelect
+                id="arena-profile"
+                label="Immutable profile revision"
+                value={selectedProfileRevisionId}
+                options={profileOptions(records.profiles)}
+                placeholder="Select an existing profile"
+                disabled={execution.status === "busy"}
+                onChange={setSelectedProfileRevisionId}
+              />
+              <ArenaSelect
+                id="arena-task"
+                label="Task"
+                value={selectedTaskId}
+                options={taskSelectionOptions}
+                placeholder="Select an existing task"
+                disabled={execution.status === "busy" || !activeDocument}
+                onChange={setSelectedTaskId}
+              />
+              <ArenaSelect
+                id="arena-case"
+                label="Case"
+                value={selectedCaseId}
+                options={caseSelectionOptions}
+                placeholder="Select an existing case"
+                disabled={execution.status === "busy" || !activeDocument || !selectedTaskId}
+                onChange={setSelectedCaseId}
+              />
+            </div>
+            {documentState.status === "loading" && (
+              <StateMessage icon="…" title="Loading the selected version" description="Reading its stored canonical document without rewriting it." />
+            )}
+            {documentState.status === "malformed" && (
+              <StateMessage icon="!" title="Published document malformed" description={documentState.message} error />
+            )}
+            {documentState.status === "error" && (
+              <StateMessage icon="!" title="Version unavailable" description={documentState.message} error />
+            )}
+            {activeDocument && taskSelectionOptions.length === 0 && (
+              <EmptyState title="No usable tasks" description={arenaEmptyCopy("tasks")} />
+            )}
+            {activeDocument && taskSelectionOptions.length > 0 && caseSelectionOptions.length === 0 && (
+              <EmptyState title="No usable cases" description={arenaEmptyCopy("cases")} />
+            )}
+          </section>
+
+          <section className="panel arena-preview-panel" aria-live="polite">
+            <div className="section-heading compact-heading">
+              <div>
+                <p className="eyebrow">Deterministic preview</p>
+                <h3>What will be sent</h3>
+              </div>
+              <span className="section-index">08</span>
+            </div>
+            {previewError && <StateMessage icon="!" title="Selection is not runnable" description={previewError} error />}
+            {!preview && !previewError && documentState.status !== "loading" && (
+              <StateMessage icon="◇" title="Select existing records" description="Choose a published version, profile revision, task, and case to see the bounded request preview." />
+            )}
+            {preview && (
+              <>
+                <div className="arena-preview-facts">
+                  <BoundaryRow label="Benchmark version" value={preview.benchmarkVersionId} />
+                  <BoundaryRow label="Task / case" value={`${preview.taskId} / ${preview.caseId}`} />
+                  <BoundaryRow label="Profile revision" value={preview.profileRevisionId} />
+                  <BoundaryRow label="Generation model" value={preview.model} />
+                </div>
+                <div className="arena-prompt-block">
+                  <p className="eyebrow">System prompt</p>
+                  <pre className="arena-prompt">{preview.systemPrompt ?? "No separate system prompt."}</pre>
+                </div>
+                <div className="arena-prompt-block">
+                  <p className="eyebrow">User prompt</p>
+                  <pre className="arena-prompt">{preview.prompt}</pre>
+                </div>
+                <div className="arena-boundary">
+                  <BoundaryRow label="Runtime" value="Ollama (fixed)" />
+                  <BoundaryRow label="Endpoint" value={preview.endpoint} />
+                  <BoundaryRow label="Repetitions" value={String(preview.repetitions)} />
+                  <BoundaryRow label="Worker" value="One-shot" />
+                </div>
+                <div className="arena-actions">
+                  <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={execution.status === "busy"}>
+                    Run one bounded case <span aria-hidden="true">→</span>
+                  </button>
+                  <button className="text-button" type="button" onClick={onOpenRuns}>
+                    View run history <span aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </>
+            )}
+            {execution.status === "busy" && (
+              <div className="arena-execution-status">
+                <StateMessage icon="…" title="Running one bounded case" description="The existing one-shot worker is processing the selected request. Cancellation and lifecycle controls are not part of this slice." />
+              </div>
+            )}
+            {execution.status === "error" && (
+              <div className="arena-execution-status">
+                <StateMessage icon="!" title="Run could not start" description={execution.message} error />
+              </div>
+            )}
+            {execution.status === "terminal" && (
+              <ArenaExecutionResult execution={execution.execution} onOpenRuns={onOpenRuns} />
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArenaSelect({
+  id,
+  label,
+  value,
+  options,
+  placeholder,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: readonly { value: string; label: string; detail: string }[];
+  placeholder: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="arena-select-control" htmlFor={id}>
+      <span className="field-label">{label}</span>
+      <select className="font-select" id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.currentTarget.value)}>
+        <option value="">{placeholder}</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label} — {option.detail}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ArenaExecutionResult({
+  execution,
+  onOpenRuns,
+}: {
+  execution: PersistedExecution;
+  onOpenRuns: () => void;
+}) {
+  const status = arenaTerminalStatus(execution.attempt.status);
+  const statusLabel = status === "success" ? "Completed" : status === "cancelled" ? "Cancelled" : "Failed";
+  return (
+    <div className="arena-terminal" role="status">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Terminal outcome</p>
+          <h3>{statusLabel}</h3>
+        </div>
+        <span className={`run-status arena-status-${status}`}>{execution.attempt.status}</span>
+      </div>
+      <div className="arena-terminal-facts">
+        <BoundaryRow label="Run ID" value={execution.run.runId} />
+        <BoundaryRow label="Attempt ID" value={execution.attempt.attemptId} />
+        <BoundaryRow label="Saved outcome" value={execution.saveOutcome} />
+      </div>
+      <div className="arena-progress">
+        <p className="eyebrow">Progress</p>
+        {execution.progress.length === 0 ? (
+          <p className="field-help">No progress events were returned.</p>
+        ) : (
+          <ul className="arena-progress-list">
+            {execution.progress.map((event) => (
+              <li key={`${event.sequence}-${event.kind}`}>
+                <strong>#{event.sequence} {event.kind}</strong>
+                {event.text ? ` · ${event.text}` : ""}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <button className="text-button" type="button" onClick={onOpenRuns}>
+        Open run history <span aria-hidden="true">→</span>
+      </button>
+    </div>
+  );
+}
+
+function arenaTerminalStatus(status: string): "success" | "failure" | "cancelled" {
+  if (status === "completed" || status === "succeeded" || status === "success") return "success";
+  if (status === "cancelled" || status === "canceled") return "cancelled";
+  return "failure";
 }
 
 type RunsState =
