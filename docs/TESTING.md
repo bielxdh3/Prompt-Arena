@@ -8,13 +8,15 @@ Validation is proportional to the foundation and must remain honest about what i
 - Frontend bundle: `npm run build`.
 - Frontend unit tests for fonts, benchmark authoring bounds/shape handling, Phase 06 profile identity/bounds, bounded
   Arena option extraction/selection/preview behavior, RunPlan objective-expectation extraction/bounds/no-gold-metadata,
-  read-only results status/metric formatting, blind-review evidence suppression states, and browser-preview surface states:
+  read-only results status/metric formatting, blind-review evidence suppression states, official-pack browser-preview
+  no-write states, and browser-preview surface states:
   `npm run test`.
 - Rust formatting: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`.
 - Rust compilation: `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`.
 - Rust command, worker, typed benchmark validation, path-safety, migration, immutable persistence/replay, bounded
   artifact/response/response-summary/objective-verification evidence, blind-evaluation artifact verification,
-  anonymous deterministic preparation, score/ranking bounds, immutable evaluation replay, and generic score compatibility,
+  anonymous deterministic preparation, score/ranking bounds, immutable evaluation replay, official-pack full-document
+  validation, deterministic IDs/hashes, catalog lookup/not-found, execution metadata, and generic score compatibility,
   draft revision/bounds/publish behavior, Runs read-API,
   orchestration, and runtime-contract tests:
   `cargo test --manifest-path src-tauri/Cargo.toml --all-targets`.
@@ -39,11 +41,12 @@ Validation is proportional to the foundation and must remain honest about what i
 The tests exercise the local SQLite service and immutable artifact writer using temporary app-owned roots, the bounded
 one-shot orchestration contract including response-summary and objective-verification replay/conflict/bounds, the Phase 05
 draft boundary, the Phase 06 profile/discovery slice, the bounded Arena helper and objective RunPlan contract, the blind
-evaluation artifact/presentation/lock boundary, the read-only results helpers, and the normalized
+evaluation artifact/presentation/lock boundary, the official source-pack catalog, the read-only results helpers, and the normalized
 runtime/Ollama adapter through a local mock server. There is no desktop integration test
 that launches the Tauri app and worker together, no broader run authoring/control UI, app-managed long-lived runtime
-lifecycle, full model download/catalog/deletion flow, external or cloud provider test, bundled official benchmark pack,
-or production-data migration test. Those checks belong with the phases that implement each behavior; the current tests
+app-managed long-lived runtime lifecycle, full model download/catalog/deletion flow, external or cloud provider test,
+Docker-backed coding sandbox, desktop integration for the official-pack UI, or production-data migration test. Those
+checks belong with the phases that implement each behavior; the current tests
 verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
 desktop UI integration.
 
@@ -53,5 +56,6 @@ the Arena view’s loading, bridge-error, malformed-document, empty, determinist
 failure/cancelled, attempt/progress, history-navigation, and browser no-write states; and the Runs view’s loading,
 bridge-error, empty, run selection, attempt loading/error/empty, summary, effective-configuration, artifact/hash,
 objective status/hash/count evidence, blind-review suppression of attempt evidence before lock, post-lock audit identity,
-bounded score/ranking controls, no AI/cross-run evaluation claims, and browser no-write states in both browser preview
+bounded score/ranking controls, official-pack metadata/document inspection, sandbox-unavailable copy, no AI/cross-run
+evaluation claims, and browser no-write states in both browser preview
 and the Windows/Linux desktop shell.

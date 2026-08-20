@@ -7,6 +7,8 @@ import {
   readLocalOllamaModels,
   readBenchmarkVersion,
   readBlindEvaluation,
+  readOfficialPack,
+  readOfficialPacks,
   readRunAttempts,
   readProfileRevisions,
   registerProfileRevision,
@@ -27,6 +29,8 @@ import {
   type BenchmarkDraftSummary,
   type BenchmarkVersion,
   type BenchmarkVersionSummary,
+  type OfficialPackDocument,
+  type OfficialPackSummary,
   type ModelInfo,
   type PersistedExecution,
   type ProfileRevision,
@@ -65,7 +69,12 @@ import {
   newDraftId,
   type DraftFormState,
 } from "./benchmark-authoring";
-import { benchmarkEmptyCopy, benchmarkPreviewCopy, classifyBenchmarkSurface } from "./benchmark-ui";
+import {
+  benchmarkEmptyCopy,
+  benchmarkPreviewCopy,
+  classifyBenchmarkSurface,
+  officialPacksPreviewCopy,
+} from "./benchmark-ui";
 import {
   EMPTY_PROFILE_FORM,
   modelEmptyCopy,
@@ -228,9 +237,9 @@ function Overview({ onOpenArena }: { onOpenArena: () => void }) {
           <p className="eyebrow">A quiet place for reproducible work</p>
           <h2>Compare models with evidence, not noise.</h2>
           <p>
-            Prompt Arena is a standalone local-first desktop workspace. Local persistence, immutable records, and a
-            bounded Arena one-shot flow are ready, as is a structured benchmark-draft editor. Broader run controls,
-            human/AI evaluation, official packs, and the model library arrive in later phases.
+            Prompt Arena is a standalone local-first desktop workspace. Local persistence, immutable records, a bounded
+            Arena one-shot flow, a structured benchmark-draft editor, and a read-only official-pack catalog are ready.
+            Broader run controls, human/AI evaluation, and the model library arrive in later phases.
           </p>
           <button className="primary-button" type="button" onClick={onOpenArena}>
             Open Arena
@@ -281,14 +290,21 @@ function MetricCard({ label, value, detail }: { label: string; value: string; de
 
 type BenchmarksState =
   | { status: "loading" }
-  | { status: "ready"; drafts: BenchmarkDraftSummary[]; versions: BenchmarkVersionSummary[] }
+  | { status: "ready"; drafts: BenchmarkDraftSummary[]; versions: BenchmarkVersionSummary[]; officialPacks: OfficialPackSummary[] }
   | { status: "error"; message: string }
   | { status: "preview" };
+
+type OfficialPackDetailState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; document: OfficialPackDocument }
+  | { status: "error"; message: string };
 
 type Feedback = { kind: "success" | "error" | "info"; message: string };
 
 function BenchmarksView() {
   const [state, setState] = useState<BenchmarksState>({ status: "loading" });
+  const [officialPackDetail, setOfficialPackDetail] = useState<OfficialPackDetailState>({ status: "idle" });
   const [form, setForm] = useState<DraftFormState>(EMPTY_DRAFT_FORM);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
@@ -301,8 +317,12 @@ function BenchmarksView() {
     }
     setState({ status: "loading" });
     try {
-      const [drafts, versions] = await Promise.all([readBenchmarkDrafts(), readBenchmarkVersions()]);
-      setState({ status: "ready", drafts, versions });
+      const [drafts, versions, officialPacks] = await Promise.all([
+        readBenchmarkDrafts(),
+        readBenchmarkVersions(),
+        readOfficialPacks(),
+      ]);
+      setState({ status: "ready", drafts, versions, officialPacks });
     } catch (error: unknown) {
       setState({
         status: "error",
@@ -443,6 +463,21 @@ function BenchmarksView() {
     }
   }
 
+  async function handleLoadOfficialPack(packId: string) {
+    if (!isDesktopEnvironment()) return;
+    setOfficialPackDetail({ status: "loading" });
+    try {
+      const document = await readOfficialPack(packId);
+      if (!document) throw new Error("The selected official pack is not in the bundled catalog.");
+      setOfficialPackDetail({ status: "ready", document });
+    } catch (error: unknown) {
+      setOfficialPackDetail({
+        status: "error",
+        message: error instanceof Error ? error.message : "The selected official pack could not be loaded.",
+      });
+    }
+  }
+
   function handleNewDraft() {
     setForm(EMPTY_DRAFT_FORM);
     setDirty(false);
@@ -463,7 +498,8 @@ function BenchmarksView() {
         <h2>Benchmarks</h2>
         <p>
           Author one bounded benchmark draft at a time, validate it against benchmark-v1, then explicitly publish an
-          immutable local version. No raw JSON editor, sample record, remote pack, or browser-side persistence is used.
+          immutable local version. Bundled official packs are separate read-only source records; they are inspected
+          without editing or persistence. No remote pack or browser-side persistence is used.
         </p>
       </section>
 
@@ -588,6 +624,79 @@ function BenchmarksView() {
           {!isDesktopEnvironment() && <p className="field-help">Desktop storage is required for saving, validation, and publishing. Browser preview never creates records.</p>}
         </section>
       </div>
+
+      <section className="panel official-packs-panel" aria-live="polite" aria-label="Official benchmark packs">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Phase C source records</p>
+            <h3>Official benchmark packs</h3>
+          </div>
+          <span className="run-status run-status-neutral">read-only</span>
+        </div>
+        {surface === "preview" && (
+          <StateMessage icon="◇" title="Browser preview" description={officialPacksPreviewCopy()} />
+        )}
+        {state.status === "loading" && (
+          <StateMessage icon="…" title="Loading official catalog" description="Validating bundled benchmark-v1 documents at the desktop boundary." />
+        )}
+        {state.status === "error" && (
+          <StateMessage icon="!" title="Official catalog unavailable" description={state.message} error />
+        )}
+        {state.status === "ready" && (
+          <div className="official-pack-layout">
+            <div className="official-pack-list">
+              <p className="field-help">These source records are bundled with the application. Selecting one only reads its validated canonical document.</p>
+              {state.officialPacks.map((pack) => (
+                <button
+                  className={`benchmark-record-row official-pack-row ${officialPackDetail.status === "ready" && officialPackDetail.document.summary.packId === pack.packId ? "is-selected" : ""}`}
+                  type="button"
+                  key={pack.packId}
+                  onClick={() => void handleLoadOfficialPack(pack.packId)}
+                >
+                  <span>
+                    <strong>{pack.packName}</strong>
+                    <small>{pack.versionId} · {pack.contentHash.slice(0, 12)}…</small>
+                    <small>{pack.execution.evaluationMode} · {pack.execution.sandboxStatus === "unavailable" ? "sandbox unavailable" : "sandbox not required"}</small>
+                  </span>
+                  <span aria-hidden="true">→</span>
+                </button>
+              ))}
+            </div>
+            <div className="official-pack-detail">
+              {officialPackDetail.status === "idle" && (
+                <StateMessage icon="◇" title="Inspect a bundled pack" description="Choose an official pack to read its metadata and canonical document." />
+              )}
+              {officialPackDetail.status === "loading" && (
+                <StateMessage icon="…" title="Loading pack document" description="Reading the validated bundled source record." />
+              )}
+              {officialPackDetail.status === "error" && (
+                <StateMessage icon="!" title="Pack document unavailable" description={officialPackDetail.message} error />
+              )}
+              {officialPackDetail.status === "ready" && (
+                <>
+                  <div className="official-pack-facts">
+                    <BoundaryRow label="Pack" value={officialPackDetail.document.summary.packName} />
+                    <BoundaryRow label="Benchmark" value={officialPackDetail.document.summary.benchmarkName} />
+                    <BoundaryRow label="Version" value={officialPackDetail.document.summary.versionId} />
+                    <BoundaryRow label="Content hash" value={officialPackDetail.document.summary.contentHash} />
+                    <BoundaryRow label="Canonical bytes" value={String(officialPackDetail.document.summary.documentBytes)} />
+                    <BoundaryRow label="Capability" value={`${officialPackDetail.document.summary.execution.capability} · ${officialPackDetail.document.summary.execution.status}`} />
+                    <BoundaryRow label="Sandbox" value={officialPackDetail.document.summary.execution.sandboxStatus} />
+                    <BoundaryRow label="Evaluation" value={officialPackDetail.document.summary.execution.evaluationMode} />
+                  </div>
+                  {officialPackDetail.document.summary.description && <p className="field-help">{officialPackDetail.document.summary.description}</p>}
+                  <p className="field-help">{officialPackDetail.document.summary.execution.requirement}</p>
+                  {officialPackDetail.document.summary.execution.notes && <p className="field-help">{officialPackDetail.document.summary.execution.notes}</p>}
+                  <div className="official-pack-document-block">
+                    <p className="eyebrow">Validated canonical document</p>
+                    <pre className="official-pack-document">{officialPackDetail.document.documentJson}</pre>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

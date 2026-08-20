@@ -126,6 +126,33 @@ export type BenchmarkVersion = {
   documentJson: string;
 };
 
+export type OfficialPackExecution = {
+  capability: "text_generation";
+  status: "available" | "unavailable";
+  requiresSandbox: boolean;
+  sandboxStatus: "not_required" | "unavailable";
+  evaluationMode: "objective" | "human_rubric" | "mixed";
+  requirement: string;
+  notes: string | null;
+};
+
+export type OfficialPackSummary = {
+  packId: string;
+  packName: string;
+  benchmarkId: string;
+  benchmarkName: string;
+  versionId: string;
+  description: string | null;
+  contentHash: string;
+  documentBytes: number;
+  execution: OfficialPackExecution;
+};
+
+export type OfficialPackDocument = {
+  summary: OfficialPackSummary;
+  documentJson: string;
+};
+
 export type BenchmarkDraftSummary = {
   draftId: string;
   benchmarkId: string;
@@ -349,6 +376,21 @@ export async function readBenchmarkVersions(): Promise<BenchmarkVersionSummary[]
   return invokeDesktop<BenchmarkVersionSummary[]>(
     "list_benchmark_versions",
     "The local benchmark versions could not be reached.",
+  );
+}
+
+export async function readOfficialPacks(): Promise<OfficialPackSummary[]> {
+  return invokeDesktop<OfficialPackSummary[]>(
+    "list_official_packs",
+    "The bundled official benchmark catalog could not be reached.",
+  );
+}
+
+export async function readOfficialPack(packId: string): Promise<OfficialPackDocument | null> {
+  return invokeDesktop<OfficialPackDocument | null>(
+    "get_official_pack",
+    "The selected official benchmark pack could not be reached.",
+    { packId },
   );
 }
 

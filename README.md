@@ -48,6 +48,12 @@ preparing or prepared. The user can submit bounded overall scores and an optiona
 immutable evaluation record stores anonymous presentation/audit mapping, scores, ranking, and timestamps, never response
 text. Browser preview remains no-write. This slice has no AI judging, multi-rater workflow, cross-run ranking, rubric
 authoring, or broader scoring/analysis.
+Phase 12 — DONE (bounded) — bundles three versioned official benchmark-v1 source documents under `packs/official`:
+programming/software-engineering, reasoning/math/knowledge, and writing/analysis/instruction-following. A read-only
+Rust catalog validates each included document, derives stable canonical content hashes, exposes typed list/get commands,
+and never writes SQLite or user records. The Benchmarks view lists and inspects pack metadata and canonical JSON only in
+desktop mode; browser preview performs no catalog reads or writes. Programming tasks are deliberately text-only because
+Docker-backed coding sandbox execution is not implemented; the pack metadata exposes that unavailable capability.
 
 ## Run locally
 
@@ -80,12 +86,18 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   `0003_benchmark_drafts.sql`, and `0004_blind_evaluations.sql` create SQLite metadata tables; large payloads remain
   immutable filesystem artifacts.
 - The registered Tauri commands remain typed, including published benchmark-version read, profile-revision
-  listing/registration, fixed-loopback Ollama model discovery, one-shot run execution, and Runs read commands.
+  listing/registration, fixed-loopback Ollama model discovery, read-only official-pack list/read, one-shot run execution,
+  and Runs read commands.
   `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
   shell or arbitrary arguments, and persists the returned terminal outcome in the app-owned store. Benchmark draft
   list/read/save/publish commands accept only typed local requests and use optimistic revision checks. Browser preview
   never reads or writes desktop records, executes a model, or invents run records. No account, cloud, or telemetry
   capability is enabled.
+- Bundled official packs are repository-owned source records under `packs/official`, loaded with Rust `include_str!`,
+  validated by the canonical benchmark-v1 validator, canonicalized for stable content hashes, and exposed through
+  read-only catalog commands. They are never copied into drafts, SQLite, Attempts, Results, or installed historical
+  records. The Benchmarks view renders validated canonical JSON as plain text; browser preview does not invoke catalog
+  commands.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
   document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
@@ -123,7 +135,8 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 - Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
   process. The narrow authoring editor writes only optional text expected answers; arbitrary JSON expectations remain
   outside this UI. External/cloud providers, credentials, downloads, run authoring, AI judging, multi-rater evaluation,
-  cross-run ranking, official packs, full model-library management, and broader runtime UI remain future work.
+  cross-run ranking, full model-library management, broader runtime UI, and Docker-backed coding sandbox execution remain
+  future work. The official programming pack records the sandbox as unavailable and must not be used to run unsafe code.
 - Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
   selectable local font stacks; proprietary fonts are not bundled.
 

@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "kind": "benchmark",
+  "pack": {
+    "packId": "official-writing-analysis-instruction",
+    "name": "Official Writing / Analysis / Instruction Following",
+    "description": "Small writing tasks reviewed against explicit human criteria rather than fabricated automatic scores.",
+    "categories": [
+      {
+        "categoryId": "writing",
+        "name": "Writing",
+        "children": [
+          {
+            "categoryId": "analysis",
+            "name": "Analysis",
+            "children": [
+              {
+                "categoryId": "instruction-following",
+                "name": "Instruction Following",
+                "children": [
+                  {
+                    "categoryId": "summarization",
+                    "name": "Summarization",
+                    "children": []
+                  },
+                  {
+                    "categoryId": "memos",
+                    "name": "Memos",
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "benchmark": {
+    "benchmarkId": "instruction-following",
+    "name": "Writing and Analysis Essentials",
+    "description": "Human-reviewed writing quality under explicit length, audience, evidence, and structure constraints."
+  },
+  "benchmarkVersion": {
+    "versionId": "instruction-following@1",
+    "versionNumber": 1,
+    "defaultRepetitions": 1,
+    "tasks": [
+      {
+        "taskId": "risk-summary",
+        "name": "Write a constrained risk summary",
+        "prompt": "Write for a busy non-specialist. Follow every length and audience instruction, distinguish facts from recommendations, and do not invent evidence.",
+        "cases": [
+          {
+            "caseId": "release-risk",
+            "prompt": "Summarize this situation in 80 words or fewer for a product manager: a release passed unit tests, but the staging database was half the production size and no rollback rehearsal was recorded. Include one factual risk and one practical next step.",
+            "expected": null,
+            "artifacts": []
+          }
+        ],
+        "rubricId": "human-writing-review",
+        "difficulty": 3
+      },
+      {
+        "taskId": "decision-memo",
+        "name": "Write a structured decision memo",
+        "prompt": "Produce a concise memo with the requested headings. Make tradeoffs explicit, keep recommendations proportional to the evidence, and avoid claiming work that was not performed.",
+        "cases": [
+          {
+            "caseId": "offline-first",
+            "prompt": "Write a memo with exactly these headings: Decision, Evidence, Risks, Next step. Recommend whether a small local-first desktop tool should add cloud sync in its first release when no threat model, account system, or backup design exists. Keep it under 180 words.",
+            "expected": null,
+            "artifacts": []
+          }
+        ],
+        "rubricId": "human-writing-review",
+        "difficulty": 4
+      }
+    ],
+    "rubrics": [
+      {
+        "rubricId": "human-writing-review",
+        "name": "Human writing review",
+        "criteria": [
+          {
+            "criterionId": "instruction-following",
+            "name": "Instruction following",
+            "description": "Meets requested audience, length, headings, and content constraints.",
+            "weight": 0.3
+          },
+          {
+            "criterionId": "clarity",
+            "name": "Clarity",
+            "description": "Communicates a coherent answer in direct, readable language.",
+            "weight": 0.25
+          },
+          {
+            "criterionId": "evidence-discipline",
+            "name": "Evidence discipline",
+            "description": "Separates known facts from recommendations and does not invent evidence.",
+            "weight": 0.25
+          },
+          {
+            "criterionId": "usefulness",
+            "name": "Practical usefulness",
+            "description": "Offers a proportionate next step or decision that a reader can act on.",
+            "weight": 0.2
+          }
+        ]
+      }
+    ]
+  },
+  "execution": {
+    "capability": "text_generation",
+    "status": "available",
+    "requiresSandbox": false,
+    "sandboxStatus": "not_required",
+    "evaluationMode": "human_rubric",
+    "requirement": "Text generation only; output quality is reviewed against the declared human rubric and no automatic writing score is implied.",
+    "notes": null
+  }
+}

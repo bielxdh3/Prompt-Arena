@@ -124,10 +124,25 @@ presentation/audit mapping, bounded 1–5 scores, optional token ranking, and ti
 Results, or artifacts. This remains a local single-user overall-score/ranking lock for one run, not AI judging,
 multi-rater review, cross-run ranking, rubric authoring, or broader scoring/analysis.
 
+## Phase 12 bounded official-pack catalog
+
+Three repository-owned benchmark-v1 documents live under `packs/official`: programming/software-engineering,
+reasoning/math/knowledge, and writing/analysis/instruction-following. The Rust catalog loads them with `include_str!`,
+passes each document through the existing serde/manual validator, canonicalizes the validated shape, and derives a stable
+SHA-256 content hash. Its typed list/get surface returns summaries, execution metadata, and a validated canonical document
+without opening storage or creating a benchmark version. Unknown metadata remains part of the canonical document contract;
+the catalog does not weaken schema, path, hash, or immutable-storage rules.
+
+The Benchmarks UI treats these records as read-only source material. Desktop mode can inspect pack identity, version,
+hash, capability/evaluation metadata, and canonical JSON rendered as plain text. Browser preview shows an explicit no-read
+state and invokes no catalog command. The programming pack is intentionally limited to static text reasoning and marks
+`sandboxStatus: unavailable`; Docker-backed code execution, filesystem access, and unsafe local execution remain outside
+this phase.
+
 ## Future boundaries
 
 Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human
-evaluation, AI judging, cross-run ranking, full model-library management/downloads/deletion, official benchmark packs,
+evaluation, AI judging, cross-run ranking, broader official-pack coverage, full model-library management/downloads/deletion,
 imports and broader benchmark-authoring flows, external/cloud provider adapters, interruption recovery, and any
 long-lived worker/runtime lifecycle remain later phases. They must keep provenance, effective configuration, error
 taxonomy, and historical records explicit rather than smuggling behavior into the current command or worker boundary.
