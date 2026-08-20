@@ -3,10 +3,11 @@
 ## Foundation verdict
 
 The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
-typed status, benchmark/profile persistence, one-shot execution, and Runs read operations; they operate only on typed
-data and the app-owned local storage root. The capability file contains no plugin permissions. The worker accepts a
-tagged protocol, validates its version, job ID, and request bound, performs one generation at most, returns one typed
-terminal response, and exits.
+typed status, benchmark/profile/draft persistence, one-shot execution, and Runs read operations; they operate only on
+typed data and the app-owned local storage root. Draft saves use bounded requests and optimistic revisions; publishing
+revalidates the stored document before creating an immutable benchmark version. The capability file contains no plugin
+permissions. The worker accepts a tagged protocol, validates its version, job ID, and request bound, performs one
+generation at most, returns one typed terminal response, and exits.
 
 The CSP allows the local Vite development origin and Tauri IPC only. It does not allow arbitrary scripts, inline styles,
 or external font loading in the production document. Font choices use local system stacks.
@@ -23,6 +24,12 @@ spawn or forcibly terminate that service.
 - The execution command resolves only the fixed worker binary beside the current app executable, supplies no shell or
   arbitrary command arguments, and bounds both request and response bytes.
 - Benchmark documents are deserialized and manually validated at the domain boundary; unknown JSON fields are retained.
+- Benchmark drafts are canonicalized before local storage and enforce portable IDs, a 256-byte title limit, a 256 KiB
+  document limit, a 512 KiB request limit, and revision checks. Draft state is mutable; published benchmark versions
+  remain immutable and conflicting content is rejected.
+- The structured editor emits only bounded optional text expected answers. It rejects non-text expected values when
+  loading a draft rather than silently converting them, and it rejects unsupported multi-item shapes before an edit can
+  rewrite data.
 - Artifact references and write requests are validated as portable relative paths and cannot use traversal, absolute
   roots, drive prefixes, empty segments, symlinks, or backslashes.
 - Local metadata is capped at 1 MiB. Artifact bytes are hashed, written atomically, and never replace an existing name;
@@ -34,13 +41,15 @@ spawn or forcibly terminate that service.
   timeout.
 - Cancellation is cooperative: the client checks the token between socket reads and streamed chunks and returns a typed
   cancellation error. It has no remote process-kill capability.
-- Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
+- Browser preview is a no-write surface: it renders unsaved editor state only and cannot invoke draft/version commands or
+  benchmark validation. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
 
 ## Required future controls
 
 External/cloud provider credentials, downloads, long-lived runtime process lifecycle, run authoring/model execution UI,
-evaluation, and destructive cleanup are not implemented here. When added, they require explicit capability review,
-allowlisted executable paths, bounded arguments, safe archive extraction, credential isolation, cancellation, and
-confirmation for user data deletion. Historical benchmark records must not be deleted as a migration side effect.
+evaluation, official benchmark packs, model-library management, broader benchmark authoring/import flows, and destructive
+cleanup are not implemented here. When added, they require explicit capability review, allowlisted executable paths,
+bounded arguments, safe archive extraction, credential isolation, cancellation, and confirmation for user data deletion.
+Historical benchmark records must not be deleted as a migration side effect.
 
 No secrets, tokens, private logs, or databases belong in source control or validation output.

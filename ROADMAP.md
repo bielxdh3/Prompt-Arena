@@ -36,7 +36,8 @@ consume those contracts without deleting or rewriting history.
 - `DONE` — Immutable profile-revision registration, bounded one-shot orchestration through the app-owned worker, and
   terminal run/attempt/result persistence with replay-safe evidence.
 - `DONE` — Typed Runs read commands and a truthful local Runs view; browser preview does not execute models.
-- `PLANNED` — Benchmark Draft and authoring UI.
+- `DONE` — Phase 05 bounded benchmark drafts and structured authoring: editable SQLite drafts, optimistic revision
+  checks, typed desktop list/read/save/validate/publish commands, and immutable benchmark-version publication.
 
 ### Phase 03 — Runtime/Ollama adapter slice — DONE (bounded)
 
@@ -61,18 +62,27 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - Runs, attempts, and profile revisions have typed local read/registration commands. The UI exposes only the local Runs
   read surface; run authoring, evaluation, interruption recovery, and full execution controls remain planned.
 
+### Phase 05 — Benchmark authoring slice — DONE (bounded)
+
+- A migration-backed `benchmark_drafts` table stores editable draft state separately from immutable
+  `benchmark_versions`; draft IDs, benchmark IDs, titles, documents, and requests are bounded.
+- The desktop boundary exposes typed draft list/read/save/publish commands plus benchmark-v1 validation. Saves use
+  optimistic revision checks; publishing validates the complete document and preserves immutable version history.
+- The structured editor writes one narrow benchmark shape and optional text expected answers. It does not expose raw
+  JSON expectations, imports, cloning, multi-item authoring, or browser persistence; browser preview shows unsaved
+  editor state only.
+
 ### Remaining Phase B work
 
 - `PLANNED` — Run authoring/controls, interruption recovery, and evaluation.
 - Model/profile registration and immutable profile revisions.
-- Benchmark Draft + immutable Benchmark Version.
 - Arena builder.
 - Metrics and effective configuration snapshots.
 - Objective verification.
 - Blind human evaluation.
 - Results and history.
 
-## Phase C — Official Benchmark Packs
+## Phase C — Official Benchmark Packs — PLANNED
 
 - Programming / Software Engineering.
 - Reasoning / Math / Knowledge.
@@ -82,7 +92,7 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - Procedural cases and materialized seeds/cases.
 - Docker-backed coding sandbox where required.
 
-## Phase D — Model Library
+## Phase D — Model Library — PLANNED
 
 - Runtime/model auto-discovery.
 - Unified search across supported sources.

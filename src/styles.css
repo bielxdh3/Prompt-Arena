@@ -693,6 +693,198 @@ h3 {
   text-align: right;
 }
 
+.benchmark-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.5fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.benchmark-records,
+.benchmark-editor {
+  min-width: 0;
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.benchmark-records .compact-heading {
+  margin-bottom: 22px;
+}
+
+.record-list-label {
+  margin-bottom: 10px;
+}
+
+.benchmark-record-list + .benchmark-record-list {
+  margin-top: 28px;
+}
+
+.benchmark-record-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 0;
+  color: var(--color-text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+button.benchmark-record-row:hover {
+  color: var(--color-accent-strong);
+}
+
+.benchmark-record-row strong,
+.benchmark-record-row small {
+  display: block;
+}
+
+.benchmark-record-row strong {
+  font-size: 15px;
+}
+
+.benchmark-record-row small {
+  margin-top: 4px;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+}
+
+.version-row {
+  cursor: default;
+}
+
+.version-row .run-status {
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.new-draft-button {
+  margin-top: 18px;
+}
+
+.form-feedback {
+  margin: -8px 0 22px;
+  padding: 11px 13px;
+  font-size: 13px;
+  line-height: 1.45;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.form-feedback-success {
+  color: var(--color-success);
+  background: rgb(64 101 70 / 0.2);
+  border-color: rgb(154 198 164 / 0.35);
+}
+
+.form-feedback-error {
+  color: var(--color-danger);
+  background: rgb(102 51 47 / 0.19);
+  border-color: rgb(224 160 154 / 0.34);
+}
+
+.form-feedback-info {
+  color: var(--color-text-muted);
+  background: rgb(214 184 138 / 0.07);
+}
+
+.form-section {
+  min-width: 0;
+  margin: 0 0 19px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.form-section legend {
+  padding: 0 8px;
+  color: var(--color-accent-strong);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.form-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.form-control {
+  display: block;
+  min-width: 0;
+}
+
+.form-control .field-label {
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+
+.form-control input,
+.form-control textarea {
+  width: 100%;
+  padding: 10px 11px;
+  color: var(--color-text);
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.form-control textarea {
+  min-height: 78px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.form-control input:focus,
+.form-control textarea:focus {
+  outline: 3px solid rgb(214 184 138 / 0.35);
+  outline-offset: 1px;
+  border-color: var(--color-accent);
+}
+
+.form-span-three {
+  grid-column: 1 / -1;
+}
+
+.form-note {
+  align-self: end;
+  padding-bottom: 10px;
+}
+
+.editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 45px;
+  padding: 10px 14px;
+  color: var(--color-text);
+  font-weight: 700;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 13px;
+}
+
+.secondary-button:hover:not(:disabled) {
+  color: var(--color-accent-strong);
+  border-color: var(--color-accent);
+}
+
+.publish-button {
+  color: var(--color-accent-strong);
+}
+
 @keyframes pulse {
   50% {
     opacity: 0.35;
@@ -734,6 +926,10 @@ h3 {
   .topbar {
     padding-top: 24px;
   }
+
+  .benchmark-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 680px) {
@@ -762,6 +958,25 @@ h3 {
 
   .metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .form-grid,
+  .form-grid-three {
+    grid-template-columns: 1fr;
+  }
+
+  .form-span-three {
+    grid-column: auto;
+  }
+
+  .editor-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .editor-actions button {
+    justify-content: center;
+    width: 100%;
   }
 }
 

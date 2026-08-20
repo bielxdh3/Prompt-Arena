@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::{
@@ -20,7 +20,10 @@ use crate::{
         WorkerErrorCode, WorkerOutcome, WorkerRequest, WorkerResponse, WorkerResult,
         MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, WORKER_PROTOCOL_VERSION,
     },
-    storage::{now_marker, BenchmarkVersionSummary, StorageError, StorageService},
+    storage::{
+        now_marker, BenchmarkDraft, BenchmarkDraftInput, BenchmarkDraftSummary,
+        BenchmarkVersionSummary, StorageError, StorageService, MAX_DRAFT_REQUEST_BYTES,
+    },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
 
@@ -77,6 +80,12 @@ impl From<StorageError> for CommandError {
             | StorageError::InvalidArtifactReference => "artifact_path_invalid",
             StorageError::InvalidRecordId => "record_id_invalid",
             StorageError::MetadataTooLarge => "metadata_too_large",
+            StorageError::DraftRequestTooLarge => "draft_request_too_large",
+            StorageError::InvalidDraftMetadata => "draft_metadata_invalid",
+            StorageError::InvalidDraftDocument => "draft_invalid",
+            StorageError::DraftNotFound => "draft_not_found",
+            StorageError::DraftRevisionConflict => "draft_revision_conflict",
+            StorageError::BenchmarkInvalid(_) => "benchmark_invalid",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
@@ -127,6 +136,68 @@ pub fn save_benchmark_version(
 ) -> Result<SavedBenchmarkVersion, CommandError> {
     let validated = validate_document(&document)?;
     let summary = storage_for(&app)?.save_benchmark_version(&validated, &now_marker())?;
+    Ok(SavedBenchmarkVersion { summary })
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveBenchmarkDraftRequest {
+    pub draft_id: String,
+    pub benchmark_id: String,
+    pub title: String,
+    pub document_json: String,
+    pub expected_revision: u32,
+}
+
+#[tauri::command]
+pub fn list_benchmark_drafts(app: AppHandle) -> Result<Vec<BenchmarkDraftSummary>, CommandError> {
+    storage_for(&app)?
+        .list_benchmark_drafts()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_benchmark_draft(
+    app: AppHandle,
+    draft_id: String,
+) -> Result<Option<BenchmarkDraft>, CommandError> {
+    storage_for(&app)?
+        .get_benchmark_draft(&draft_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn save_benchmark_draft(
+    app: AppHandle,
+    request: SaveBenchmarkDraftRequest,
+) -> Result<BenchmarkDraft, CommandError> {
+    let request_bytes = serde_json::to_vec(&request).map_err(|_| CommandError {
+        code: "draft_request_too_large",
+        message: "the benchmark draft request could not be encoded".to_owned(),
+    })?;
+    if request_bytes.len() > MAX_DRAFT_REQUEST_BYTES {
+        return Err(CommandError {
+            code: "draft_request_too_large",
+            message: "the benchmark draft request exceeds the size limit".to_owned(),
+        });
+    }
+    let input = BenchmarkDraftInput {
+        draft_id: request.draft_id,
+        benchmark_id: request.benchmark_id,
+        title: request.title,
+        document_json: request.document_json,
+    };
+    storage_for(&app)?
+        .save_benchmark_draft(&input, request.expected_revision, &now_marker())
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn publish_benchmark_draft(
+    app: AppHandle,
+    draft_id: String,
+) -> Result<SavedBenchmarkVersion, CommandError> {
+    let summary = storage_for(&app)?.publish_benchmark_draft(&draft_id, &now_marker())?;
     Ok(SavedBenchmarkVersion { summary })
 }
 
