@@ -7,8 +7,9 @@ Phase 01 established the accessible shell, semantic design tokens, typed desktop
 and storage contracts. Phase 02 adds the benchmark-v1 domain validator, local SQLite metadata migrations, immutable
 artifact writes, and narrow commands for validating, saving, and listing benchmark versions. Phase 03 adds a generic
 normalized runtime contract and a backend-only Ollama adapter for loopback health, model listing/metadata, generation,
-and NDJSON streaming. It does not add run orchestration, model execution UI, downloads, cloud services, accounts, or
-telemetry.
+and NDJSON streaming. Phase 04 adds bounded one-shot orchestration through the app-owned worker, immutable terminal
+evidence persistence/replay, and a local Runs read surface. It does not add run authoring controls, downloads, cloud
+services, accounts, or telemetry.
 
 ## Run locally
 
@@ -39,9 +40,10 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 
 - Local data belongs to the app-owned storage root. Migrations `0001_foundation.sql` and `0002_core_arena.sql` create
   SQLite metadata tables; large payloads remain immutable filesystem artifacts.
-- The registered Tauri commands remain typed `app_status`, `validate_benchmark_document`, `list_benchmark_versions`,
-  and `save_benchmark_version`; the runtime modules are not wired into a run-orchestration or model UI command. No
-  shell, account, cloud, or telemetry capability is enabled.
+- The registered Tauri commands remain typed, including profile registration, run execution, and Runs read commands.
+  `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
+  shell or arbitrary arguments, and persists the returned terminal outcome in the app-owned store. Browser preview
+  never executes a model or invents run records. No account, cloud, or telemetry capability is enabled.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.
@@ -51,7 +53,7 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   standard-library HTTP client against an explicit `http://` loopback endpoint; it rejects credentials, query strings,
   fragments, and non-loopback hosts. It has 64 KiB line, 16 MiB non-stream body, and 16 MiB cumulative stream limits.
 - Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
-  process. External/cloud providers, credentials, downloads, run orchestration, and runtime/UI integration remain
+  process. External/cloud providers, credentials, downloads, run authoring, evaluation, and full runtime UI remain
   future work.
 - Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
   selectable local font stacks; proprietary fonts are not bundled.

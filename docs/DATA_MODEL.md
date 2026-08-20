@@ -1,7 +1,7 @@
 # Data model
 
 Phase 01 established storage vocabulary and contracts. Phase 02 adds local metadata persistence and immutable artifact
-writes without adding providers or runtime execution.
+writes. Phase 04 adds one-shot orchestration evidence while keeping the store local-first and append-only.
 
 ## Foundation records
 
@@ -47,3 +47,12 @@ a runtime schema engine in this phase.
 - **Runtime Binding** — the provider/runtime identity and capability snapshot used by an attempt.
 
 Historical semantic records must be append-only. A changed benchmark is a new version, not an in-place rewrite.
+
+## Bounded execution evidence
+
+`RunPlan` binds one benchmark version, case, immutable profile revision, generation request, and loopback-only Ollama
+configuration. The desktop execution command sends that plan to a fixed-name one-shot worker. The worker returns one
+typed terminal outcome and exits; the app, not the worker, owns SQLite and filesystem persistence. Completed outcomes can
+be replayed idempotently, while conflicting run, attempt, result, artifact, path, kind, schema, or hash metadata is
+rejected. Run listings and attempt reads are local, deterministically ordered, and reject empty/path-like IDs. Browser
+preview reads no app store and never executes a model.
