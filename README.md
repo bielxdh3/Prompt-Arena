@@ -67,6 +67,10 @@ Phase 15 — DONE (bounded) — replaces the font-only Settings control with a l
 system-font stacks, bounded font scale, allowlisted accents, compact/rounded corners, dark-neutral/warm/paper surfaces,
 reduced motion, restore defaults, and a truthful live preview are available. Only sanitized preferences persist in the
 Tauri desktop webview; browser preview changes are temporary and never write localStorage or desktop records.
+Phase 16 — DONE (bounded foundation) — adds a read-only catalog for generic OpenAI-compatible, OpenAI, Anthropic, and
+Gemini provider identities plus pure dated-price cost and budget helpers. Every external provider remains unconfigured,
+network-not-wired, identity-unverified, and non-executable; no API keys, environment reads, network calls, telemetry, or
+provider persistence are added. Local Ollama remains the only executable runtime.
 
 ## Run locally
 
@@ -118,6 +122,10 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   against fixed allowlists/bounds before CSS data attributes or local Tauri webview storage receive them. Browser preview
   has no appearance persistence and creates no desktop record; there is no theme import, export, account, cloud sync, or
   external font loading.
+- The Phase 16 provider layer is architecture-only: its fixed catalog records capability/transport status, credential
+  source state, identity confidence, and dated price-table shape. Pure cost estimates fail closed on missing/invalid
+  prices, budget decisions can allow/confirm/deny, and sanitization discards unknown credential-like fields. No provider
+  adapter, API-key input, secure storage, outbound request, cost history, or external execution exists.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
   document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and

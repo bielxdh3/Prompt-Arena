@@ -207,6 +207,19 @@ reduced-motion flag, then returns defaults for malformed or unsupported values. 
 in Tauri webview storage; browser preview keeps it in memory for a truthful live preview and never reads or writes
 localStorage. Theme history, import/export, sync, telemetry, and user-generated CSS are not part of this data model.
 
+## Phase 16 provider and cost foundation state
+
+Provider catalog entries are static architecture metadata, not credentials, provider sessions, network configuration, or
+execution records. Each entry declares capability/transport status, credential source state, and identity confidence for
+the four planned external identities. A `PriceTableSnapshot` is a dated, bounded USD price shape; it is not persisted or
+claimed to be current in this phase.
+
+Cost estimates are ephemeral pure results over bounded token usage and one price snapshot. Missing/invalid prices return
+an unavailable result. Budget helpers return explicit allow/confirm/deny decisions against a ceiling and confirmation
+threshold; they do not start work, reserve funds, or record history. Sanitized provider selection retains no unknown or
+credential-like fields. Actual adapters, secure storage, network consent, usage/cost history, and external run records
+remain future data-model work.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.
