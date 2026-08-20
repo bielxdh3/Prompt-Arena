@@ -31,6 +31,7 @@ import {
   formatByteCount,
   formatCount,
   formatDurationNs,
+  objectiveVerificationEvidence,
 } from "./results-ui";
 import {
   arenaEmptyCopy,
@@ -219,7 +220,7 @@ function Overview({ onOpenArena }: { onOpenArena: () => void }) {
           <p>
             Prompt Arena is a standalone local-first desktop workspace. Local persistence, immutable records, and a
             bounded Arena one-shot flow are ready, as is a structured benchmark-draft editor. Broader run controls,
-            evaluation, official packs, and the model library arrive in later phases.
+            human/AI evaluation, official packs, and the model library arrive in later phases.
           </p>
           <button className="primary-button" type="button" onClick={onOpenArena}>
             Open Arena
@@ -1483,6 +1484,7 @@ function RunsView() {
 
 function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
   const summary = attempt.responseSummary;
+  const objectiveScore = objectiveVerificationEvidence(attempt.result?.score);
   const tone = attemptStatusTone(attempt.status);
   const artifacts = attempt.artifacts.length > 0
     ? attempt.artifacts
@@ -1535,6 +1537,28 @@ function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
       </div>
 
       <div className="results-section">
+        <p className="eyebrow">Objective verification</p>
+        {objectiveScore ? (
+          <div className="results-facts">
+            <div className="boundary-row">
+              <span>Status</span>
+              <strong className={objectiveScore.passed ? "objective-status-pass" : "objective-status-fail"}>
+                {objectiveScore.passed ? "Pass" : "Fail"}
+              </strong>
+            </div>
+            <BoundaryRow label="Verifier" value={objectiveScore.verifierKind === "exact_text" ? "Exact text" : objectiveScore.verifierKind} />
+            <BoundaryRow label="Expected normalized size" value={formatByteCount(objectiveScore.expectedNormalizedByteCount)} />
+            <BoundaryRow label="Actual normalized size" value={formatByteCount(objectiveScore.actualNormalizedByteCount)} />
+            <BoundaryRow label="Expected SHA-256" value={objectiveScore.expectedSha256} />
+            <BoundaryRow label="Actual SHA-256" value={objectiveScore.actualSha256} />
+          </div>
+        ) : (
+          <p className="field-help">No objective exact-text evidence was persisted for this result.</p>
+        )}
+        <p className="field-help">This is deterministic hash/count evidence only; human/AI evaluation and rankings are outside this slice.</p>
+      </div>
+
+      <div className="results-section">
         <p className="eyebrow">Effective configuration boundary</p>
         <div className="results-facts">
           <BoundaryRow label="Provider" value={effectiveConfigText(attempt.effectiveConfig, "provider")} />
@@ -1560,7 +1584,7 @@ function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
             ))}
           </ul>
         )}
-        <p className="field-help">Scoring and evaluation are outside this evidence slice.</p>
+        <p className="field-help">The response payload remains in the immutable artifact and is not rendered here.</p>
       </div>
     </article>
   );

@@ -1862,6 +1862,14 @@ mod tests {
             score: None,
             extra: BTreeMap::new(),
         };
+        let mut future_result_json = serde_json::to_value(&result).unwrap();
+        future_result_json["score"] = json!({"kind": "future_human", "rating": 4});
+        let decoded_future_result: ImmutableResultReference =
+            serde_json::from_value(future_result_json).unwrap();
+        assert_eq!(
+            decoded_future_result.score,
+            Some(json!({"kind": "future_human", "rating": 4}))
+        );
         assert_eq!(
             service
                 .save_result_reference(&result, "attempt-1", "100")

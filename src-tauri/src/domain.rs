@@ -172,6 +172,23 @@ pub struct ImmutableResultReference {
     pub extra: ExtraFields,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectiveVerifierKind {
+    ExactText,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectiveVerificationEvidence {
+    pub passed: bool,
+    pub verifier_kind: ObjectiveVerifierKind,
+    pub expected_normalized_byte_count: u64,
+    pub actual_normalized_byte_count: u64,
+    pub expected_sha256: String,
+    pub actual_sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactRef {
