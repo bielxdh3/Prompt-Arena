@@ -150,15 +150,26 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
 - `PLANNED` — AI judging, cross-run rankings, broader scoring/analysis, and results analysis.
 
-## Phase C — Official Benchmark Packs — PLANNED
+## Phase C — Official Benchmark Packs — IN PROGRESS
 
-- Programming / Software Engineering.
-- Reasoning / Math / Knowledge.
-- Writing / Analysis / Instruction Following.
-- Arbitrary nested categories.
-- Difficulty 1–5.
-- Procedural cases and materialized seeds/cases.
-- Docker-backed coding sandbox where required.
+### Phase 12 — Bundled official-pack catalog — DONE (bounded)
+
+- Three checked-in benchmark-v1 documents are bundled under `packs/official`: programming/software-engineering,
+  reasoning/math/knowledge, and writing/analysis/instruction-following. Each has a stable benchmark version ID,
+  nested category structure, bounded difficulty/repetition metadata, and either deterministic expected answers or an
+  explicit human-review rubric.
+- A Rust `include_str!` catalog validates every source with the existing canonical validator, returns deterministic
+  summaries/content hashes, and provides read-only full-document lookup. Tauri and TypeScript bridge methods expose
+  list/get only; no draft, SQLite, artifact, Attempt, Result, or historical version is mutated.
+- The Benchmarks view lists and inspects pack metadata and validated canonical JSON in desktop mode. Browser preview
+  remains no-write and does not invoke catalog commands. Execution metadata is explicit: the programming pack is
+  text-only and marks Docker-backed sandbox capability unavailable; it does not silently execute code.
+
+### Future Phase C work
+
+- Broader programming, reasoning, knowledge, writing, and analysis coverage beyond the three bounded source documents.
+- Larger official packs with procedural cases, materialized seeds/cases, and expanded rubric/version governance.
+- Docker-backed coding sandbox where required; no implementation is claimed by Phase 12.
 
 ## Phase D — Model Library — PLANNED
 

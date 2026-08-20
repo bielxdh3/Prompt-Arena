@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "kind": "benchmark",
+  "pack": {
+    "packId": "official-reasoning-math-knowledge",
+    "name": "Official Reasoning / Math / Knowledge",
+    "description": "Compact quantitative and factual reasoning tasks with bounded deterministic answer checks.",
+    "categories": [
+      {
+        "categoryId": "reasoning",
+        "name": "Reasoning",
+        "children": [
+          {
+            "categoryId": "math",
+            "name": "Math",
+            "children": [
+              {
+                "categoryId": "knowledge",
+                "name": "Knowledge",
+                "children": []
+              },
+              {
+                "categoryId": "quantitative",
+                "name": "Quantitative Reasoning",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "benchmark": {
+    "benchmarkId": "math-knowledge",
+    "name": "Math and Knowledge Essentials",
+    "description": "Short questions whose intended answer can be compared with deterministic normalized text."
+  },
+  "benchmarkVersion": {
+    "versionId": "math-knowledge@1",
+    "versionNumber": 1,
+    "defaultRepetitions": 2,
+    "tasks": [
+      {
+        "taskId": "weighted-average",
+        "name": "Compute a weighted average",
+        "prompt": "Solve the quantitative problem carefully and return the requested final value. Keep the final answer unambiguous.",
+        "cases": [
+          {
+            "caseId": "three-scores",
+            "prompt": "A result has scores 10, 20, and 30 with weights 1, 2, and 1. What is the weighted average? Return only the number.",
+            "expected": "20",
+            "artifacts": []
+          }
+        ],
+        "rubricId": "exact-quantitative-answer",
+        "difficulty": 2
+      },
+      {
+        "taskId": "fact-check-claim",
+        "name": "Check a factual claim",
+        "prompt": "Assess the claim using stable general knowledge. State the result and the shortest sufficient correction.",
+        "cases": [
+          {
+            "caseId": "planet-count",
+            "prompt": "Is the statement `Earth is the only planet in the Solar System with a natural satellite` correct? Return `False: several planets have natural satellites.` if it is not.",
+            "expected": "False: several planets have natural satellites.",
+            "artifacts": []
+          }
+        ],
+        "rubricId": "exact-knowledge-answer",
+        "difficulty": 3
+      }
+    ],
+    "rubrics": [
+      {
+        "rubricId": "exact-quantitative-answer",
+        "name": "Exact quantitative answer",
+        "criteria": [
+          {
+            "criterionId": "numeric-correctness",
+            "name": "Numeric correctness",
+            "description": "Produces the exact requested normalized value.",
+            "weight": 0.8
+          },
+          {
+            "criterionId": "format-discipline",
+            "name": "Format discipline",
+            "description": "Keeps the final answer unambiguous and free of irrelevant alternatives.",
+            "weight": 0.2
+          }
+        ]
+      },
+      {
+        "rubricId": "exact-knowledge-answer",
+        "name": "Exact knowledge answer",
+        "criteria": [
+          {
+            "criterionId": "fact-correctness",
+            "name": "Fact correctness",
+            "description": "Correctly accepts or rejects the stated claim.",
+            "weight": 0.8
+          },
+          {
+            "criterionId": "correction-quality",
+            "name": "Correction quality",
+            "description": "Gives the concise correction required by the case.",
+            "weight": 0.2
+          }
+        ]
+      }
+    ]
+  },
+  "execution": {
+    "capability": "text_generation",
+    "status": "available",
+    "requiresSandbox": false,
+    "sandboxStatus": "not_required",
+    "evaluationMode": "objective",
+    "requirement": "Text generation only; string expectations use deterministic line-ending and surrounding-whitespace normalization.",
+    "notes": null
+  }
+}

@@ -924,6 +924,72 @@ button.benchmark-record-row:hover {
   border-color: var(--color-border);
 }
 
+.official-packs-panel {
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.official-pack-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.5fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.official-pack-list,
+.official-pack-detail {
+  min-width: 0;
+}
+
+.official-pack-list {
+  display: grid;
+  gap: 10px;
+}
+
+.official-pack-list .field-help {
+  margin: 0 0 8px;
+}
+
+.official-pack-row {
+  border-top: 1px solid var(--color-border);
+}
+
+button.official-pack-row:hover,
+.official-pack-row.is-selected {
+  color: var(--color-accent-strong);
+  background: var(--color-surface-muted);
+}
+
+.official-pack-detail {
+  display: grid;
+  gap: 18px;
+  padding-left: 22px;
+  border-left: 1px solid var(--color-border);
+}
+
+.official-pack-facts {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.official-pack-document-block {
+  display: grid;
+  gap: 10px;
+}
+
+.official-pack-document {
+  max-height: 460px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
 .arena-state-panel,
 .arena-empty-grid,
 .arena-selection-panel,
@@ -1287,6 +1353,17 @@ button.benchmark-record-row:hover {
 
   .benchmark-layout {
     grid-template-columns: 1fr;
+  }
+
+  .official-pack-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .official-pack-detail {
+    padding-top: 26px;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
   }
 
   .models-layout {

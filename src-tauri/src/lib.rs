@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod domain;
 pub mod evaluation;
+pub mod official_packs;
 pub mod ollama;
 pub mod orchestration;
 pub mod protocol;
@@ -16,6 +17,8 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::validate_benchmark_document,
+            commands::list_official_packs,
+            commands::get_official_pack,
             commands::list_benchmark_versions,
             commands::get_benchmark_version,
             commands::save_benchmark_version,

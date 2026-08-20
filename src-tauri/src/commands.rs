@@ -19,6 +19,11 @@ use crate::{
         lock_blind_evaluation as lock_blind_evaluation_record,
         prepare_blind_evaluation as prepare_blind_evaluation_record, BlindEvaluationError,
     },
+    official_packs::{
+        get_official_pack as get_official_pack_record,
+        list_official_packs as list_official_pack_records, OfficialPackDocument, OfficialPackError,
+        OfficialPackSummary,
+    },
     ollama::OllamaProvider,
     orchestration::{
         persist_terminal_outcome, OrchestrationError, PersistedExecution, RunPlan, TerminalOutcome,
@@ -162,12 +167,31 @@ impl From<BlindEvaluationError> for CommandError {
     }
 }
 
+impl From<OfficialPackError> for CommandError {
+    fn from(error: OfficialPackError) -> Self {
+        Self {
+            code: "official_pack_invalid",
+            message: error.to_string(),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn validate_benchmark_document(
     document: String,
 ) -> Result<BenchmarkValidationSummary, CommandError> {
     let validated = validate_document(&document)?;
     Ok(validation_summary(&validated))
+}
+
+#[tauri::command]
+pub fn list_official_packs() -> Result<Vec<OfficialPackSummary>, CommandError> {
+    list_official_pack_records().map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_official_pack(pack_id: String) -> Result<Option<OfficialPackDocument>, CommandError> {
+    get_official_pack_record(&pack_id).map_err(Into::into)
 }
 
 #[tauri::command]
