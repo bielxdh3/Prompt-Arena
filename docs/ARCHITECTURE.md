@@ -167,6 +167,17 @@ not render model/profile/provider/metrics/objective evidence or attempt IDs whil
 browser preview reads no runs or attempts. Cross-run ranking, regression, tournaments, AI judging, calibration, cost
 analysis, and persistent comparability records remain future work.
 
+## Phase 15 bounded local appearance preferences
+
+Settings owns a pure, sanitized appearance state for the existing seven local font stacks, bounded font scale, three fixed
+accent IDs, two radius presets, three surface presets, and reduced motion. The app root exposes only normalized data
+attributes; CSS maps those attributes to fixed local tokens, so user input never becomes an arbitrary CSS value. The live
+preview is presentation-only and creates no benchmark, run, or evaluation record.
+
+When Tauri is present, the UI reads and writes one versioned local webview-storage value containing only normalized
+appearance preferences. Browser preview does not access localStorage, writes nothing, and says so explicitly. There is no
+theme import/export, account or cloud sync, external font loading, telemetry, or macOS support in this slice.
+
 ## Future boundaries
 
 Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human
