@@ -1,0 +1,19 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.env
+.env.*
+!.env.example
+*.local
+
+# Local application data and generated artifacts
+*.db
+*.db-shm
+*.db-wal
+artifacts/
+
+# Editor and operating-system noise
+.DS_Store
+.idea/
+.vscode/
