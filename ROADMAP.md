@@ -12,18 +12,21 @@ This roadmap is the current implementation baseline for Prompt Arena. The author
 - Prompt Arena remains standalone and is not coupled to BielOS or any other hub/project.
 - Benchmark history, benchmark versions, run evidence, and result provenance must be explicit and auditable.
 
-## Phase A — Foundation
+## Phase A — Foundation — DONE (bounded contract foundation)
 
-- Tauri 2 + React + TypeScript + Rust workspace.
-- Dedicated app-owned local worker process.
-- Windows/Linux CI.
-- SQLite migrations + filesystem artifact store.
-- Semantic design tokens.
-- Polished gray, strongly rounded UI foundation.
-- Times New Roman default intent with safe Linux fallback.
-- At least six selectable fonts.
-- Theme configuration foundation.
-- Core architecture/security/development documentation.
+- `DONE` — Tauri 2 + React + TypeScript + Rust workspace with a narrow typed `app_status` command.
+- `DONE` — App-owned one-shot worker protocol and executable skeleton; no daemon lifecycle yet.
+- `DONE` — Windows/Linux-only CI definition.
+- `DONE` — Versioned SQLite foundation migration and path-safe filesystem artifact-store contract; execution/I/O is
+  intentionally deferred until the storage phase.
+- `DONE` — Semantic dark-neutral-gray tokens, strongly rounded shell, keyboard focus states, reduced-motion handling,
+  and truthful loading/error/empty UI states.
+- `DONE` — Times New Roman default intent with explicit Linux fallbacks and seven selectable local font stacks.
+- `DONE` — Foundation theme configuration hook and concise architecture, development, security, privacy, data-model,
+  testing, and design-system documentation.
+
+The foundation does not claim live benchmark persistence, worker spawning from the app, model execution, or historical
+data. Those are later-phase behaviors and must consume these contracts without deleting or rewriting history.
 
 ## Phase B — Core Arena
 
