@@ -54,6 +54,11 @@ Rust catalog validates each included document, derives stable canonical content 
 and never writes SQLite or user records. The Benchmarks view lists and inspects pack metadata and canonical JSON only in
 desktop mode; browser preview performs no catalog reads or writes. Programming tasks are deliberately text-only because
 Docker-backed coding sandbox execution is not implemented; the pack metadata exposes that unavailable capability.
+Phase 13 — DONE (bounded) — adds a read-only cross-platform hardware baseline to the Models view. Logical CPU count uses
+the standard library, Linux RAM uses the fixed `/proc/meminfo` source, and Windows RAM uses a narrow kernel API binding;
+GPU and VRAM remain explicit unavailable fields when no safe feature detection is present. Model rows receive pure,
+session-only Ideal/Acceptable/Heavy/Unavailable explanations from bounded RAM-share thresholds; no thresholds are
+persisted and no empirical performance history is claimed.
 
 ## Run locally
 
@@ -86,8 +91,8 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   `0003_benchmark_drafts.sql`, and `0004_blind_evaluations.sql` create SQLite metadata tables; large payloads remain
   immutable filesystem artifacts.
 - The registered Tauri commands remain typed, including published benchmark-version read, profile-revision
-  listing/registration, fixed-loopback Ollama model discovery, read-only official-pack list/read, one-shot run execution,
-  and Runs read commands.
+  listing/registration, fixed-loopback Ollama model discovery, read-only hardware/official-pack list/read, one-shot run
+  execution, and Runs read commands.
   `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
   shell or arbitrary arguments, and persists the returned terminal outcome in the app-owned store. Benchmark draft
   list/read/save/publish commands accept only typed local requests and use optimistic revision checks. Browser preview
@@ -98,6 +103,9 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   read-only catalog commands. They are never copied into drafts, SQLite, Attempts, Results, or installed historical
   records. The Benchmarks view renders validated canonical JSON as plain text; browser preview does not invoke catalog
   commands.
+- The hardware baseline is a read-only local snapshot. It does not spawn a shell, inspect model paths, download anything,
+  report telemetry, or guess unavailable GPU/VRAM data. Recommendation thresholds are bounded UI state only and compare
+  reported Ollama model size with detected RAM as a transparent heuristic.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
   document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
@@ -135,8 +143,9 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 - Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
   process. The narrow authoring editor writes only optional text expected answers; arbitrary JSON expectations remain
   outside this UI. External/cloud providers, credentials, downloads, run authoring, AI judging, multi-rater evaluation,
-  cross-run ranking, full model-library management, broader runtime UI, and Docker-backed coding sandbox execution remain
-  future work. The official programming pack records the sandbox as unavailable and must not be used to run unsafe code.
+  cross-run ranking, unified model search/downloads, duplicate management, empirical recommendation history, broader
+  model-library management, broader runtime UI, and Docker-backed coding sandbox execution remain future work. The
+  official programming pack records the sandbox as unavailable and must not be used to run unsafe code.
 - Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
   selectable local font stacks; proprietary fonts are not bundled.
 

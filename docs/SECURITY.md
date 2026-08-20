@@ -16,7 +16,9 @@ or external font loading in the production document. Font choices use local syst
 The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
 command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
 does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
-from an already-running local Ollama service; it does not spawn or forcibly terminate that service.
+from an already-running local Ollama service; it does not spawn or forcibly terminate that service. Phase 13 adds a
+read-only `read_hardware_snapshot` command with fixed, bounded platform sources; it does not spawn a shell, traverse
+model paths, download files, or send telemetry.
 
 ## Trust boundaries
 
@@ -50,6 +52,10 @@ from an already-running local Ollama service; it does not spawn or forcibly term
   bodies at 16 MiB, and cumulative streamed NDJSON payload bytes at 16 MiB. Every response also has a finite 10-minute
   overall read deadline by default, configurable from 1 ms through 60 minutes, in addition to the 500 ms per-read
   socket timeout.
+- Hardware discovery uses only `std::thread::available_parallelism`, the fixed Linux `/proc/meminfo` file, and a narrow
+  Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are not guessed:
+  they remain null with unavailable status/confidence when feature detection is absent. The snapshot is read-only and
+  ephemeral; no hardware telemetry or user override is persisted.
 - Cancellation is cooperative: the client checks the token between socket reads and streamed chunks and returns a typed
   cancellation error. It has no remote process-kill capability.
 - The run-plan helper accepts no endpoint, credential, shell, provider, or lifecycle input. It validates the published
@@ -83,14 +89,14 @@ from an already-running local Ollama service; it does not spawn or forcibly term
   summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
   sandbox status; the programming pack marks Docker-backed sandbox execution unavailable, so no local code is run.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
-  only. It cannot invoke draft/version/profile/model/Arena/official-pack commands, validate benchmarks, query Ollama, or
-  invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output is
-  untrusted content and must be sanitized before Markdown/HTML rendering.
+  only. It cannot invoke draft/version/profile/model/hardware/Arena/official-pack commands, validate benchmarks, query
+  Ollama, or invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output
+  is untrusted content and must be sanitized before Markdown/HTML rendering.
 
 ## Required future controls
 
 External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, broader official-pack coverage, Docker-backed coding sandbox execution, full model-library management,
+model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, broader official-pack coverage, Docker-backed coding sandbox execution, unified model search, duplicate management, empirical recommendation history, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.

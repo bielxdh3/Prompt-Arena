@@ -1504,6 +1504,25 @@ mod tests {
     }
 
     #[test]
+    fn model_metadata_optional_fields_and_future_fields_remain_compatible() {
+        let model = super::parse_model_info(&json!({
+            "model": "compat:latest",
+            "size": 123,
+            "details": {"family": "compat"},
+            "future_metadata": {"enabled": true}
+        }))
+        .expect("compatible model metadata");
+        assert_eq!(model.name, "compat:latest");
+        assert_eq!(model.size_bytes, Some(123));
+        assert_eq!(model.family.as_deref(), Some("compat"));
+        assert_eq!(model.digest, None);
+        assert_eq!(
+            model.metadata.get("future_metadata"),
+            Some(&json!({"enabled": true}))
+        );
+    }
+
+    #[test]
     fn model_listing_is_sorted_and_bounded() {
         let server = MockServer::start(vec![MockReply::Json(
             200,

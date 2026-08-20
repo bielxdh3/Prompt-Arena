@@ -81,8 +81,8 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
   `http://127.0.0.1:11434`, with at most 512 records, per-record bounded metadata, deterministic ordering, and typed
   unavailable/protocol errors. It does not accept endpoint or credential input and has no download, deletion, cloud, or
   process-lifecycle behavior.
-- Browser preview never invokes profile/model commands and never invents profile or model records. Full model-library
-  management, cross-runtime grouping, hardware recommendations, downloads, and deletion remain planned.
+- Browser preview never invokes profile/model/hardware commands and never invents profile, model, or hardware records.
+  Full model-library management, cross-runtime grouping, downloads, and deletion remain planned.
 
 ### Phase 07 — Published version loading and bounded run-plan contract — DONE (bounded)
 
@@ -171,19 +171,27 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - Larger official packs with procedural cases, materialized seeds/cases, and expanded rubric/version governance.
 - Docker-backed coding sandbox where required; no implementation is claimed by Phase 12.
 
-## Phase D — Model Library — PLANNED
+## Phase D — Model Library — IN PROGRESS
+
+### Phase 13 — Hardware baseline and pure recommendations — DONE (bounded)
+
+- The Models view keeps the fixed-loopback Ollama discovery/profile behavior and adds a typed read-only hardware
+  snapshot. Logical CPUs use the standard library; Linux RAM reads only fixed `/proc/meminfo`; Windows RAM uses a
+  narrow kernel API binding. GPU/VRAM stay explicitly unavailable when no safe feature detection is present.
+- Model rows classify reported model-size pressure as Ideal, Acceptable, Heavy, or Unavailable using pure TypeScript
+  logic and bounded session-only RAM-share thresholds. Explanations identify the heuristic and missing telemetry.
+- Browser preview invokes no model, profile, or hardware command and invents no hardware. No telemetry, persistence,
+  downloads, deletion, arbitrary model-path inspection, or process spawning is added.
+
+### Future Phase D work
 
 - Unified runtime/model auto-discovery beyond the fixed local Ollama discovery slice.
-- Unified search across supported sources.
-- Backend-native downloads.
-- Quantization/format/license/context metadata.
-- CPU/GPU/VRAM/RAM detection and temporary/permanent corrections.
-- Ideal / Acceptable / Heavy hardware recommendations.
-- User-configurable recommendation thresholds.
-- Empirical recommendation history using tokens/s, RAM/VRAM, offload, OOM, load time, and stability.
-- Confidence low/medium/high + sample size.
-- Cross-runtime grouping with confirmation when identity is uncertain.
-- Duplicate detection and safe/advanced deletion workflows.
+- Unified search across supported sources and backend-native downloads.
+- Broader quantization/format/license/context metadata and runtime compatibility.
+- Temporary/permanent hardware corrections and feature-detectable GPU/VRAM support beyond this baseline.
+- Empirical recommendation history using tokens/s, RAM/VRAM, offload, OOM, load time, and stability, with confidence
+  and sample size.
+- Cross-runtime grouping, duplicate detection, and safe/advanced deletion workflows.
 
 ## Phase E — Advanced Benchmarking
 

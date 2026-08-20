@@ -4,6 +4,7 @@ import {
   isDesktopEnvironment,
   lockBlindEvaluation,
   prepareBlindEvaluation,
+  readHardwareSnapshot,
   readLocalOllamaModels,
   readBenchmarkVersion,
   readBlindEvaluation,
@@ -29,6 +30,8 @@ import {
   type BenchmarkDraftSummary,
   type BenchmarkVersion,
   type BenchmarkVersionSummary,
+  type HardwareMetric,
+  type HardwareSnapshot,
   type OfficialPackDocument,
   type OfficialPackSummary,
   type ModelInfo,
@@ -76,7 +79,11 @@ import {
   officialPacksPreviewCopy,
 } from "./benchmark-ui";
 import {
+  boundedRecommendationThresholds,
+  classifyModelRecommendation,
+  DEFAULT_RECOMMENDATION_THRESHOLDS,
   EMPTY_PROFILE_FORM,
+  hardwarePreviewCopy,
   modelEmptyCopy,
   modelMetadataLabel,
   modelPreviewCopy,
@@ -85,6 +92,7 @@ import {
   profileRevisionFromForm,
   profileRevisionIdPreview,
   type ProfileFormState,
+  type RecommendationThresholds,
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 
@@ -238,8 +246,9 @@ function Overview({ onOpenArena }: { onOpenArena: () => void }) {
           <h2>Compare models with evidence, not noise.</h2>
           <p>
             Prompt Arena is a standalone local-first desktop workspace. Local persistence, immutable records, a bounded
-            Arena one-shot flow, a structured benchmark-draft editor, and a read-only official-pack catalog are ready.
-            Broader run controls, human/AI evaluation, and the model library arrive in later phases.
+            Arena one-shot flow, a structured benchmark-draft editor, a read-only official-pack catalog, and a bounded
+            local model-library baseline are ready. Broader run controls, unified model search/downloads, and
+            human/AI evaluation arrive in later phases.
           </p>
           <button className="primary-button" type="button" onClick={onOpenArena}>
             Open Arena
@@ -774,9 +783,19 @@ type ModelsState =
   | { status: "error"; message: string }
   | { status: "preview" };
 
+type HardwareState =
+  | { status: "loading" }
+  | { status: "ready"; snapshot: HardwareSnapshot }
+  | { status: "error"; message: string }
+  | { status: "preview" };
+
 function ModelsView() {
   const [profileState, setProfileState] = useState<ProfileState>({ status: "loading" });
   const [modelState, setModelState] = useState<ModelsState>({ status: "loading" });
+  const [hardwareState, setHardwareState] = useState<HardwareState>(() => (
+    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+  ));
+  const [thresholds, setThresholds] = useState<RecommendationThresholds>(DEFAULT_RECOMMENDATION_THRESHOLDS);
   const [form, setForm] = useState<ProfileFormState>(EMPTY_PROFILE_FORM);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
@@ -813,6 +832,22 @@ function ModelsView() {
     }
   }
 
+  async function refreshHardware() {
+    if (!isDesktopEnvironment()) {
+      setHardwareState({ status: "preview" });
+      return;
+    }
+    setHardwareState({ status: "loading" });
+    try {
+      setHardwareState({ status: "ready", snapshot: await readHardwareSnapshot() });
+    } catch (error: unknown) {
+      setHardwareState({
+        status: "error",
+        message: error instanceof Error ? error.message : "The local hardware baseline is unavailable.",
+      });
+    }
+  }
+
   useEffect(() => {
     if (!isDesktopEnvironment()) {
       setProfileState({ status: "preview" });
@@ -821,7 +856,13 @@ function ModelsView() {
     }
     void refreshProfiles();
     void refreshModels();
+    void refreshHardware();
   }, []);
+
+  function updateThreshold(field: keyof RecommendationThresholds, value: string) {
+    const parsed = Number(value);
+    setThresholds((current) => boundedRecommendationThresholds({ ...current, [field]: parsed }));
+  }
 
   function updateField(field: keyof ProfileFormState, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -862,8 +903,8 @@ function ModelsView() {
         <h2>Profiles and local models</h2>
         <p>
           Register immutable local profile revisions and inspect installed Ollama models through the fixed
-          127.0.0.1:11434 boundary. This slice has no endpoint field, credentials, downloads, deletion, or cloud
-          provider.
+          127.0.0.1:11434 boundary, alongside a read-only local hardware baseline. This slice has no endpoint field,
+          credentials, downloads, deletion, telemetry, or cloud provider.
         </p>
       </section>
 
@@ -901,6 +942,19 @@ function ModelsView() {
                       {model.digest ? `${model.digest.slice(0, 12)}…` : "Digest unavailable"}
                       {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
                     </p>
+                    {(() => {
+                      const recommendation = classifyModelRecommendation(
+                        model,
+                        hardwareState.status === "ready" ? hardwareState.snapshot : null,
+                        thresholds,
+                      );
+                      return (
+                        <div className="model-recommendation">
+                          <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
+                          <p className="model-meta">{recommendation.explanation}</p>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
                 </article>
@@ -960,8 +1014,95 @@ function ModelsView() {
           </div>
         </section>
       </div>
+
+      <section className="panel hardware-panel" aria-live="polite">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Read-only local baseline</p>
+            <h3>Hardware snapshot</h3>
+          </div>
+          <button className="text-button" type="button" onClick={() => void refreshHardware()} disabled={!isDesktopEnvironment() || busy}>
+            Refresh
+          </button>
+        </div>
+        {hardwareState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={hardwarePreviewCopy()} />}
+        {hardwareState.status === "loading" && <StateMessage icon="…" title="Reading hardware baseline" description="Detecting only bounded local CPU and memory facts; GPU and VRAM may be unavailable." />}
+        {hardwareState.status === "error" && <StateMessage icon="!" title="Hardware baseline unavailable" description={hardwareState.message} error />}
+        {hardwareState.status === "ready" && (
+          <>
+            <div className="hardware-grid">
+              <HardwareMetricRow label="Platform" value={hardwareState.snapshot.platform} detail="compile-time target" />
+              <HardwareMetricRow label="Logical CPUs" metric={hardwareState.snapshot.logicalCpuCount} format={formatHardwareCount} />
+              <HardwareMetricRow label="RAM" metric={hardwareState.snapshot.memoryBytes} format={formatHardwareBytes} />
+              <HardwareMetricRow label="GPU" metric={hardwareState.snapshot.gpuName} format={(value) => value} />
+              <HardwareMetricRow label="VRAM" metric={hardwareState.snapshot.vramBytes} format={formatHardwareBytes} />
+            </div>
+            <p className="field-help">Each metric reports its source and confidence. Unavailable values stay null and are never guessed.</p>
+            <div className="recommendation-settings">
+              <p className="eyebrow">Recommendation thresholds · session only</p>
+              <p className="field-help">Recommendations compare reported model size with detected RAM. These bounds are UI state only; they are not persisted or empirical performance measurements.</p>
+              <div className="form-grid form-grid-three">
+                <FormInput
+                  id="ideal-threshold"
+                  label="Ideal RAM share (%)"
+                  type="number"
+                  min="10"
+                  max="90"
+                  step="1"
+                  value={String(thresholds.idealPercent)}
+                  onChange={(value) => updateThreshold("idealPercent", value)}
+                />
+                <FormInput
+                  id="acceptable-threshold"
+                  label="Acceptable RAM share (%)"
+                  type="number"
+                  min="10"
+                  max="90"
+                  step="1"
+                  value={String(thresholds.acceptablePercent)}
+                  onChange={(value) => updateThreshold("acceptablePercent", value)}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </section>
     </div>
   );
+}
+
+function HardwareMetricRow<T>({
+  label,
+  metric,
+  format,
+  value,
+  detail,
+}: {
+  label: string;
+  metric?: HardwareMetric<T>;
+  format?: (value: T) => string;
+  value?: string;
+  detail?: string;
+}) {
+  const metricValue = metric && metric.status === "available" && metric.value !== null && format
+    ? format(metric.value)
+    : value ?? "Unavailable";
+  const metricDetail = detail ?? (metric ? `${metric.source} · confidence ${metric.confidence}` : "Not detected");
+  return (
+    <div className="hardware-metric">
+      <span>{label}</span>
+      <strong>{metricValue}</strong>
+      <small>{metricDetail}</small>
+    </div>
+  );
+}
+
+function formatHardwareCount(value: number): string {
+  return `${value} logical processor${value === 1 ? "" : "s"}`;
+}
+
+function formatHardwareBytes(value: number): string {
+  return formatByteCount(value);
 }
 
 function formatModelSize(sizeBytes: number | null): string {

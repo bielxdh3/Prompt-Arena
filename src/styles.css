@@ -1280,6 +1280,79 @@ button.official-pack-row:hover,
   white-space: nowrap;
 }
 
+.model-recommendation {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.recommendation-badge {
+  width: fit-content;
+  padding: 4px 8px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.recommendation-ideal {
+  color: var(--color-success);
+  border-color: rgb(154 198 164 / 0.36);
+}
+
+.recommendation-acceptable {
+  color: var(--color-accent-strong);
+  border-color: rgb(214 184 138 / 0.42);
+}
+
+.recommendation-heavy,
+.recommendation-unavailable {
+  color: var(--color-text-subtle);
+}
+
+.hardware-panel {
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.hardware-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.hardware-metric {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.hardware-metric span,
+.hardware-metric small {
+  color: var(--color-text-subtle);
+  font-size: 12px;
+}
+
+.hardware-metric strong {
+  overflow-wrap: anywhere;
+  font-size: 16px;
+}
+
+.hardware-metric small {
+  line-height: 1.4;
+}
+
+.recommendation-settings {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+}
+
 .profile-form {
   display: grid;
   gap: 15px;
@@ -1370,6 +1443,10 @@ button.official-pack-row:hover,
     grid-template-columns: 1fr;
   }
 
+  .hardware-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .runs-layout {
     grid-template-columns: 1fr;
   }
@@ -1416,7 +1493,8 @@ button.official-pack-row:hover,
   }
 
   .form-grid,
-  .form-grid-three {
+  .form-grid-three,
+  .hardware-grid {
     grid-template-columns: 1fr;
   }
 
