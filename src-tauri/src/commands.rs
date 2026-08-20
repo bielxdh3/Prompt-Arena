@@ -1,9 +1,24 @@
+use std::{
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+};
+
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::{
     domain::{
-        validate_benchmark_document as validate_document, ValidatedBenchmark, ValidationError,
+        validate_benchmark_document as validate_document, Attempt, ProfileRevision, Run,
+        ValidatedBenchmark, ValidationError,
+    },
+    orchestration::{
+        persist_terminal_outcome, OrchestrationError, PersistedExecution, RunPlan, TerminalOutcome,
+    },
+    protocol::{
+        WorkerErrorCode, WorkerOutcome, WorkerRequest, WorkerResponse, WorkerResult,
+        MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, WORKER_PROTOCOL_VERSION,
     },
     storage::{now_marker, BenchmarkVersionSummary, StorageError, StorageService},
     APP_NAME, APP_PROTOCOL_VERSION,
@@ -54,15 +69,32 @@ impl From<StorageError> for CommandError {
             StorageError::ImmutableConflict => "immutable_conflict",
             StorageError::ArtifactAlreadyExists => "artifact_already_exists",
             StorageError::ArtifactHashMismatch => "artifact_hash_mismatch",
+            StorageError::ArtifactTooLarge => "artifact_too_large",
             StorageError::EmptyArtifactPath
             | StorageError::AbsoluteArtifactPath
             | StorageError::TraversalArtifactPath
             | StorageError::NonPortableArtifactPath
             | StorageError::InvalidArtifactReference => "artifact_path_invalid",
+            StorageError::InvalidRecordId => "record_id_invalid",
             StorageError::MetadataTooLarge => "metadata_too_large",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<OrchestrationError> for CommandError {
+    fn from(error: OrchestrationError) -> Self {
+        let code = match &error {
+            OrchestrationError::InvalidPlan(_) => "run_plan_invalid",
+            OrchestrationError::UnsupportedRuntime(_) => "runtime_unsupported",
+            OrchestrationError::Runtime(_) => "runtime_failed",
+            OrchestrationError::Storage(storage_error) => return storage_error.clone().into(),
         };
         Self {
             code,
@@ -96,6 +128,238 @@ pub fn save_benchmark_version(
     let validated = validate_document(&document)?;
     let summary = storage_for(&app)?.save_benchmark_version(&validated, &now_marker())?;
     Ok(SavedBenchmarkVersion { summary })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileRevisionRegistration {
+    pub profile_revision_id: String,
+    pub save_outcome: crate::storage::SaveOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStatus {
+    pub run_id: String,
+    pub status: String,
+    pub started_at: String,
+    pub attempt_ids: Vec<String>,
+}
+
+#[tauri::command]
+pub fn register_profile_revision(
+    app: AppHandle,
+    revision: ProfileRevision,
+) -> Result<ProfileRevisionRegistration, CommandError> {
+    let profile_revision_id = revision.profile_revision_id.clone();
+    let save_outcome = storage_for(&app)?.save_profile_revision(&revision, &now_marker())?;
+    Ok(ProfileRevisionRegistration {
+        profile_revision_id,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_runs(app: AppHandle) -> Result<Vec<Run>, CommandError> {
+    storage_for(&app)?.list_runs().map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_run_attempts(app: AppHandle, run_id: String) -> Result<Vec<Attempt>, CommandError> {
+    storage_for(&app)?
+        .list_attempts(&run_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus>, CommandError> {
+    let run = storage_for(&app)?.get_run(&run_id)?;
+    Ok(run.map(|run| RunStatus {
+        run_id: run.run_id,
+        status: run.status,
+        started_at: run.started_at,
+        attempt_ids: run.attempt_ids,
+    }))
+}
+
+/// Execute exactly one bounded generation in the app-owned worker, then persist
+/// its terminal outcome in the app-owned store.
+#[tauri::command]
+pub fn execute_run_once(app: AppHandle, plan: RunPlan) -> Result<PersistedExecution, CommandError> {
+    let outcome = invoke_worker_once(&plan)?;
+    persist_terminal_outcome(&storage_for(&app)?, &outcome, &now_marker()).map_err(Into::into)
+}
+
+fn invoke_worker_once(plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
+    let job_id = worker_job_id(plan);
+    let request = WorkerRequest::GenerateOnce {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        job_id: job_id.clone(),
+        plan: plan.clone(),
+    };
+    let request_bytes = serde_json::to_vec(&request).map_err(|_| CommandError {
+        code: "run_plan_invalid",
+        message: "the one-shot worker request could not be encoded".to_owned(),
+    })?;
+    if request_bytes.len() > MAX_WORKER_REQUEST_BYTES {
+        return Err(CommandError {
+            code: "run_plan_invalid",
+            message: "the one-shot worker request exceeds the size limit".to_owned(),
+        });
+    }
+
+    let current_executable = std::env::current_exe().map_err(|_| CommandError {
+        code: "worker_unavailable",
+        message: "the app executable path is unavailable".to_owned(),
+    })?;
+    let worker_executable = resolve_worker_executable(&current_executable)?;
+    let mut child = Command::new(worker_executable)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| CommandError {
+            code: "worker_unavailable",
+            message: "the one-shot worker could not be started".to_owned(),
+        })?;
+    let stdout = child.stdout.take().ok_or_else(|| CommandError {
+        code: "worker_protocol_failed",
+        message: "the one-shot worker did not expose stdout".to_owned(),
+    })?;
+    let reader =
+        thread::spawn(move || read_bounded(stdout, MAX_WORKER_RESPONSE_BYTES.saturating_add(1)));
+
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "worker stdin unavailable"))
+        .and_then(|mut stdin| stdin.write_all(&request_bytes));
+    if write_result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        return Err(CommandError {
+            code: "worker_unavailable",
+            message: "the one-shot worker request could not be written".to_owned(),
+        });
+    }
+
+    let status = child.wait().map_err(|_| CommandError {
+        code: "worker_unavailable",
+        message: "the one-shot worker did not exit cleanly".to_owned(),
+    })?;
+    let output = reader.join().map_err(|_| CommandError {
+        code: "worker_protocol_failed",
+        message: "the one-shot worker output reader failed".to_owned(),
+    })?;
+    let output = output.map_err(|_| CommandError {
+        code: "worker_protocol_failed",
+        message: "the one-shot worker response exceeded the size limit".to_owned(),
+    })?;
+    if !status.success() {
+        return Err(CommandError {
+            code: "worker_failed",
+            message: "the one-shot worker exited with a failure".to_owned(),
+        });
+    }
+
+    let output = output.strip_suffix(b"\n").unwrap_or(&output);
+    let response: WorkerResponse = serde_json::from_slice(output).map_err(|_| CommandError {
+        code: "worker_protocol_failed",
+        message: "the one-shot worker response was not valid JSON".to_owned(),
+    })?;
+    if response.job_id != job_id {
+        return Err(CommandError {
+            code: "worker_protocol_failed",
+            message: "the one-shot worker response job id did not match".to_owned(),
+        });
+    }
+
+    match response.outcome {
+        WorkerOutcome::Completed {
+            result: WorkerResult::GenerationCompleted { outcome },
+        } => Ok(outcome),
+        WorkerOutcome::Completed { .. } => Err(CommandError {
+            code: "worker_protocol_failed",
+            message: "the one-shot worker returned an unexpected result".to_owned(),
+        }),
+        WorkerOutcome::Rejected { error } => Err(CommandError {
+            code: worker_error_code(&error.code),
+            message: error.message,
+        }),
+    }
+}
+
+fn worker_job_id(plan: &RunPlan) -> String {
+    format!(
+        "run-{}",
+        &crate::domain::sha256_hex(plan.run_id.as_bytes())[..16]
+    )
+}
+
+fn worker_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "prompt-arena-worker.exe"
+    } else {
+        "prompt-arena-worker"
+    }
+}
+
+fn worker_executable_path(current_executable: &Path) -> Result<PathBuf, CommandError> {
+    let parent = current_executable.parent().ok_or_else(|| CommandError {
+        code: "worker_unavailable",
+        message: "the app executable has no resolvable parent directory".to_owned(),
+    })?;
+    Ok(parent.join(worker_executable_name()))
+}
+
+fn resolve_worker_executable(current_executable: &Path) -> Result<PathBuf, CommandError> {
+    let worker = worker_executable_path(current_executable)?;
+    if !worker.is_file() {
+        return Err(CommandError {
+            code: "worker_unavailable",
+            message: "the app-owned one-shot worker executable is unavailable".to_owned(),
+        });
+    }
+    Ok(worker)
+}
+
+fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    let mut oversized = false;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = limit.saturating_sub(output.len());
+        if read > remaining {
+            oversized = true;
+        } else {
+            output.extend_from_slice(&buffer[..read]);
+        }
+    }
+    if oversized {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "worker output exceeds the size limit",
+        ))
+    } else {
+        Ok(output)
+    }
+}
+
+fn worker_error_code(code: &WorkerErrorCode) -> &'static str {
+    match code {
+        WorkerErrorCode::InvalidPlan => "run_plan_invalid",
+        WorkerErrorCode::RuntimeUnavailable => "runtime_unavailable",
+        WorkerErrorCode::RequestTooLarge => "run_plan_invalid",
+        WorkerErrorCode::InvalidJson
+        | WorkerErrorCode::UnsupportedProtocol
+        | WorkerErrorCode::InvalidJobId
+        | WorkerErrorCode::UnsupportedTask => "worker_protocol_failed",
+    }
 }
 
 fn validation_summary(validated: &ValidatedBenchmark) -> BenchmarkValidationSummary {
@@ -157,12 +421,24 @@ fn supported_platform() -> SupportedPlatform {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_status, StorageState};
+    use std::path::Path;
+
+    use super::{app_status, worker_executable_name, worker_executable_path, StorageState};
 
     #[test]
     fn status_exposes_local_storage_without_runtime_providers() {
         let status = app_status();
         assert!(matches!(status.storage_state, StorageState::Local));
         assert_eq!(status.protocol_version, 1);
+    }
+
+    #[test]
+    fn worker_resolution_uses_only_the_fixed_sibling_binary() {
+        let path = worker_executable_path(Path::new("C:/Prompt Arena/prompt-arena.exe")).unwrap();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(worker_executable_name())
+        );
+        assert!(!path.to_string_lossy().contains("prompt-arena.exe/"));
     }
 }

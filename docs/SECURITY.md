@@ -3,10 +3,10 @@
 ## Foundation verdict
 
 The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
-`app_status`, `validate_benchmark_document`, `list_benchmark_versions`, and `save_benchmark_version`; they operate only
-on typed benchmark data and the app-owned local storage root. The capability file contains no plugin permissions. The
-worker accepts a tagged protocol, validates its version and job ID, performs only the foundation contract check, and
-exits.
+typed status, benchmark/profile persistence, one-shot execution, and Runs read operations; they operate only on typed
+data and the app-owned local storage root. The capability file contains no plugin permissions. The worker accepts a
+tagged protocol, validates its version, job ID, and request bound, performs one generation at most, returns one typed
+terminal response, and exits.
 
 The CSP allows the local Vite development origin and Tauri IPC only. It does not allow arbitrary scripts, inline styles,
 or external font loading in the production document. Font choices use local system stacks.
@@ -20,6 +20,8 @@ spawn or forcibly terminate that service.
 - UI input is presentation state; font selection is constrained to a fixed option list.
 - Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or path.
 - Worker input is untrusted JSON and is rejected on malformed JSON, unsupported protocol versions, or unsafe job IDs.
+- The execution command resolves only the fixed worker binary beside the current app executable, supplies no shell or
+  arbitrary command arguments, and bounds both request and response bytes.
 - Benchmark documents are deserialized and manually validated at the domain boundary; unknown JSON fields are retained.
 - Artifact references and write requests are validated as portable relative paths and cannot use traversal, absolute
   roots, drive prefixes, empty segments, symlinks, or backslashes.
@@ -36,9 +38,9 @@ spawn or forcibly terminate that service.
 
 ## Required future controls
 
-External/cloud provider credentials, downloads, runtime process spawning/lifecycle, run orchestration, model execution UI,
-and destructive cleanup are not implemented here. When added, they require explicit capability review, allowlisted
-executable paths, bounded arguments, safe archive extraction, credential isolation, cancellation, and confirmation for
-user data deletion. Historical benchmark records must not be deleted as a migration side effect.
+External/cloud provider credentials, downloads, long-lived runtime process lifecycle, run authoring/model execution UI,
+evaluation, and destructive cleanup are not implemented here. When added, they require explicit capability review,
+allowlisted executable paths, bounded arguments, safe archive extraction, credential isolation, cancellation, and
+confirmation for user data deletion. Historical benchmark records must not be deleted as a migration side effect.
 
 No secrets, tokens, private logs, or databases belong in source control or validation output.

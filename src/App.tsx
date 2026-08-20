@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FONT_OPTIONS } from "./font-options";
-import { readAppStatus, type AppStatus } from "./bridge";
+import { readAppStatus, readRuns, type AppStatus, type RunRecord } from "./bridge";
 
 type ViewId = "overview" | "benchmarks" | "runs" | "settings";
 type ConnectionState =
@@ -109,7 +109,7 @@ function App() {
         <main className="main-content" id="main-content">
           {activeView === "overview" && <Overview onOpenBenchmarks={() => setActiveView("benchmarks")} />}
           {activeView === "benchmarks" && <CollectionView kind="benchmarks" />}
-          {activeView === "runs" && <CollectionView kind="runs" />}
+          {activeView === "runs" && <RunsView />}
           {activeView === "settings" && <Settings fontId={fontId} onFontChange={setFontId} />}
         </main>
       </div>
@@ -137,8 +137,8 @@ function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
           <p className="eyebrow">A quiet place for reproducible work</p>
           <h2>Compare models with evidence, not noise.</h2>
           <p>
-            Prompt Arena is a standalone local-first desktop workspace. Local benchmark persistence is ready;
-            full authoring and model execution arrive in later phases.
+            Prompt Arena is a standalone local-first desktop workspace. Local persistence and the bounded one-shot
+            execution boundary are ready; full authoring and run controls arrive in later phases.
           </p>
           <button className="primary-button" type="button" onClick={onOpenBenchmarks}>
             Explore benchmarks
@@ -197,7 +197,7 @@ function CollectionView({ kind }: { kind: "benchmarks" | "runs" }) {
         <p>
           {isBenchmarks
             ? "Immutable benchmark versions can be persisted locally; the full authoring UI arrives in a later core-arena increment."
-            : "Completed, interrupted, and failed runs will appear here once runtime orchestration is implemented."}
+            : "This view is reserved for local run evidence. It never invents records or executes Ollama in browser preview."}
         </p>
       </section>
       <section className="panel empty-panel" aria-live="polite">
@@ -210,6 +210,107 @@ function CollectionView({ kind }: { kind: "benchmarks" | "runs" }) {
           }
         />
       </section>
+    </div>
+  );
+}
+
+type RunsState =
+  | { status: "loading" }
+  | { status: "ready"; runs: RunRecord[] }
+  | { status: "error"; message: string };
+
+function RunsView() {
+  const [state, setState] = useState<RunsState>({ status: "loading" });
+
+  useEffect(() => {
+    let current = true;
+    void readRuns()
+      .then((runs) => {
+        if (current) setState({ status: "ready", runs });
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          setState({
+            status: "error",
+            message: error instanceof Error ? error.message : "The local run history is unavailable.",
+          });
+        }
+      });
+
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  return (
+    <div className="view-stack">
+      <section className="panel page-intro">
+        <p className="eyebrow">Execution history</p>
+        <h2>Runs</h2>
+        <p>
+          Runs are read from the app-owned local store. One-shot execution and evidence persistence are available to
+          the desktop boundary; browser preview does not execute a model or create sample records.
+        </p>
+      </section>
+      <section className="panel runs-panel" aria-live="polite">
+        {state.status === "loading" && (
+          <StateMessage icon="…" title="Loading local runs" description="Reading immutable run records from the app store." />
+        )}
+        {state.status === "error" && (
+          <StateMessage
+            icon="!"
+            title="Run history unavailable"
+            description={state.message}
+            error
+          />
+        )}
+        {state.status === "ready" && state.runs.length === 0 && (
+          <EmptyState
+            title="No run history"
+            description="There are no local run records yet. No sample runs are bundled or invented in this view."
+          />
+        )}
+        {state.status === "ready" && state.runs.length > 0 && (
+          <div className="runs-list">
+            {state.runs.map((run) => (
+              <article className="run-row" key={run.runId}>
+                <div>
+                  <p className="eyebrow">{run.benchmarkVersionId}</p>
+                  <h3>{run.runId}</h3>
+                  <p className="run-meta">
+                    {run.attemptIds.length} attempt{run.attemptIds.length === 1 ? "" : "s"} · started {run.startedAt}
+                  </p>
+                </div>
+                <span className="run-status">{run.status}</span>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function StateMessage({
+  icon,
+  title,
+  description,
+  error = false,
+}: {
+  icon: string;
+  title: string;
+  description: string;
+  error?: boolean;
+}) {
+  return (
+    <div className="state-panel">
+      <span className={`state-icon ${error ? "state-icon-error" : "state-icon-loading"}`} aria-hidden="true">
+        {icon}
+      </span>
+      <div className="state-copy">
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
     </div>
   );
 }

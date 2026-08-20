@@ -4,28 +4,31 @@ Prompt Arena is a standalone local-first desktop application with three delibera
 
 ```text
 React/TypeScript UI
-        │ typed status, validation, list, and save commands
+        │ typed status, validation, persistence, execution, and Runs read commands
 Tauri 2 desktop boundary
         ├─ app-owned local storage service
         │  ├─ SQLite metadata migrations
         │  └─ immutable filesystem artifacts
         └─ one-shot worker process
-           └─ foundation protocol; no run orchestration yet
+           └─ validated one-shot orchestration
+              └─ loopback-only Ollama runtime
 
-Rust runtime modules (Phase 03 backend slice; not UI/command-wired)
+Rust runtime modules (Phase 03 adapter; invoked by the bounded worker)
         ├─ normalized runtime/provider contract
         └─ loopback-only Ollama adapter
 ```
 
-The UI owns presentation state only. The Tauri entrypoint registers the small command set explicitly: `app_status`,
-`validate_benchmark_document`, `list_benchmark_versions`, and `save_benchmark_version`. It does not expose an arbitrary
-shell, filesystem browser, provider proxy, account flow, or telemetry path. `app_status` reports `storageState: "local"`
-because the commands initialize and use the app-owned SQLite/artifact store.
+The UI owns presentation state only. The Tauri entrypoint registers the small command set explicitly: status and
+benchmark validation/persistence, profile-revision registration, `execute_run_once`, and the Runs read commands
+`list_runs`, `list_run_attempts`, and `get_run_status`. It does not expose an arbitrary shell, filesystem browser,
+provider proxy, account flow, or telemetry path. `app_status` reports `storageState: "local"` because the commands
+initialize and use the app-owned SQLite/artifact store.
 
 The worker reads one JSON request from stdin, emits one typed JSON response, and exits. It has no daemon loop, shell
-escape, hosted inference client, or implicit background persistence. The Phase 03 runtime modules are not an app-spawned
-worker lifecycle or run orchestrator; later orchestration must pass validated, versioned requests through the existing
-one-shot boundary.
+escape, hosted inference client, or implicit background persistence. `execute_run_once` resolves only the fixed worker
+binary beside the app executable, sends one bounded `GenerateOnce` request without arbitrary arguments, waits for the
+child to exit, and persists the returned terminal outcome in the app-owned store. Browser preview cannot invoke this
+command and never creates sample runs.
 
 `runtime.rs` defines the normalized request, response, chunk, model, health, capability, cancellation, and typed error
 contracts. Providers negotiate both capabilities and generation parameters before sending a request. `ollama.rs`
@@ -50,7 +53,7 @@ plus deterministic manual validation in `domain.rs`; Phase 02 intentionally does
 
 ## Future boundaries
 
-Run orchestration, model execution UI, evaluation, model management/downloads, external/cloud provider adapters,
-benchmark authoring UI, and app-managed worker/runtime lifecycle remain later phases. They must keep provenance,
-effective configuration, error taxonomy, and historical records explicit rather than smuggling behavior into the current
-command or worker boundary.
+Run authoring and model execution controls, evaluation, model management/downloads, external/cloud provider adapters,
+benchmark authoring UI, interruption recovery, and any long-lived worker/runtime lifecycle remain later phases. They must
+keep provenance, effective configuration, error taxonomy, and historical records explicit rather than smuggling behavior
+into the current command or worker boundary.

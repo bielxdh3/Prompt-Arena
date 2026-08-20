@@ -15,7 +15,7 @@ This roadmap is the current implementation baseline for Prompt Arena. The author
 ## Phase A — Foundation — DONE (bounded contract foundation)
 
 - `DONE` — Tauri 2 + React + TypeScript + Rust workspace with a narrow typed desktop command boundary.
-- `DONE` — App-owned one-shot worker protocol and executable skeleton; no daemon lifecycle yet.
+- `DONE` — App-owned one-shot worker protocol and executable boundary; no daemon lifecycle.
 - `DONE` — Windows/Linux-only CI definition.
 - `DONE` — Versioned SQLite foundation migration and path-safe filesystem artifact-store contract.
 - `DONE` — Semantic dark-neutral-gray tokens, strongly rounded shell, keyboard focus states, reduced-motion handling,
@@ -24,9 +24,8 @@ This roadmap is the current implementation baseline for Prompt Arena. The author
 - `DONE` — Foundation theme configuration hook and concise architecture, development, security, privacy, data-model,
   testing, and design-system documentation.
 
-Phase A does not claim worker spawning from the app, model execution, providers, or benchmark authoring UI. Phase B
-currently owns the bounded local domain/storage implementation below and must consume the Phase A contracts without
-deleting or rewriting history.
+Phase A did not claim worker spawning from the app, model execution, providers, or benchmark authoring UI. Later phases
+consume those contracts without deleting or rewriting history.
 
 ## Phase B — Core Arena — IN PROGRESS
 
@@ -34,6 +33,9 @@ deleting or rewriting history.
 - `DONE` — Local SQLite migrations for benchmark metadata, immutable profile/run/attempt/result records, and artifact metadata.
 - `DONE` — Atomic immutable artifact writes with portable path, size, and hash controls.
 - `DONE` — Typed validation, benchmark-version save, and benchmark-version list commands.
+- `DONE` — Immutable profile-revision registration, bounded one-shot orchestration through the app-owned worker, and
+  terminal run/attempt/result persistence with replay-safe evidence.
+- `DONE` — Typed Runs read commands and a truthful local Runs view; browser preview does not execute models.
 - `PLANNED` — Benchmark Draft and authoring UI.
 
 ### Phase 03 — Runtime/Ollama adapter slice — DONE (bounded)
@@ -50,9 +52,18 @@ deleting or rewriting history.
 This slice is backend-only. It does not claim model execution UI, run orchestration, app-managed runtime lifecycle,
 downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 
+### Phase 04 — One-shot orchestration and evidence — DONE (bounded)
+
+- Validated `RunPlan` execution is delegated from the desktop command to a fixed-name, app-owned one-shot worker with
+  bounded JSON request/response handling and no shell or arbitrary executable arguments.
+- The worker executes the loopback-only Ollama adapter once and returns a typed terminal outcome; the app owns SQLite
+  and artifact persistence, including completed-outcome replay and immutable conflict handling.
+- Runs, attempts, and profile revisions have typed local read/registration commands. The UI exposes only the local Runs
+  read surface; run authoring, evaluation, interruption recovery, and full execution controls remain planned.
+
 ### Remaining Phase B work
 
-- `PLANNED` — Runtime command/UI integration, run orchestration, interruption recovery, and evaluation.
+- `PLANNED` — Run authoring/controls, interruption recovery, and evaluation.
 - Model/profile registration and immutable profile revisions.
 - Benchmark Draft + immutable Benchmark Version.
 - Arena builder.

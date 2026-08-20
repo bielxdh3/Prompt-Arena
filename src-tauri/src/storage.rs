@@ -7,6 +7,7 @@ use std::{
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
@@ -21,6 +22,7 @@ pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const FOUNDATION_MIGRATION: &str = include_str!("storage/migrations/0001_foundation.sql");
 pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_core_arena.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
+pub const MAX_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,21 +74,28 @@ impl ArtifactStore {
         bytes: &[u8],
         created_at: &str,
     ) -> Result<ArtifactRecord, StorageError> {
-        validate_artifact_reference(artifact)?;
-        if kind.trim().is_empty() {
-            return Err(StorageError::InvalidArtifactReference);
-        }
-
-        let computed_hash = sha256_hex(bytes);
-        if let Some(expected_hash) = &artifact.sha256 {
-            if !expected_hash.eq_ignore_ascii_case(&computed_hash) {
-                return Err(StorageError::ArtifactHashMismatch);
-            }
-        }
+        let computed_hash = validate_artifact_write(kind, artifact, bytes)?;
 
         let target = self.resolve(artifact)?;
         ensure_safe_parent_directories(&self.layout.artifact_root(), &artifact.relative_path)?;
-        if fs::symlink_metadata(&target).is_ok() {
+        if let Ok(metadata) = fs::symlink_metadata(&target) {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(StorageError::ArtifactAlreadyExists);
+            }
+            if metadata.len() > MAX_ARTIFACT_BYTES as u64 {
+                return Err(StorageError::ArtifactTooLarge);
+            }
+            let existing_bytes = fs::read(&target).map_err(StorageError::from_io)?;
+            if sha256_hex(&existing_bytes).eq_ignore_ascii_case(&computed_hash) {
+                return Ok(ArtifactRecord {
+                    artifact_id: artifact.artifact_id.clone(),
+                    kind: kind.to_owned(),
+                    relative_path: artifact.relative_path.clone(),
+                    schema_version: artifact.schema_version,
+                    sha256: Some(computed_hash),
+                    created_at: created_at.to_owned(),
+                });
+            }
             return Err(StorageError::ArtifactAlreadyExists);
         }
 
@@ -180,8 +189,10 @@ pub enum StorageError {
     TraversalArtifactPath,
     NonPortableArtifactPath,
     InvalidArtifactReference,
+    InvalidRecordId,
     ArtifactAlreadyExists,
     ArtifactHashMismatch,
+    ArtifactTooLarge,
     ImmutableConflict,
     MetadataTooLarge,
 }
@@ -197,8 +208,10 @@ impl std::fmt::Display for StorageError {
             Self::TraversalArtifactPath => "artifact path traversal is not allowed",
             Self::NonPortableArtifactPath => "artifact path is not portable",
             Self::InvalidArtifactReference => "artifact reference is invalid",
+            Self::InvalidRecordId => "record id is invalid",
             Self::ArtifactAlreadyExists => "immutable artifact already exists",
             Self::ArtifactHashMismatch => "artifact content hash does not match its reference",
+            Self::ArtifactTooLarge => "artifact exceeds the local size limit",
             Self::ImmutableConflict => "immutable metadata already exists with different content",
             Self::MetadataTooLarge => "metadata exceeds the local storage limit",
         };
@@ -408,7 +421,7 @@ impl StorageService {
         }
         save_immutable_json(
             &self.connection()?,
-            "profile_revisions",
+            JsonTable::ProfileRevisions,
             &revision.profile_revision_id,
             revision,
             created_at,
@@ -416,7 +429,13 @@ impl StorageService {
     }
 
     pub fn save_run(&self, run: &Run, created_at: &str) -> Result<SaveOutcome, StorageError> {
-        save_immutable_json(&self.connection()?, "runs", &run.run_id, run, created_at)
+        save_immutable_json(
+            &self.connection()?,
+            JsonTable::Runs,
+            &run.run_id,
+            run,
+            created_at,
+        )
     }
 
     pub fn save_attempt(
@@ -426,11 +445,100 @@ impl StorageService {
     ) -> Result<SaveOutcome, StorageError> {
         save_immutable_json(
             &self.connection()?,
-            "attempts",
+            JsonTable::Attempts,
             &attempt.attempt_id,
             attempt,
             created_at,
         )
+    }
+
+    pub fn save_attempt_and_result(
+        &self,
+        attempt: &Attempt,
+        result: &ImmutableResultReference,
+        created_at: &str,
+    ) -> Result<SaveOutcome, StorageError> {
+        if attempt.result.as_ref() != Some(result) {
+            return Err(StorageError::ImmutableConflict);
+        }
+
+        let attempt_json =
+            serde_json::to_value(attempt).map_err(|_| StorageError::DatabaseFailure)?;
+        let (attempt_document, attempt_hash) = canonical_json_and_hash(&attempt_json)?;
+        ensure_metadata_size(&attempt_document)?;
+        let result_json =
+            serde_json::to_value(result).map_err(|_| StorageError::DatabaseFailure)?;
+        let (result_document, result_hash) = canonical_json_and_hash(&result_json)?;
+        ensure_metadata_size(&result_document)?;
+
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let existing_attempt: Option<String> = transaction
+            .query_row(
+                "SELECT content_hash FROM attempts WHERE record_id = ?1",
+                params![attempt.attempt_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        if let Some(existing_hash) = &existing_attempt {
+            if existing_hash != &attempt_hash {
+                return Err(StorageError::ImmutableConflict);
+            }
+        } else {
+            transaction
+                .execute(
+                    "INSERT INTO attempts (record_id, content_hash, document_json, created_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        attempt.attempt_id,
+                        attempt_hash,
+                        attempt_document,
+                        created_at
+                    ],
+                )
+                .map_err(|_| StorageError::DatabaseFailure)?;
+        }
+
+        let existing_result: Option<String> = transaction
+            .query_row(
+                "SELECT content_hash FROM result_records WHERE result_id = ?1",
+                params![result.result_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        if let Some(existing_hash) = &existing_result {
+            if existing_hash != &result_hash {
+                return Err(StorageError::ImmutableConflict);
+            }
+        } else {
+            transaction
+                .execute(
+                    "INSERT INTO result_records
+                     (result_id, attempt_id, content_hash, document_json, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        result.result_id,
+                        attempt.attempt_id,
+                        result_hash,
+                        result_document,
+                        created_at
+                    ],
+                )
+                .map_err(|_| StorageError::DatabaseFailure)?;
+        }
+        transaction
+            .commit()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+
+        if existing_attempt.is_some() && existing_result.is_some() {
+            Ok(SaveOutcome::AlreadyPresent)
+        } else {
+            Ok(SaveOutcome::Saved)
+        }
     }
 
     pub fn save_result_reference(
@@ -474,6 +582,28 @@ impl StorageService {
         Ok(SaveOutcome::Saved)
     }
 
+    pub fn list_profile_revisions(&self) -> Result<Vec<ProfileRevision>, StorageError> {
+        list_json_records(&self.connection()?, JsonTable::ProfileRevisions)
+    }
+
+    pub fn list_runs(&self) -> Result<Vec<Run>, StorageError> {
+        list_json_records(&self.connection()?, JsonTable::Runs)
+    }
+
+    pub fn get_run(&self, run_id: &str) -> Result<Option<Run>, StorageError> {
+        validate_record_id(run_id)?;
+        get_json_record(&self.connection()?, JsonTable::Runs, run_id)
+    }
+
+    pub fn list_attempts(&self, run_id: &str) -> Result<Vec<Attempt>, StorageError> {
+        validate_record_id(run_id)?;
+        let attempts: Vec<Attempt> = list_json_records(&self.connection()?, JsonTable::Attempts)?;
+        Ok(attempts
+            .into_iter()
+            .filter(|attempt| attempt.run_id == run_id)
+            .collect())
+    }
+
     pub fn write_artifact(
         &self,
         kind: &str,
@@ -481,9 +611,63 @@ impl StorageService {
         bytes: &[u8],
         created_at: &str,
     ) -> Result<ArtifactRecord, StorageError> {
+        let content_hash = validate_artifact_write(kind, artifact, bytes)?;
+        let candidate = ArtifactRecord {
+            artifact_id: artifact.artifact_id.clone(),
+            kind: kind.to_owned(),
+            relative_path: artifact.relative_path.clone(),
+            schema_version: artifact.schema_version,
+            sha256: Some(content_hash),
+            created_at: created_at.to_owned(),
+        };
+        let connection = self.connection()?;
+        let existing: Option<ArtifactRecord> = connection
+            .query_row(
+                "SELECT artifact_id, kind, relative_path, schema_version, sha256, created_at
+                 FROM artifact_records WHERE artifact_id = ?1",
+                params![candidate.artifact_id],
+                |row| {
+                    Ok(ArtifactRecord {
+                        artifact_id: row.get(0)?,
+                        kind: row.get(1)?,
+                        relative_path: row.get(2)?,
+                        schema_version: row.get(3)?,
+                        sha256: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        if let Some(existing) = existing {
+            if artifact_metadata_matches(&existing, &candidate) {
+                ArtifactStore::new(self.layout.clone())
+                    .write_immutable(kind, artifact, bytes, created_at)?;
+                return Ok(existing);
+            }
+            if existing.kind == candidate.kind
+                && existing.relative_path == candidate.relative_path
+                && existing.schema_version == candidate.schema_version
+            {
+                return Err(StorageError::ArtifactAlreadyExists);
+            }
+            return Err(StorageError::ImmutableConflict);
+        }
+
+        let path_owner: Option<String> = connection
+            .query_row(
+                "SELECT artifact_id FROM artifact_records WHERE relative_path = ?1",
+                params![candidate.relative_path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        if path_owner.is_some() {
+            return Err(StorageError::ImmutableConflict);
+        }
+
         let record = ArtifactStore::new(self.layout.clone())
             .write_immutable(kind, artifact, bytes, created_at)?;
-        let connection = self.connection()?;
         connection
             .execute(
                 "INSERT INTO artifact_records
@@ -512,9 +696,26 @@ impl StorageService {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum JsonTable {
+    ProfileRevisions,
+    Runs,
+    Attempts,
+}
+
+impl JsonTable {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ProfileRevisions => "profile_revisions",
+            Self::Runs => "runs",
+            Self::Attempts => "attempts",
+        }
+    }
+}
+
 fn save_immutable_json<T: Serialize>(
     connection: &Connection,
-    table: &str,
+    table: JsonTable,
     record_id: &str,
     value: &T,
     created_at: &str,
@@ -525,7 +726,10 @@ fn save_immutable_json<T: Serialize>(
 
     let existing: Option<String> = connection
         .query_row(
-            &format!("SELECT content_hash FROM {table} WHERE record_id = ?1"),
+            &format!(
+                "SELECT content_hash FROM {} WHERE record_id = ?1",
+                table.name()
+            ),
             params![record_id],
             |row| row.get(0),
         )
@@ -541,13 +745,96 @@ fn save_immutable_json<T: Serialize>(
     connection
         .execute(
             &format!(
-                "INSERT INTO {table} (record_id, content_hash, document_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4)"
+                "INSERT INTO {} (record_id, content_hash, document_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                table.name()
             ),
             params![record_id, content_hash, document_json, created_at],
         )
         .map_err(|_| StorageError::DatabaseFailure)?;
     Ok(SaveOutcome::Saved)
+}
+
+fn list_json_records<T: DeserializeOwned>(
+    connection: &Connection,
+    table: JsonTable,
+) -> Result<Vec<T>, StorageError> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT document_json FROM {} ORDER BY created_at, record_id",
+            table.name()
+        ))
+        .map_err(|_| StorageError::DatabaseFailure)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| StorageError::DatabaseFailure)?;
+    rows.map(|row| {
+        let document = row.map_err(|_| StorageError::DatabaseFailure)?;
+        serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure)
+    })
+    .collect()
+}
+
+fn get_json_record<T: DeserializeOwned>(
+    connection: &Connection,
+    table: JsonTable,
+    record_id: &str,
+) -> Result<Option<T>, StorageError> {
+    let document: Option<String> = connection
+        .query_row(
+            &format!(
+                "SELECT document_json FROM {} WHERE record_id = ?1",
+                table.name()
+            ),
+            params![record_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| StorageError::DatabaseFailure)?;
+    document
+        .map(|document| serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure))
+        .transpose()
+}
+
+fn validate_record_id(record_id: &str) -> Result<(), StorageError> {
+    if record_id.is_empty()
+        || record_id.len() > 128
+        || matches!(record_id, "." | "..")
+        || !record_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_artifact_write(
+    kind: &str,
+    artifact: &ArtifactRef,
+    bytes: &[u8],
+) -> Result<String, StorageError> {
+    validate_artifact_reference(artifact)?;
+    if kind.trim().is_empty() {
+        return Err(StorageError::InvalidArtifactReference);
+    }
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(StorageError::ArtifactTooLarge);
+    }
+    let computed_hash = sha256_hex(bytes);
+    if let Some(expected_hash) = &artifact.sha256 {
+        if !expected_hash.eq_ignore_ascii_case(&computed_hash) {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+    }
+    Ok(computed_hash)
+}
+
+fn artifact_metadata_matches(left: &ArtifactRecord, right: &ArtifactRecord) -> bool {
+    left.kind == right.kind
+        && left.relative_path == right.relative_path
+        && left.schema_version == right.schema_version
+        && left.sha256 == right.sha256
 }
 
 fn canonical_json_and_hash(value: &serde_json::Value) -> Result<(String, String), StorageError> {
@@ -706,7 +993,7 @@ mod tests {
 
     use super::{
         ArtifactRef, ArtifactStore, SaveOutcome, StorageError, StorageLayout, StorageService,
-        ARTIFACT_SCHEMA_VERSION, FOUNDATION_MIGRATION,
+        ARTIFACT_SCHEMA_VERSION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -839,11 +1126,114 @@ mod tests {
             .unwrap();
         assert!(record.sha256.is_some());
         assert_eq!(
+            service
+                .write_artifact("run-output", &artifact, br#"{\"ok\":true}"#, "200")
+                .unwrap(),
+            record
+        );
+        let mut kind_conflict = artifact.clone();
+        kind_conflict.sha256 = record.sha256.clone();
+        assert_eq!(
+            service.write_artifact("other-kind", &kind_conflict, br#"{\"ok\":true}"#, "200"),
+            Err(StorageError::ImmutableConflict)
+        );
+        let mut path_conflict = artifact.clone();
+        path_conflict.relative_path = "runs/run-1/other.json".to_owned();
+        assert_eq!(
+            service.write_artifact("run-output", &path_conflict, br#"{\"ok\":true}"#, "200"),
+            Err(StorageError::ImmutableConflict)
+        );
+        let mut schema_conflict = artifact.clone();
+        schema_conflict.schema_version = 2;
+        assert_eq!(
+            service.write_artifact("run-output", &schema_conflict, br#"{\"ok\":true}"#, "200"),
+            Err(StorageError::ImmutableConflict)
+        );
+        let different_id_same_path =
+            ArtifactRef::new("other-output", "runs/run-1/output.json").unwrap();
+        assert_eq!(
+            service.write_artifact(
+                "run-output",
+                &different_id_same_path,
+                br#"{\"ok\":true}"#,
+                "200"
+            ),
+            Err(StorageError::ImmutableConflict)
+        );
+        assert_eq!(
             service.write_artifact("run-output", &artifact, b"changed", "200"),
             Err(StorageError::ArtifactAlreadyExists)
         );
+        let oversized = ArtifactRef::new("oversized-output", "runs/run-1/oversized.json").unwrap();
+        let oversized_bytes = vec![b'x'; MAX_ARTIFACT_BYTES + 1];
+        assert_eq!(
+            service.write_artifact("run-output", &oversized, &oversized_bytes, "200"),
+            Err(StorageError::ArtifactTooLarge)
+        );
+        let existing_path = service
+            .layout()
+            .artifact_root()
+            .join("runs/run-1/existing-too-large.json");
+        fs::create_dir_all(existing_path.parent().unwrap()).unwrap();
+        fs::write(&existing_path, vec![b'x'; MAX_ARTIFACT_BYTES + 1]).unwrap();
+        let existing_too_large =
+            ArtifactRef::new("existing-too-large", "runs/run-1/existing-too-large.json").unwrap();
+        assert_eq!(
+            service.write_artifact("run-output", &existing_too_large, b"small", "200"),
+            Err(StorageError::ArtifactTooLarge)
+        );
         assert_eq!(ARTIFACT_SCHEMA_VERSION, 1);
         assert_eq!(service.list_benchmark_versions().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_apis_validate_ids_and_sort_deterministically() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+
+        let mut run_z = run();
+        run_z.run_id = "run-z".to_owned();
+        assert_eq!(service.save_run(&run_z, "100").unwrap(), SaveOutcome::Saved);
+        let mut run_a = run();
+        run_a.run_id = "run-a".to_owned();
+        assert_eq!(service.save_run(&run_a, "100").unwrap(), SaveOutcome::Saved);
+        let run_ids: Vec<String> = service
+            .list_runs()
+            .unwrap()
+            .into_iter()
+            .map(|run| run.run_id)
+            .collect();
+        assert_eq!(run_ids, vec!["run-a", "run-z"]);
+        assert_eq!(service.get_run("run-a").unwrap().unwrap().run_id, "run-a");
+
+        let mut attempt_z = attempt();
+        attempt_z.attempt_id = "attempt-z".to_owned();
+        attempt_z.run_id = "run-a".to_owned();
+        service.save_attempt(&attempt_z, "100").unwrap();
+        let mut attempt_a = attempt();
+        attempt_a.attempt_id = "attempt-a".to_owned();
+        attempt_a.run_id = "run-a".to_owned();
+        service.save_attempt(&attempt_a, "100").unwrap();
+        let attempt_ids: Vec<String> = service
+            .list_attempts("run-a")
+            .unwrap()
+            .into_iter()
+            .map(|attempt| attempt.attempt_id)
+            .collect();
+        assert_eq!(attempt_ids, vec!["attempt-a", "attempt-z"]);
+
+        for invalid_id in ["", "../run-a", "run\\a", ".", ".."] {
+            assert_eq!(
+                service.get_run(invalid_id),
+                Err(StorageError::InvalidRecordId)
+            );
+            assert_eq!(
+                service.list_attempts(invalid_id),
+                Err(StorageError::InvalidRecordId)
+            );
+        }
+        assert_eq!(service.get_run("missing").unwrap(), None);
         let _ = fs::remove_dir_all(root);
     }
 
