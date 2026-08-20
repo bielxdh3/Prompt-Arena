@@ -3,7 +3,8 @@
 Phase 01 established storage vocabulary and contracts. Phase 02 adds local metadata persistence and immutable artifact
 writes. Phase 04 adds one-shot orchestration evidence while keeping the store local-first and append-only. Phase 05 adds
 bounded editable benchmark drafts without changing immutable benchmark-version history. Phase 06 adds a bounded local
-profile-revision registry and fixed-loopback Ollama discovery; it does not define the full model-library catalog.
+profile-revision registry and fixed-loopback Ollama discovery; it does not define the full model-library catalog. Phase 07
+adds a read-only published-version record and a pure one-shot run-plan contract; it does not add run authoring state.
 
 ## Foundation records
 
@@ -67,6 +68,29 @@ no model, and does not manage cloud providers or runtime process lifecycles.
 
 Browser preview has no profile/model persistence boundary: it displays unsaved fields and explicit preview states,
 never invokes desktop profile/model commands, queries Ollama, reads SQLite, or creates sample records.
+
+## Phase 07 published version and run-plan boundary
+
+`get_benchmark_version` accepts one bounded portable `benchmark-id@version` identity. It returns a typed record containing
+the existing `BenchmarkVersionSummary` and the stored canonical `documentJson`; a missing valid ID returns no record,
+while malformed IDs are rejected. The read is local and side-effect-free: it does not re-save, re-canonicalize, or alter
+the immutable `benchmark_versions` row.
+
+The pure TypeScript plan builder consumes that published record, a real immutable `ProfileRevision`, and explicit task
+and case IDs. It validates the summary/document benchmark identity, positive version number, exact `profile-id@revision`
+identity, fixed `ollama` runtime, bounded model and profile request data, and exactly one benchmark repetition. It then
+selects one matching task and case, requires a non-empty bounded task prompt, combines task and optional case prompts
+with `\n\n`, combines profile and task system prompts in profile-then-task order, and sets the generation model from the
+profile. Profile revisions keep serde-flattened unknown fields at the top level: the browser form emits only explicit
+fields, while the plan builder preserves unknown JSON fields after bounded validation without a nested `extra` wrapper.
+Supported profile generation parameters are mapped into the existing `GenerationRequest`; unknown parameter keys are
+rejected in this slice.
+
+The resulting `RunPlan` contains the existing run ID, published version ID, selected case ID, immutable profile,
+generation request, and a fresh default Ollama configuration for `http://127.0.0.1:11434`. Its serialized size remains
+bounded by the existing one-shot plan limit. The bridge exposes typed version read and one-shot execution functions,
+but browser preview does not call either function, create records, or invent task/case/profile data. Full repetition
+controls, run authoring, cancellation, and process lifecycle remain planned.
 
 ## Benchmark vocabulary for later phases
 

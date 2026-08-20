@@ -23,7 +23,7 @@ use crate::{
     },
     runtime::{ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
-        now_marker, BenchmarkDraft, BenchmarkDraftInput, BenchmarkDraftSummary,
+        now_marker, BenchmarkDraft, BenchmarkDraftInput, BenchmarkDraftSummary, BenchmarkVersion,
         BenchmarkVersionSummary, StorageError, StorageService, MAX_DRAFT_REQUEST_BYTES,
         MAX_PROFILE_REQUEST_BYTES,
     },
@@ -152,6 +152,14 @@ pub fn list_benchmark_versions(
     storage_for(&app)?
         .list_benchmark_versions()
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_benchmark_version(
+    app: AppHandle,
+    version_id: String,
+) -> Result<Option<BenchmarkVersion>, CommandError> {
+    read_benchmark_version_from_storage(&storage_for(&app)?, &version_id)
 }
 
 #[tauri::command]
@@ -498,6 +506,15 @@ fn storage_for(app: &AppHandle) -> Result<StorageService, CommandError> {
     StorageService::open(root).map_err(Into::into)
 }
 
+fn read_benchmark_version_from_storage(
+    storage: &StorageService,
+    version_id: &str,
+) -> Result<Option<BenchmarkVersion>, CommandError> {
+    storage
+        .get_benchmark_version(version_id)
+        .map_err(Into::into)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageState {
@@ -541,9 +558,19 @@ fn supported_platform() -> SupportedPlatform {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        fs,
+        path::Path,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
-    use super::{app_status, worker_executable_name, worker_executable_path, StorageState};
+    use super::{
+        app_status, read_benchmark_version_from_storage, worker_executable_name,
+        worker_executable_path, StorageState,
+    };
+    use crate::storage::StorageService;
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn status_exposes_local_storage_without_runtime_providers() {
@@ -560,5 +587,18 @@ mod tests {
             Some(worker_executable_name())
         );
         assert!(!path.to_string_lossy().contains("prompt-arena.exe/"));
+    }
+
+    #[test]
+    fn published_version_read_maps_invalid_ids_to_typed_command_errors() {
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-command-version-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = StorageService::open(&root).expect("storage opens");
+        let error = read_benchmark_version_from_storage(&storage, "logic").unwrap_err();
+        assert_eq!(error.code, "record_id_invalid");
+        let _ = fs::remove_dir_all(root);
     }
 }

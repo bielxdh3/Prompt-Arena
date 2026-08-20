@@ -16,6 +16,7 @@ pub fn run() -> tauri::Result<()> {
             commands::app_status,
             commands::validate_benchmark_document,
             commands::list_benchmark_versions,
+            commands::get_benchmark_version,
             commands::save_benchmark_version,
             commands::list_benchmark_drafts,
             commands::get_benchmark_draft,

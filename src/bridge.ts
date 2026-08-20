@@ -17,7 +17,7 @@ export type RunRecord = {
   startedAt: string;
   attemptIds: string[];
   environment: Record<string, unknown>;
-  extra: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export type BenchmarkVersionSummary = {
@@ -26,6 +26,11 @@ export type BenchmarkVersionSummary = {
   versionNumber: number;
   contentHash: string;
   createdAt: string;
+};
+
+export type BenchmarkVersion = {
+  summary: BenchmarkVersionSummary;
+  documentJson: string;
 };
 
 export type BenchmarkDraftSummary = {
@@ -59,6 +64,80 @@ export type SavedBenchmarkVersion = {
   summary: BenchmarkVersionSummary;
 };
 
+export type ChatMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  name: string | null;
+  toolCallId: string | null;
+};
+
+export type GenerationParameters = {
+  temperature: number | null;
+  topP: number | null;
+  topK: number | null;
+  maxTokens: number | null;
+  repeatPenalty: number | null;
+  presencePenalty: number | null;
+  frequencyPenalty: number | null;
+};
+
+export type GenerationRequest = {
+  model: string;
+  prompt: string | null;
+  messages: ChatMessage[];
+  systemPrompt: string | null;
+  parameters: GenerationParameters;
+  stopSequences: string[];
+  seed: number | null;
+  tools: Array<{ name: string; description: string | null; parameters: unknown }>;
+  toolPolicy: "none";
+  responseFormat: "Text";
+  metadata: Record<string, unknown>;
+};
+
+export type OllamaConfig = {
+  endpoint: string;
+  connectTimeoutMs: number;
+  readTimeoutMs: number;
+  readDeadlineMs: number;
+};
+
+export type RunPlan = {
+  runId: string;
+  benchmarkVersionId: string;
+  caseId: string;
+  profileRevision: ProfileRevision;
+  generation: GenerationRequest;
+  runtimeConfig: OllamaConfig;
+};
+
+export type AttemptRecord = {
+  attemptId: string;
+  runId: string;
+  profileRevisionId: string;
+  caseId: string;
+  status: string;
+  effectiveConfig: Record<string, unknown>;
+  result: unknown | null;
+  artifacts: unknown[];
+  [key: string]: unknown;
+};
+
+export type ProgressEvent = {
+  sequence: number;
+  attemptId: string;
+  kind: "started" | "chunk" | "progress_truncated" | "completed" | "cancelled" | "failed";
+  text: string | null;
+  done: boolean;
+};
+
+export type PersistedExecution = {
+  run: RunRecord;
+  attempt: AttemptRecord;
+  progress: ProgressEvent[];
+  saveOutcome: "saved" | "already_present";
+};
+
 export type ProfileRevision = {
   profileId: string;
   profileRevisionId: string;
@@ -67,7 +146,7 @@ export type ProfileRevision = {
   runtime: string;
   parameters: Record<string, unknown>;
   systemPrompt: string | null;
-  extra: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export type ProfileRevisionRegistration = {
@@ -140,6 +219,14 @@ export async function readBenchmarkVersions(): Promise<BenchmarkVersionSummary[]
   );
 }
 
+export async function readBenchmarkVersion(versionId: string): Promise<BenchmarkVersion | null> {
+  return invokeDesktop<BenchmarkVersion | null>(
+    "get_benchmark_version",
+    "The selected local benchmark version could not be reached.",
+    { versionId },
+  );
+}
+
 export async function readBenchmarkDrafts(): Promise<BenchmarkDraftSummary[]> {
   return invokeDesktop<BenchmarkDraftSummary[]>(
     "list_benchmark_drafts",
@@ -200,5 +287,13 @@ export async function readLocalOllamaModels(): Promise<ModelInfo[]> {
   return invokeDesktop<ModelInfo[]>(
     "list_local_ollama_models",
     "The local Ollama model list could not be reached.",
+  );
+}
+
+export async function executeRunOnce(plan: RunPlan): Promise<PersistedExecution> {
+  return invokeDesktop<PersistedExecution>(
+    "execute_run_once",
+    "The one-shot run could not be executed.",
+    { plan },
   );
 }

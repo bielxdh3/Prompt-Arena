@@ -20,6 +20,12 @@ discovery through the existing Ollama adapter. Discovery uses only the fixed `ht
 endpoint and returns bounded, sorted metadata with typed unavailable/protocol errors. There are no endpoint or
 credential fields, downloads, deletion, cloud providers, or browser-side profile/model records; full model-library
 management remains planned.
+Phase 07 — DONE (bounded) — adds a typed read for one published benchmark version, returning its summary and canonical
+document JSON without mutation. A pure helper builds one bounded `RunPlan` from that real document, one real immutable
+profile revision, and selected task/case identities; it derives the model from the profile, combines prompts
+deterministically, uses exactly one repetition, and supplies the fixed/default Ollama runtime configuration. The typed
+bridge can execute the existing one-shot command, but there is no run-authoring UI, fake record, cancellation control,
+arbitrary endpoint, credential, cloud, or process-lifecycle surface.
 
 ## Run locally
 
@@ -50,13 +56,18 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 
 - Local data belongs to the app-owned storage root. Migrations `0001_foundation.sql`, `0002_core_arena.sql`, and
   `0003_benchmark_drafts.sql` create SQLite metadata tables; large payloads remain immutable filesystem artifacts.
-- The registered Tauri commands remain typed, including profile-revision listing/registration, fixed-loopback Ollama
-  model discovery, run execution, and Runs read commands.
+- The registered Tauri commands remain typed, including published benchmark-version read, profile-revision
+  listing/registration, fixed-loopback Ollama model discovery, one-shot run execution, and Runs read commands.
   `execute_run_once` resolves only the fixed app-sibling worker executable, passes one bounded JSON request without a
   shell or arbitrary arguments, and persists the returned terminal outcome in the app-owned store. Benchmark draft
   list/read/save/publish commands accept only typed local requests and use optimistic revision checks. Browser preview
   never reads or writes desktop records, executes a model, or invents run records. No account, cloud, or telemetry
   capability is enabled.
+- Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
+  document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
+  immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
+  size violations before producing a plan. The helper has no endpoint or credential input and always uses the fixed
+  `http://127.0.0.1:11434` default configuration with one repetition.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.

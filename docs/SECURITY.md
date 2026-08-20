@@ -4,7 +4,8 @@
 
 The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
 typed status, benchmark/profile/draft persistence, fixed-loopback Ollama discovery, one-shot execution, and Runs read
-operations; they operate only on typed data and the app-owned local storage root. Draft saves use bounded requests and
+operations plus a read-only published benchmark-version command; they operate only on typed data and the app-owned local
+storage root. Draft saves use bounded requests and
 optimistic revisions; publishing revalidates the stored document before creating an immutable benchmark version. The
 capability file contains no plugin permissions. The worker accepts a tagged protocol, validates its version, job ID,
 and request bound, performs one generation at most, returns one typed terminal response, and exits.
@@ -25,6 +26,8 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 - The execution command resolves only the fixed worker binary beside the current app executable, supplies no shell or
   arbitrary command arguments, and bounds both request and response bytes.
 - Benchmark documents are deserialized and manually validated at the domain boundary; unknown JSON fields are retained.
+- Published version reads validate the deterministic bounded `benchmark-id@version` identity and return only the stored
+  canonical document JSON plus summary. They do not import, rewrite, re-canonicalize, or publish benchmark history.
 - Benchmark drafts are canonicalized before local storage and enforce portable IDs, a 256-byte title limit, a 256 KiB
   document limit, a 512 KiB request limit, and revision checks. Draft state is mutable; published benchmark versions
   remain immutable and conflicting content is rejected.
@@ -49,6 +52,10 @@ from an already-running local Ollama service; it does not spawn or forcibly term
   socket timeout.
 - Cancellation is cooperative: the client checks the token between socket reads and streamed chunks and returns a typed
   cancellation error. It has no remote process-kill capability.
+- The run-plan helper accepts no endpoint, credential, shell, provider, or lifecycle input. It validates the published
+  version/document identity, selected task/case identity, non-empty prompt, immutable profile identity/runtime/model,
+  supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It always emits the
+  fixed/default `http://127.0.0.1:11434` Ollama configuration and delegates only to the existing one-shot worker.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explicit profile/model preview
   states only. It cannot invoke draft/version/profile/model commands, validate benchmarks, query Ollama, or invent
   records. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
@@ -56,10 +63,10 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 ## Required future controls
 
 External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, run authoring/model
-execution UI, evaluation, official benchmark packs, full model-library management, broader benchmark authoring/import
-flows, and destructive cleanup are not implemented here. When added, they require explicit capability review, allowlisted
-executable paths, bounded arguments, safe archive extraction, credential isolation, cancellation, and confirmation for
-user data deletion.
+execution UI beyond the bounded plan helper, evaluation, official benchmark packs, full model-library management,
+broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
+explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
+isolation, cancellation, and confirmation for user data deletion.
 Historical benchmark records must not be deleted as a migration side effect.
 
 No secrets, tokens, private logs, or databases belong in source control or validation output.
