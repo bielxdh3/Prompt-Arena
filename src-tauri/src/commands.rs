@@ -10,9 +10,10 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     domain::{
-        validate_benchmark_document as validate_document, Attempt, BlindEvaluationLockRequest,
-        BlindEvaluationPreparation, BlindEvaluationRecord, ProfileRevision, Run,
-        ValidatedBenchmark, ValidationError,
+        validate_benchmark_document as validate_document,
+        validate_benchmark_document_size as validate_document_size, Attempt,
+        BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord,
+        ProfileRevision, Run, ValidatedBenchmark, ValidationError,
     },
     evaluation::{
         get_blind_evaluation as get_blind_evaluation_record,
@@ -75,7 +76,11 @@ pub struct CommandError {
 impl From<ValidationError> for CommandError {
     fn from(error: ValidationError) -> Self {
         Self {
-            code: "benchmark_invalid",
+            code: if matches!(error, ValidationError::BenchmarkDocumentTooLarge) {
+                "benchmark_too_large"
+            } else {
+                "benchmark_invalid"
+            },
             message: error.to_string(),
         }
     }
@@ -100,8 +105,12 @@ impl From<StorageError> for CommandError {
             StorageError::DraftRequestTooLarge => "draft_request_too_large",
             StorageError::InvalidDraftMetadata => "draft_metadata_invalid",
             StorageError::InvalidDraftDocument => "draft_invalid",
+            StorageError::BenchmarkDocumentTooLarge => "benchmark_too_large",
             StorageError::DraftNotFound => "draft_not_found",
             StorageError::DraftRevisionConflict => "draft_revision_conflict",
+            StorageError::BenchmarkInvalid(ValidationError::BenchmarkDocumentTooLarge) => {
+                "benchmark_too_large"
+            }
             StorageError::BenchmarkInvalid(_) => "benchmark_invalid",
             StorageError::InvalidProfileRevision => "profile_revision_invalid",
             StorageError::ProfileRequestTooLarge => "profile_request_too_large",
@@ -171,7 +180,17 @@ impl From<BlindEvaluationError> for CommandError {
 impl From<OfficialPackError> for CommandError {
     fn from(error: OfficialPackError) -> Self {
         Self {
-            code: "official_pack_invalid",
+            code: if matches!(
+                error,
+                OfficialPackError::InvalidDocument {
+                    error: ValidationError::BenchmarkDocumentTooLarge,
+                    ..
+                }
+            ) {
+                "benchmark_too_large"
+            } else {
+                "official_pack_invalid"
+            },
             message: error.to_string(),
         }
     }
@@ -254,6 +273,7 @@ pub fn save_benchmark_draft(
     app: AppHandle,
     request: SaveBenchmarkDraftRequest,
 ) -> Result<BenchmarkDraft, CommandError> {
+    validate_document_size(&request.document_json)?;
     let request_bytes = serde_json::to_vec(&request).map_err(|_| CommandError {
         code: "draft_request_too_large",
         message: "the benchmark draft request could not be encoded".to_owned(),

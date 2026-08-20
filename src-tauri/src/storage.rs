@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{
     canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
-    validate_artifact_ref, validate_benchmark_document, Attempt, BlindEvaluationRecord,
-    ImmutableResultReference, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+    validate_artifact_ref, validate_benchmark_document, validate_benchmark_document_size, Attempt,
+    BlindEvaluationRecord, ImmutableResultReference, ProfileRevision, Run, ValidatedBenchmark,
+    ValidationError, MAX_BENCHMARK_DOCUMENT_BYTES,
 };
 
 use crate::runtime::GenerationResponse;
@@ -30,7 +31,7 @@ pub const BLIND_EVALUATIONS_MIGRATION: &str =
     include_str!("storage/migrations/0004_blind_evaluations.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
-pub const MAX_DRAFT_DOCUMENT_BYTES: usize = 256 * 1024;
+pub const MAX_DRAFT_DOCUMENT_BYTES: usize = MAX_BENCHMARK_DOCUMENT_BYTES;
 pub const MAX_DRAFT_REQUEST_BYTES: usize = 512 * 1024;
 pub const MAX_DRAFT_TITLE_BYTES: usize = 256;
 pub const MAX_PROFILE_REQUEST_BYTES: usize = 256 * 1024;
@@ -254,6 +255,7 @@ pub enum StorageError {
     DraftRequestTooLarge,
     InvalidDraftMetadata,
     InvalidDraftDocument,
+    BenchmarkDocumentTooLarge,
     DraftNotFound,
     DraftRevisionConflict,
     BenchmarkInvalid(ValidationError),
@@ -286,6 +288,7 @@ impl std::fmt::Display for StorageError {
             Self::DraftRequestTooLarge => "benchmark draft request exceeds the local size limit",
             Self::InvalidDraftMetadata => "benchmark draft metadata is invalid",
             Self::InvalidDraftDocument => "benchmark draft document is not valid JSON",
+            Self::BenchmarkDocumentTooLarge => "benchmark document exceeds the raw byte limit",
             Self::DraftNotFound => "benchmark draft was not found",
             Self::DraftRevisionConflict => "benchmark draft revision is stale",
             Self::BenchmarkInvalid(_) => unreachable!("handled above"),
@@ -1261,9 +1264,10 @@ fn validate_draft_request(
 }
 
 fn canonical_draft_document(document_json: &str) -> Result<String, StorageError> {
-    if document_json.len() > MAX_DRAFT_DOCUMENT_BYTES {
-        return Err(StorageError::MetadataTooLarge);
-    }
+    validate_benchmark_document_size(document_json).map_err(|error| match error {
+        ValidationError::BenchmarkDocumentTooLarge => StorageError::BenchmarkDocumentTooLarge,
+        _ => StorageError::InvalidDraftDocument,
+    })?;
     let value: serde_json::Value =
         serde_json::from_str(document_json).map_err(|_| StorageError::InvalidDraftDocument)?;
     if !value.is_object() {
@@ -1696,7 +1700,7 @@ mod tests {
         );
         assert_eq!(
             service.save_benchmark_draft(&oversized_document, 0, "100"),
-            Err(StorageError::MetadataTooLarge)
+            Err(StorageError::BenchmarkDocumentTooLarge)
         );
         let mut oversized_title = draft;
         oversized_title.title = "x".repeat(MAX_DRAFT_TITLE_BYTES + 1);

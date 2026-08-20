@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 pub const BENCHMARK_SCHEMA_VERSION: u16 = 1;
 pub const BENCHMARK_KIND: &str = "benchmark";
+pub const MAX_BENCHMARK_DOCUMENT_BYTES: usize = 256 * 1024;
 /// Checked-in contract/reference for benchmark v1. Runtime enforcement is
 /// serde deserialization plus deterministic manual checks below; Phase 02 does
 /// not execute a JSON Schema engine. Focused tests cover the promised shape,
@@ -277,6 +278,7 @@ pub struct ValidatedBenchmark {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
+    BenchmarkDocumentTooLarge,
     InvalidJson,
     InvalidShape,
     UnsupportedSchemaVersion,
@@ -290,6 +292,7 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
+            Self::BenchmarkDocumentTooLarge => "benchmark document exceeds the raw byte limit",
             Self::InvalidJson => "benchmark document is not valid JSON",
             Self::InvalidShape => "benchmark document does not match the required shape",
             Self::UnsupportedSchemaVersion => "benchmark schema version is unsupported",
@@ -308,6 +311,7 @@ impl fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 pub fn validate_benchmark_document(input: &str) -> Result<ValidatedBenchmark, ValidationError> {
+    validate_benchmark_document_size(input)?;
     let value: Value = serde_json::from_str(input).map_err(|_| ValidationError::InvalidJson)?;
     let document: BenchmarkDocument =
         serde_json::from_value(value).map_err(|_| ValidationError::InvalidShape)?;
@@ -348,6 +352,13 @@ pub fn validate_benchmark_document(input: &str) -> Result<ValidatedBenchmark, Va
         version_id: expected_version_id,
         content_hash,
     })
+}
+
+pub fn validate_benchmark_document_size(input: &str) -> Result<(), ValidationError> {
+    if input.as_bytes().len() > MAX_BENCHMARK_DOCUMENT_BYTES {
+        return Err(ValidationError::BenchmarkDocumentTooLarge);
+    }
+    Ok(())
 }
 
 pub fn stable_version_id(
@@ -550,7 +561,8 @@ fn validate_text(value: &str) -> Result<(), ValidationError> {
 mod tests {
     use super::{
         canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
-        validate_benchmark_document, BENCHMARK_SCHEMA, BENCHMARK_SCHEMA_VERSION,
+        validate_benchmark_document, ValidationError, BENCHMARK_SCHEMA, BENCHMARK_SCHEMA_VERSION,
+        MAX_BENCHMARK_DOCUMENT_BYTES,
     };
     use serde_json::{json, Value};
 
@@ -603,6 +615,15 @@ mod tests {
             &valid_document().replace("\"schemaVersion\":1", "\"schemaVersion\":2")
         )
         .is_err());
+    }
+
+    #[test]
+    fn validation_rejects_oversized_raw_documents_before_parsing() {
+        let oversized = "x".repeat(MAX_BENCHMARK_DOCUMENT_BYTES + 1);
+        assert_eq!(
+            validate_benchmark_document(&oversized),
+            Err(ValidationError::BenchmarkDocumentTooLarge)
+        );
     }
 
     #[test]

@@ -257,17 +257,25 @@ External providers are secondary and must not block the local-first core.
 - Storage cleanup/retention UI.
 - Local diagnostics.
 
-## Phase H — Hardening and Review Readiness
+## Phase H — Hardening and Review Readiness — IN PROGRESS
 
-- Security closeout.
-- Windows/Linux build/package validation.
-- Test/CI stabilization.
-- Performance/resource profiling.
-- Clean-install smoke testing where possible.
-- Documentation sync.
-- Multiple coherent commits and stacked PRs.
-- Final umbrella PR to `main` without merging.
-- Master PONYTAIL report and minimal human-action queue.
+### Phase 17 — Bounded boundary and review-readiness checks — DONE (bounded)
+
+- A dependency-free Node checker validates the Windows/Linux pull-request matrix, inactive non-macOS Tauri packaging,
+  local-font/CSP/loopback invariants, secret-file ignore rules, required lockfiles, and tracked secret-like/key material
+  absence without printing file contents.
+- Deterministic checker fixtures cover accepted/rejected workflow and packaging states, ignore rules, and generated key
+  screening. CI runs the checker and `npm audit --omit=dev --audit-level=high` after install on both official runners.
+- `docs/RELEASE_CHECKLIST.md` defines local validation, package/build boundaries, security/privacy scan, provenance,
+  remote CI, draft-PR/no-merge, and human-only visual/browser QA. No publication, signing, release, deploy, or merge is
+  enabled by this phase.
+
+### Future Phase H work
+
+- Security closeout and review of remaining findings.
+- Windows/Linux build/package validation when explicitly authorized.
+- Performance/resource profiling and clean-install smoke testing where possible.
+- Documentation sync, draft PR preparation, and the human-action queue.
 
 ## Status legend
 
