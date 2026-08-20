@@ -72,10 +72,22 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
   JSON expectations, imports, cloning, multi-item authoring, or browser persistence; browser preview shows unsaved
   editor state only.
 
+### Phase 06 — Local profiles and Ollama model discovery — DONE (bounded)
+
+- Immutable profile revisions can be listed and registered through typed desktop commands. Registration validates the
+  deterministic `profile-id@revision` identity and the complete bounded request, including `parameters` and flattened
+  `extra`; replay is idempotent and changed historical content remains an immutable conflict.
+- The Models view reads installed local Ollama models through the existing adapter and exactly
+  `http://127.0.0.1:11434`, with at most 512 records, per-record bounded metadata, deterministic ordering, and typed
+  unavailable/protocol errors. It does not accept endpoint or credential input and has no download, deletion, cloud, or
+  process-lifecycle behavior.
+- Browser preview never invokes profile/model commands and never invents profile or model records. Full model-library
+  management, cross-runtime grouping, hardware recommendations, downloads, and deletion remain planned.
+
 ### Remaining Phase B work
 
 - `PLANNED` — Run authoring/controls, interruption recovery, and evaluation.
-- Model/profile registration and immutable profile revisions.
+- `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
 - Arena builder.
 - Metrics and effective configuration snapshots.
 - Objective verification.
@@ -94,7 +106,7 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 
 ## Phase D — Model Library — PLANNED
 
-- Runtime/model auto-discovery.
+- Unified runtime/model auto-discovery beyond the fixed local Ollama discovery slice.
 - Unified search across supported sources.
 - Backend-native downloads.
 - Quantization/format/license/context metadata.

@@ -885,6 +885,81 @@ button.benchmark-record-row:hover {
   color: var(--color-accent-strong);
 }
 
+.models-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.model-list-panel,
+.profile-panel {
+  min-width: 0;
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.model-list,
+.profile-record-list {
+  border-top: 1px solid var(--color-border);
+}
+
+.model-row,
+.profile-record-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.model-row h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.model-meta {
+  margin: 5px 0 0;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+}
+
+.model-size {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.profile-form {
+  display: grid;
+  gap: 15px;
+  margin-bottom: 28px;
+}
+
+.profile-form .primary-button {
+  justify-self: start;
+}
+
+.profile-records .compact-heading {
+  margin-bottom: 14px;
+}
+
+.profile-record-row strong,
+.profile-record-row small {
+  display: block;
+}
+
+.profile-record-row strong {
+  font-size: 14px;
+}
+
+.profile-record-row small {
+  margin-top: 5px;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+}
+
 @keyframes pulse {
   50% {
     opacity: 0.35;
@@ -928,6 +1003,10 @@ button.benchmark-record-row:hover {
   }
 
   .benchmark-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .models-layout {
     grid-template-columns: 1fr;
   }
 }

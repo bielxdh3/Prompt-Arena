@@ -17,6 +17,9 @@ use crate::runtime::{
 };
 
 pub const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
+pub const MAX_LOCAL_MODEL_COUNT: usize = 512;
+pub const MAX_LOCAL_MODEL_METADATA_BYTES: usize = 256 * 1024;
+pub const MAX_LOCAL_MODEL_NAME_BYTES: usize = 256;
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 1_500;
 const DEFAULT_READ_TIMEOUT_MS: u64 = 500;
 const DEFAULT_READ_DEADLINE_MS: u64 = 10 * 60 * 1000;
@@ -367,13 +370,30 @@ impl RuntimeProvider for OllamaProvider {
             .ok_or_else(|| RuntimeError::Protocol {
                 message: "runtime model list did not contain a models array".to_owned(),
             })?;
-        models.iter().map(parse_model_info).collect()
+        if models.len() > MAX_LOCAL_MODEL_COUNT {
+            return Err(RuntimeError::Protocol {
+                message: "runtime model list exceeded the local item limit".to_owned(),
+            });
+        }
+        let mut models = models
+            .iter()
+            .map(parse_model_info)
+            .collect::<Result<Vec<_>, _>>()?;
+        models.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then(left.digest.cmp(&right.digest))
+        });
+        Ok(models)
     }
 
     fn model_info(&self, model: &str) -> Result<ModelInfo, RuntimeError> {
-        if model.trim().is_empty() {
+        if model.trim().is_empty()
+            || model.len() > MAX_LOCAL_MODEL_NAME_BYTES
+            || model.chars().any(char::is_control)
+        {
             return Err(RuntimeError::InvalidConfiguration {
-                message: "model name must be non-empty".to_owned(),
+                message: "model name must be non-empty and within local bounds".to_owned(),
             });
         }
         let cancellation = CancellationToken::new();
@@ -810,7 +830,7 @@ fn parse_model_info_with_fallback(
         metadata.insert("modelInfo".to_owned(), model_info.clone());
     }
 
-    Ok(ModelInfo {
+    let model = ModelInfo {
         name: name.to_owned(),
         digest: object
             .get("digest")
@@ -835,7 +855,52 @@ fn parse_model_info_with_fallback(
             .map(str::to_owned),
         context_length: model_info.and_then(context_length),
         metadata,
-    })
+    };
+    validate_model_info(&model)?;
+    Ok(model)
+}
+
+fn validate_model_info(model: &ModelInfo) -> Result<(), RuntimeError> {
+    validate_model_text(&model.name, "name", MAX_LOCAL_MODEL_NAME_BYTES)?;
+    for (field, value) in [
+        ("digest", model.digest.as_deref()),
+        ("modified_at", model.modified_at.as_deref()),
+        ("family", model.family.as_deref()),
+        ("parameter_size", model.parameter_size.as_deref()),
+        ("quantization_level", model.quantization_level.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_model_text(value, field, MAX_LOCAL_MODEL_NAME_BYTES)?;
+        }
+    }
+    if model
+        .metadata
+        .keys()
+        .any(|key| key.len() > MAX_LOCAL_MODEL_NAME_BYTES || key.chars().any(char::is_control))
+    {
+        return Err(RuntimeError::Protocol {
+            message: "runtime model metadata contains an invalid key".to_owned(),
+        });
+    }
+    let metadata_bytes =
+        serde_json::to_vec(&model.metadata).map_err(|_| RuntimeError::Protocol {
+            message: "runtime model metadata could not be encoded".to_owned(),
+        })?;
+    if metadata_bytes.len() > MAX_LOCAL_MODEL_METADATA_BYTES {
+        return Err(RuntimeError::Protocol {
+            message: "runtime model metadata exceeded the local size limit".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_model_text(value: &str, field: &str, max_bytes: usize) -> Result<(), RuntimeError> {
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
+        return Err(RuntimeError::Protocol {
+            message: format!("runtime model {field} is invalid or exceeds local bounds"),
+        });
+    }
+    Ok(())
 }
 
 fn context_length(model_info: &Map<String, Value>) -> Option<u64> {
@@ -1213,7 +1278,8 @@ mod tests {
 
     use super::{
         OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_READ_DEADLINE_MS,
-        MAX_HTTP_LINE_BYTES, MAX_STREAMED_RESPONSE_BYTES,
+        MAX_HTTP_LINE_BYTES, MAX_LOCAL_MODEL_COUNT, MAX_LOCAL_MODEL_METADATA_BYTES,
+        MAX_STREAMED_RESPONSE_BYTES,
     };
 
     struct MockServer {
@@ -1435,6 +1501,51 @@ mod tests {
         assert!(requests[0].starts_with("GET /api/version HTTP/1.1"));
         assert!(requests[1].starts_with("GET /api/tags HTTP/1.1"));
         assert!(requests[2].starts_with("POST /api/show HTTP/1.1"));
+    }
+
+    #[test]
+    fn model_listing_is_sorted_and_bounded() {
+        let server = MockServer::start(vec![MockReply::Json(
+            200,
+            json!({
+                "models": [
+                    {"name": "zeta:latest", "digest": "z"},
+                    {"name": "alpha:latest", "digest": "a"}
+                ]
+            }),
+        )]);
+        let models = server.provider().list_models().expect("models list");
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha:latest", "zeta:latest"]
+        );
+
+        let oversized = super::parse_model_info(&json!({
+            "name": "bounded",
+            "padding": "x".repeat(MAX_LOCAL_MODEL_METADATA_BYTES)
+        }));
+        assert!(matches!(oversized, Err(RuntimeError::Protocol { .. })));
+    }
+
+    #[test]
+    fn model_listing_shape_and_count_limits_are_typed() {
+        let malformed = MockServer::start(vec![MockReply::Json(200, json!({"models": {}}))]);
+        assert!(matches!(
+            malformed.provider().list_models(),
+            Err(RuntimeError::Protocol { .. })
+        ));
+
+        let too_many = (0..=MAX_LOCAL_MODEL_COUNT)
+            .map(|index| json!({"name": format!("model-{index}")}))
+            .collect::<Vec<_>>();
+        let server = MockServer::start(vec![MockReply::Json(200, json!({"models": too_many}))]);
+        assert!(matches!(
+            server.provider().list_models(),
+            Err(RuntimeError::Protocol { .. })
+        ));
     }
 
     #[test]

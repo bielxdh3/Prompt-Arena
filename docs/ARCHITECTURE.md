@@ -4,7 +4,7 @@ Prompt Arena is a standalone local-first desktop application with three delibera
 
 ```text
 React/TypeScript UI
-        │ typed status, validation, draft/version persistence, execution, and Runs read commands
+        │ typed status, validation, draft/version persistence, profile/model reads, execution, and Runs reads
 Tauri 2 desktop boundary
         ├─ app-owned local storage service
         │  ├─ SQLite metadata migrations
@@ -20,8 +20,9 @@ Rust runtime modules (Phase 03 adapter; invoked by the bounded worker)
 
 The UI owns presentation state only. The Tauri entrypoint registers the small command set explicitly: status and
 benchmark validation/version persistence, typed benchmark draft list/read/save/publish commands, profile-revision
-registration, `execute_run_once`, and the Runs read commands `list_runs`, `list_run_attempts`, and `get_run_status`.
-It does not expose an arbitrary shell, filesystem browser, provider proxy, account flow, or telemetry path.
+list/register commands, fixed local Ollama model discovery, `execute_run_once`, and the Runs read commands `list_runs`,
+`list_run_attempts`, and `get_run_status`. It does not expose an arbitrary shell, filesystem browser, configurable
+provider proxy, account flow, endpoint or credential input, or telemetry path.
 `app_status` reports `storageState: "local"` because the commands initialize and use the app-owned SQLite/artifact
 store.
 
@@ -42,14 +43,24 @@ per-read socket timeout. The deadline spans HTTP headers, bodies, and NDJSON chu
 supported within the configured window. Cancellation is cooperative between socket reads and chunks; it does not
 force-kill a remote process.
 
+Phase 06 uses only the adapter's fixed local default, `http://127.0.0.1:11434`, for the Models surface. The discovery
+command accepts no endpoint or credential and returns at most 512 normalized model records. Each record's serialized
+metadata is capped at 256 KiB, bounded text fields are validated, and the result is sorted by model name and digest.
+Unavailable and malformed runtime responses remain typed `RuntimeError` variants mapped through the desktop bridge;
+there is no model download, deletion, cloud provider, or runtime process-lifecycle command.
+
 The storage service owns `<root>/prompt-arena.sqlite3` and `<root>/artifacts/`. Migrations `0001_foundation.sql`,
 `0002_core_arena.sql`, and `0003_benchmark_drafts.sql` create migration, pack, benchmark-version, benchmark-draft,
 profile-revision, run, attempt, result, and artifact metadata tables. Benchmark versions are canonicalized and
-content-hashed; replaying the same immutable record is idempotent and changing its content is rejected. Drafts are
-mutable authoring state with bounded portable IDs, a 256-byte title limit, a 256 KiB canonical document limit, a
-512 KiB request limit, and optimistic revision checks. Metadata is limited to 1 MiB. Artifact bytes are written
-through a temporary file and hard-link, so an existing artifact name is never replaced. Artifact paths reject
-traversal, absolute paths, drive prefixes, empty segments, and backslashes.
+content-hashed; replaying the same immutable record is idempotent and changing its content is rejected. Profile
+revisions use the same immutable JSON-plus-hash record and are listed in deterministic `created_at, record_id` order.
+The typed registration path requires the deterministic `profile-id@revision` identity; an identical replay returns
+`AlreadyPresent`, while changed historical content returns an immutable conflict. Drafts are mutable authoring state
+with bounded portable IDs, a 256-byte title limit, a 256 KiB canonical document limit, a 512 KiB request limit, and
+optimistic revision checks. Profile requests, including `parameters` and flattened `extra`, are capped at 256 KiB;
+the general serialized metadata ceiling remains 1 MiB. Artifact bytes are written through a temporary file and
+hard-link, so an existing artifact name is never replaced. Artifact paths reject traversal, absolute paths, drive
+prefixes, empty segments, and backslashes.
 
 The checked-in benchmark JSON Schema is a versioned contract/reference. Runtime enforcement is serde deserialization
 plus deterministic manual validation in `domain.rs`; Phase 02 intentionally does not add a JSON Schema engine.
@@ -60,9 +71,15 @@ The editor emits optional text expected answers only; the benchmark contract may
 this UI rejects non-text expectations instead of converting them silently. Browser preview shows unsaved editor state
 only and never reads, validates, saves, or publishes desktop records.
 
+Phase 06 adds the bounded Models surface. Desktop mode can list/register typed immutable profile revisions and read
+fixed-loopback Ollama metadata. Browser preview enters explicit no-write preview states: it renders unsaved profile
+fields and explanatory empty/loading/error copy only, never invokes profile/model commands, reads SQLite, queries
+Ollama, or invents profile or model records.
+
 ## Future boundaries
 
-Run authoring and model execution controls, evaluation, model management/downloads, official benchmark packs, imports
-and broader benchmark-authoring flows, external/cloud provider adapters, interruption recovery, and any long-lived
-worker/runtime lifecycle remain later phases. They must keep provenance, effective configuration, error taxonomy, and
-historical records explicit rather than smuggling behavior into the current command or worker boundary.
+Run authoring and model execution controls, evaluation, full model-library management/downloads/deletion, official
+benchmark packs, imports and broader benchmark-authoring flows, external/cloud provider adapters, interruption
+recovery, and any long-lived worker/runtime lifecycle remain later phases. They must keep provenance, effective
+configuration, error taxonomy, and historical records explicit rather than smuggling behavior into the current command
+or worker boundary.
