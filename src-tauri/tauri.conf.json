@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run prepare:worker-sidecar && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -27,7 +27,8 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": ["nsis", "deb", "appimage"]
+    "active": true,
+    "targets": ["nsis", "deb", "appimage"],
+    "externalBin": ["binaries/prompt-arena-worker"]
   }
 }

@@ -23,6 +23,9 @@ const REQUIRED_IGNORE_RULES = [
   "secrets/",
 ];
 const REQUIRED_PACKAGING_TARGETS = ["appimage", "deb", "nsis"];
+const REQUIRED_WORKER_SIDECAR = "binaries/prompt-arena-worker";
+const REQUIRED_DEV_COMMAND = "npm run dev";
+const REQUIRED_BUILD_COMMAND = "npm run prepare:worker-sidecar && npm run build";
 const ALLOWED_TAURI_PERMISSIONS = new Set();
 const REVIEWED_CSP_ALLOWLISTS = {
   "default-src": ["'self'"],
@@ -68,7 +71,7 @@ export function checkWorkflowText(text) {
   if (!/\bpull_request\s*:/.test(active)) failures.push("CI must retain pull-request validation");
   if (/\b(?:macos(?:-latest)?|darwin)\b/i.test(active)) failures.push("CI must not add an active macOS runner");
 
-  const installIndex = active.indexOf("npm install --no-audit --no-fund");
+  const installIndex = active.indexOf("npm ci --no-audit --no-fund");
   for (const command of ["npm run check:boundaries", "npm audit --omit=dev --audit-level=high"]) {
     if (installIndex < 0 || active.indexOf(command) <= installIndex) {
       failures.push(`CI must run ${command} after dependency installation`);
@@ -82,13 +85,27 @@ export function checkWorkflowText(text) {
 
 export function checkTauriConfig(config) {
   const failures = [];
-  const targets = config?.bundle?.targets;
-  if (config?.bundle?.active !== false) failures.push("Tauri bundling must remain inactive");
+  if (config?.build?.beforeDevCommand !== REQUIRED_DEV_COMMAND) {
+    failures.push("Tauri development must retain the frontend-only dev hook");
+  }
+  if (config?.build?.beforeBuildCommand !== REQUIRED_BUILD_COMMAND) {
+    failures.push("Tauri release builds must prepare the worker sidecar before the frontend build");
+  }
+  const bundle = config?.bundle;
+  const targets = bundle?.targets;
+  if (bundle?.active !== true) failures.push("Tauri worker bundling must be active");
   if (!Array.isArray(targets) || JSON.stringify([...targets].sort()) !== JSON.stringify(REQUIRED_PACKAGING_TARGETS)) {
     failures.push("Tauri packaging targets must remain the reviewed Windows/Linux set");
   }
   if (Array.isArray(targets) && targets.some((target) => /mac|darwin|dmg|pkg/i.test(String(target)))) {
     failures.push("Tauri packaging must not include macOS targets");
+  }
+  if (
+    !Array.isArray(bundle?.externalBin)
+    || bundle.externalBin.length !== 1
+    || bundle.externalBin[0] !== REQUIRED_WORKER_SIDECAR
+  ) {
+    failures.push("Tauri external binaries must contain only the fixed worker sidecar");
   }
 
   const csp = config?.app?.security?.csp;
@@ -257,8 +274,15 @@ export function checkRepository(repositoryRoot = REPOSITORY_ROOT) {
   const failures = [];
   const workflow = readText(repositoryRoot, ".github/workflows/ci.yml");
   const config = JSON.parse(readText(repositoryRoot, "src-tauri/tauri.conf.json"));
+  const packageManifest = JSON.parse(readText(repositoryRoot, "package.json"));
   failures.push(...checkWorkflowText(workflow));
   failures.push(...checkTauriConfig(config));
+  if (packageManifest?.scripts?.["prepare:worker-sidecar"] !== "node scripts/prepare-worker-sidecar.mjs") {
+    failures.push("package.json must expose the fixed worker sidecar preparation script");
+  }
+  if (!fs.existsSync(path.join(repositoryRoot, "scripts/prepare-worker-sidecar.mjs"))) {
+    failures.push("worker sidecar preparation script is missing");
+  }
   failures.push(...checkIgnoreText(readText(repositoryRoot, ".gitignore")));
   failures.push(...checkLocalFontText(
     readText(repositoryRoot, "src/font-options.ts"),
