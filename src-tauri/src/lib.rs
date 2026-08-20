@@ -1,6 +1,8 @@
 pub mod commands;
 pub mod domain;
+pub mod ollama;
 pub mod protocol;
+pub mod runtime;
 pub mod storage;
 pub mod worker;
 

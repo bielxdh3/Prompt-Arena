@@ -35,14 +35,27 @@ deleting or rewriting history.
 - `DONE` — Atomic immutable artifact writes with portable path, size, and hash controls.
 - `DONE` — Typed validation, benchmark-version save, and benchmark-version list commands.
 - `PLANNED` — Benchmark Draft and authoring UI.
-- `PLANNED` — Runtime execution, provider adapters, orchestration, streaming, cancellation, and evaluation.
 
-- Generic provider/runtime adapter contracts.
-- Ollama integration.
+### Phase 03 — Runtime/Ollama adapter slice — DONE (bounded)
+
+- Generic normalized runtime/provider contracts for chat, text generation, model discovery/metadata, streaming,
+  cancellation, typed errors, and capability/parameter negotiation.
+- Ollama health, model listing/metadata, generation, and NDJSON streaming through a standard-library HTTP client
+  restricted to explicit loopback-only endpoints.
+- HTTP safety limits: 64 KiB per status/header/NDJSON line, 16 MiB non-stream bodies, and 16 MiB cumulative streamed
+  NDJSON payload bytes. Cancellation is cooperative between socket reads/chunks.
+- Mock coverage for adapter mapping, endpoint rejection, typed failures, bounds, cancellation, and an optional live
+  health check that self-skips when Ollama is unavailable.
+
+This slice is backend-only. It does not claim model execution UI, run orchestration, app-managed runtime lifecycle,
+downloads, benchmark fixtures, evaluation, or any external/cloud provider.
+
+### Remaining Phase B work
+
+- `PLANNED` — Runtime command/UI integration, run orchestration, interruption recovery, and evaluation.
 - Model/profile registration and immutable profile revisions.
 - Benchmark Draft + immutable Benchmark Version.
 - Arena builder.
-- Run orchestration, streaming, cancellation, interruption recovery.
 - Metrics and effective configuration snapshots.
 - Objective verification.
 - Blind human evaluation.
