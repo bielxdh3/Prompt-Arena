@@ -405,6 +405,30 @@ pub struct GenerationResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseSummary {
+    pub model: String,
+    pub finish_reason: Option<String>,
+    pub response_text_byte_count: u64,
+    pub tool_call_count: u64,
+    pub usage: Option<UsageMetrics>,
+    pub timing: Option<TimingMetrics>,
+}
+
+impl From<&GenerationResponse> for ResponseSummary {
+    fn from(response: &GenerationResponse) -> Self {
+        Self {
+            model: response.model.clone(),
+            finish_reason: response.finish_reason.clone(),
+            response_text_byte_count: response.text.len() as u64,
+            tool_call_count: response.tool_calls.len() as u64,
+            usage: response.usage.clone(),
+            timing: response.timing.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "detail")]
 pub enum RuntimeError {
     Unavailable { message: String },

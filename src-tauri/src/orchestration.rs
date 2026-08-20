@@ -10,8 +10,8 @@ use crate::{
     },
     ollama::{OllamaConfig, OllamaProvider},
     runtime::{
-        CancellationToken, GenerationChunk, GenerationRequest, GenerationResponse, RuntimeError,
-        RuntimeProvider,
+        CancellationToken, GenerationChunk, GenerationRequest, GenerationResponse, ResponseSummary,
+        RuntimeError, RuntimeProvider,
     },
     storage::{SaveOutcome, StorageError, StorageService},
 };
@@ -20,6 +20,8 @@ use crate::{
 pub const MAX_RUN_PLAN_BYTES: usize = 256 * 1024;
 /// Progress is a bounded observation stream, not a second copy of the model output.
 pub const MAX_PROGRESS_EVENTS: usize = 64;
+/// The persisted summary is metadata only; response text remains in the artifact.
+pub const MAX_RESPONSE_SUMMARY_BYTES: usize = 8 * 1024;
 const MAX_PROGRESS_TEXT_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,6 +90,7 @@ pub struct PersistedExecution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestrationError {
     InvalidPlan(String),
+    InvalidResponseSummary(String),
     UnsupportedRuntime(String),
     Runtime(RuntimeError),
     Storage(StorageError),
@@ -97,6 +100,9 @@ impl fmt::Display for OrchestrationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidPlan(message) => write!(formatter, "run plan is invalid: {message}"),
+            Self::InvalidResponseSummary(message) => {
+                write!(formatter, "response summary is invalid: {message}")
+            }
             Self::UnsupportedRuntime(runtime) => {
                 write!(
                     formatter,
@@ -309,6 +315,7 @@ pub fn persist_terminal_outcome(
             response,
             progress,
         } => {
+            let response_summary = response_summary_value(response)?;
             let response_bytes = serde_json::to_vec(response).map_err(|_| {
                 OrchestrationError::InvalidPlan(
                     "generation response cannot be serialized".to_owned(),
@@ -332,6 +339,9 @@ pub fn persist_terminal_outcome(
             let mut persisted_attempt = attempt.clone();
             persisted_attempt.result = Some(result.clone());
             persisted_attempt.artifacts = vec![artifact];
+            persisted_attempt
+                .extra
+                .insert("responseSummary".to_owned(), response_summary);
             let attempt_outcome =
                 storage.save_attempt_and_result(&persisted_attempt, &result, created_at)?;
             let run_outcome = storage.save_run(run, created_at)?;
@@ -377,6 +387,22 @@ pub fn persist_terminal_outcome(
             })
         }
     }
+}
+
+fn response_summary_value(response: &GenerationResponse) -> Result<Value, OrchestrationError> {
+    let summary = ResponseSummary::from(response);
+    let value = serde_json::to_value(summary).map_err(|_| {
+        OrchestrationError::InvalidResponseSummary("summary could not be serialized".to_owned())
+    })?;
+    let bytes = serde_json::to_vec(&value).map_err(|_| {
+        OrchestrationError::InvalidResponseSummary("summary could not be bounded".to_owned())
+    })?;
+    if bytes.len() > MAX_RESPONSE_SUMMARY_BYTES {
+        return Err(OrchestrationError::InvalidResponseSummary(
+            "summary exceeds the 8 KiB metadata bound".to_owned(),
+        ));
+    }
+    Ok(value)
 }
 
 fn result_artifact(
@@ -598,8 +624,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        execute_once_with_provider, persist_terminal_outcome, stable_attempt_id, ProgressKind,
-        RunPlan, TerminalOutcome, MAX_PROGRESS_EVENTS,
+        execute_once_with_provider, persist_terminal_outcome, stable_attempt_id,
+        OrchestrationError, ProgressKind, RunPlan, TerminalOutcome, MAX_PROGRESS_EVENTS,
+        MAX_RESPONSE_SUMMARY_BYTES,
     };
     use crate::{
         domain::ProfileRevision,
@@ -607,7 +634,7 @@ mod tests {
         runtime::{
             CancellationToken, Capability, GenerationChunk, GenerationParameter, GenerationRequest,
             GenerationResponse, ModelInfo, RuntimeCapabilities, RuntimeError, RuntimeHealth,
-            RuntimeProvider,
+            RuntimeProvider, TimingMetrics, UsageMetrics,
         },
         storage::{StorageError, StorageService, MAX_ARTIFACT_BYTES},
     };
@@ -770,7 +797,10 @@ mod tests {
             &CancellationToken::new(),
         )
         .unwrap();
-        assert!(matches!(outcome, TerminalOutcome::Failed { .. }));
+        let TerminalOutcome::Failed { attempt, .. } = outcome else {
+            panic!("expected failure")
+        };
+        assert!(!attempt.extra.contains_key("responseSummary"));
 
         let outcome = execute_once_with_provider(
             &plan(),
@@ -807,7 +837,10 @@ mod tests {
             &cancellation,
         )
         .unwrap();
-        assert!(matches!(outcome, TerminalOutcome::Cancelled { .. }));
+        let TerminalOutcome::Cancelled { attempt, .. } = outcome else {
+            panic!("expected cancellation")
+        };
+        assert!(!attempt.extra.contains_key("responseSummary"));
     }
 
     #[test]
@@ -871,6 +904,111 @@ mod tests {
                 StorageError::ArtifactTooLarge
             ))
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn completed_response_summary_persists_replays_and_conflicts_without_text() {
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-response-summary-test-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = StorageService::open(&root).unwrap();
+        let mut outcome = execute_once_with_provider(
+            &plan(),
+            &MockProvider {
+                error: None,
+                chunks: 1,
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let TerminalOutcome::Completed { response, .. } = &mut outcome else {
+            panic!("expected completion")
+        };
+        response.usage = Some(UsageMetrics {
+            prompt_tokens: Some(2),
+            completion_tokens: Some(3),
+            total_tokens: Some(5),
+        });
+        response.timing = Some(TimingMetrics {
+            total_duration_ns: Some(10),
+            load_duration_ns: Some(2),
+            prompt_eval_duration_ns: Some(3),
+            eval_duration_ns: Some(4),
+        });
+
+        let persisted = persist_terminal_outcome(&storage, &outcome, "100").unwrap();
+        let summary = persisted
+            .attempt
+            .extra
+            .get("responseSummary")
+            .expect("completed attempt summary")
+            .clone();
+        assert_eq!(summary["model"], json!("local-model"));
+        assert_eq!(summary["finishReason"], json!("stop"));
+        assert_eq!(summary["responseTextByteCount"], json!(8));
+        assert_eq!(summary["toolCallCount"], json!(0));
+        assert_eq!(summary["usage"]["totalTokens"], json!(5));
+        assert_eq!(summary["timing"]["totalDurationNs"], json!(10));
+        assert!(!serde_json::to_string(&persisted.attempt)
+            .unwrap()
+            .contains("\"text\":\"complete\""));
+
+        assert_eq!(
+            persist_terminal_outcome(&storage, &outcome, "200")
+                .unwrap()
+                .save_outcome,
+            crate::storage::SaveOutcome::AlreadyPresent
+        );
+        let replayed = storage.list_attempts("run-1").unwrap();
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].extra.get("responseSummary"), Some(&summary));
+
+        let mut conflicting = persisted.attempt.clone();
+        let mut conflicting_summary = summary;
+        conflicting_summary["toolCallCount"] = json!(1);
+        conflicting
+            .extra
+            .insert("responseSummary".to_owned(), conflicting_summary);
+        let result = conflicting
+            .result
+            .clone()
+            .expect("completed result reference");
+        assert_eq!(
+            storage.save_attempt_and_result(&conflicting, &result, "300"),
+            Err(StorageError::ImmutableConflict)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn response_summary_bound_rejects_oversized_metadata_before_artifact_write() {
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-response-summary-bound-test-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = StorageService::open(&root).unwrap();
+        let mut outcome = execute_once_with_provider(
+            &plan(),
+            &MockProvider {
+                error: None,
+                chunks: 0,
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let TerminalOutcome::Completed { response, .. } = &mut outcome else {
+            panic!("expected completion")
+        };
+        response.finish_reason = Some("x".repeat(MAX_RESPONSE_SUMMARY_BYTES));
+        assert!(matches!(
+            persist_terminal_outcome(&storage, &outcome, "100"),
+            Err(OrchestrationError::InvalidResponseSummary(_))
+        ));
+        assert!(storage.list_attempts("run-1").unwrap().is_empty());
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -1,0 +1,57 @@
+export type AttemptStatusTone = "success" | "failure" | "neutral";
+
+export function attemptStatusLabel(status: string): string {
+  switch (status.trim().toLowerCase()) {
+    case "completed":
+    case "succeeded":
+    case "success":
+      return "Completed";
+    case "cancelled":
+    case "canceled":
+      return "Cancelled";
+    case "failed":
+    case "failure":
+    case "error":
+      return "Failed";
+    default:
+      return status.trim() || "Unknown";
+  }
+}
+
+export function attemptStatusTone(status: string): AttemptStatusTone {
+  switch (attemptStatusLabel(status)) {
+    case "Completed":
+      return "success";
+    case "Failed":
+      return "failure";
+    default:
+      return "neutral";
+  }
+}
+
+export function formatCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
+    return "Not recorded";
+  }
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
+
+export function formatByteCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
+    return "Not recorded";
+  }
+  if (value < 1024) return `${formatCount(value)} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+export function formatDurationNs(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
+    return "Not recorded";
+  }
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} s`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} ms`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)} μs`;
+  return `${formatCount(value)} ns`;
+}
