@@ -15,7 +15,7 @@ This roadmap is the current implementation baseline for Prompt Arena. The author
 ## Phase A — Foundation — DONE (bounded contract foundation)
 
 - `DONE` — Tauri 2 + React + TypeScript + Rust workspace with a narrow typed desktop command boundary.
-- `DONE` — App-owned one-shot worker protocol and executable skeleton; no daemon lifecycle yet.
+- `DONE` — App-owned one-shot worker protocol and executable boundary; no daemon lifecycle.
 - `DONE` — Windows/Linux-only CI definition.
 - `DONE` — Versioned SQLite foundation migration and path-safe filesystem artifact-store contract.
 - `DONE` — Semantic dark-neutral-gray tokens, strongly rounded shell, keyboard focus states, reduced-motion handling,
@@ -24,9 +24,8 @@ This roadmap is the current implementation baseline for Prompt Arena. The author
 - `DONE` — Foundation theme configuration hook and concise architecture, development, security, privacy, data-model,
   testing, and design-system documentation.
 
-Phase A does not claim worker spawning from the app, model execution, providers, or benchmark authoring UI. Phase B
-currently owns the bounded local domain/storage implementation below and must consume the Phase A contracts without
-deleting or rewriting history.
+Phase A did not claim worker spawning from the app, model execution, providers, or benchmark authoring UI. Later phases
+consume those contracts without deleting or rewriting history.
 
 ## Phase B — Core Arena — IN PROGRESS
 
@@ -34,21 +33,68 @@ deleting or rewriting history.
 - `DONE` — Local SQLite migrations for benchmark metadata, immutable profile/run/attempt/result records, and artifact metadata.
 - `DONE` — Atomic immutable artifact writes with portable path, size, and hash controls.
 - `DONE` — Typed validation, benchmark-version save, and benchmark-version list commands.
-- `PLANNED` — Benchmark Draft and authoring UI.
-- `PLANNED` — Runtime execution, provider adapters, orchestration, streaming, cancellation, and evaluation.
+- `DONE` — Immutable profile-revision registration, bounded one-shot orchestration through the app-owned worker, and
+  terminal run/attempt/result persistence with replay-safe evidence.
+- `DONE` — Typed Runs read commands and a truthful local Runs view; browser preview does not execute models.
+- `DONE` — Phase 05 bounded benchmark drafts and structured authoring: editable SQLite drafts, optimistic revision
+  checks, typed desktop list/read/save/validate/publish commands, and immutable benchmark-version publication.
 
-- Generic provider/runtime adapter contracts.
-- Ollama integration.
-- Model/profile registration and immutable profile revisions.
-- Benchmark Draft + immutable Benchmark Version.
+### Phase 03 — Runtime/Ollama adapter slice — DONE (bounded)
+
+- Generic normalized runtime/provider contracts for chat, text generation, model discovery/metadata, streaming,
+  cancellation, typed errors, and capability/parameter negotiation.
+- Ollama health, model listing/metadata, generation, and NDJSON streaming through a standard-library HTTP client
+  restricted to explicit loopback-only endpoints.
+- HTTP safety limits: 64 KiB per status/header/NDJSON line, 16 MiB non-stream bodies, and 16 MiB cumulative streamed
+  NDJSON payload bytes. Cancellation is cooperative between socket reads/chunks.
+- Mock coverage for adapter mapping, endpoint rejection, typed failures, bounds, cancellation, and an optional live
+  health check that self-skips when Ollama is unavailable.
+
+This slice is backend-only. It does not claim model execution UI, run orchestration, app-managed runtime lifecycle,
+downloads, benchmark fixtures, evaluation, or any external/cloud provider.
+
+### Phase 04 — One-shot orchestration and evidence — DONE (bounded)
+
+- Validated `RunPlan` execution is delegated from the desktop command to a fixed-name, app-owned one-shot worker with
+  bounded JSON request/response handling and no shell or arbitrary executable arguments.
+- The worker executes the loopback-only Ollama adapter once and returns a typed terminal outcome; the app owns SQLite
+  and artifact persistence, including completed-outcome replay and immutable conflict handling.
+- Runs, attempts, and profile revisions have typed local read/registration commands. The UI exposes only the local Runs
+  read surface; run authoring, evaluation, interruption recovery, and full execution controls remain planned.
+
+### Phase 05 — Benchmark authoring slice — DONE (bounded)
+
+- A migration-backed `benchmark_drafts` table stores editable draft state separately from immutable
+  `benchmark_versions`; draft IDs, benchmark IDs, titles, documents, and requests are bounded.
+- The desktop boundary exposes typed draft list/read/save/publish commands plus benchmark-v1 validation. Saves use
+  optimistic revision checks; publishing validates the complete document and preserves immutable version history.
+- The structured editor writes one narrow benchmark shape and optional text expected answers. It does not expose raw
+  JSON expectations, imports, cloning, multi-item authoring, or browser persistence; browser preview shows unsaved
+  editor state only.
+
+### Phase 06 — Local profiles and Ollama model discovery — DONE (bounded)
+
+- Immutable profile revisions can be listed and registered through typed desktop commands. Registration validates the
+  deterministic `profile-id@revision` identity and the complete bounded request, including `parameters` and flattened
+  `extra`; replay is idempotent and changed historical content remains an immutable conflict.
+- The Models view reads installed local Ollama models through the existing adapter and exactly
+  `http://127.0.0.1:11434`, with at most 512 records, per-record bounded metadata, deterministic ordering, and typed
+  unavailable/protocol errors. It does not accept endpoint or credential input and has no download, deletion, cloud, or
+  process-lifecycle behavior.
+- Browser preview never invokes profile/model commands and never invents profile or model records. Full model-library
+  management, cross-runtime grouping, hardware recommendations, downloads, and deletion remain planned.
+
+### Remaining Phase B work
+
+- `PLANNED` — Run authoring/controls, interruption recovery, and evaluation.
+- `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
 - Arena builder.
-- Run orchestration, streaming, cancellation, interruption recovery.
 - Metrics and effective configuration snapshots.
 - Objective verification.
 - Blind human evaluation.
 - Results and history.
 
-## Phase C — Official Benchmark Packs
+## Phase C — Official Benchmark Packs — PLANNED
 
 - Programming / Software Engineering.
 - Reasoning / Math / Knowledge.
@@ -58,9 +104,9 @@ deleting or rewriting history.
 - Procedural cases and materialized seeds/cases.
 - Docker-backed coding sandbox where required.
 
-## Phase D — Model Library
+## Phase D — Model Library — PLANNED
 
-- Runtime/model auto-discovery.
+- Unified runtime/model auto-discovery beyond the fixed local Ollama discovery slice.
 - Unified search across supported sources.
 - Backend-native downloads.
 - Quantization/format/license/context metadata.

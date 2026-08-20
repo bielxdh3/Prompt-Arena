@@ -1,16 +1,20 @@
 # Data model
 
 Phase 01 established storage vocabulary and contracts. Phase 02 adds local metadata persistence and immutable artifact
-writes without adding providers or runtime execution.
+writes. Phase 04 adds one-shot orchestration evidence while keeping the store local-first and append-only. Phase 05 adds
+bounded editable benchmark drafts without changing immutable benchmark-version history. Phase 06 adds a bounded local
+profile-revision registry and fixed-loopback Ollama discovery; it does not define the full model-library catalog.
 
 ## Foundation records
 
 `schema_migrations` records applied migration versions and timestamps. `artifact_records` identifies an app-owned
 artifact by stable ID, kind, portable relative path, artifact schema version, optional SHA-256, and creation time.
-`packs` and `benchmark_versions` store canonical JSON snapshots and content hashes. `profile_revisions`, `runs`,
-`attempts`, and `result_records` use the same immutable JSON-plus-hash pattern; result records reference an attempt.
-Replaying identical content returns `AlreadyPresent`; changing content under an existing ID returns an immutable
-conflict. Metadata records are capped at 1 MiB.
+`packs` and `benchmark_versions` store canonical JSON snapshots and content hashes. `benchmark_drafts` stores mutable
+authoring state separately from those immutable snapshots. `profile_revisions`, `runs`, `attempts`, and
+`result_records` use the same immutable JSON-plus-hash pattern; result records reference an attempt. Replaying identical
+content returns `AlreadyPresent`; changing content under an existing ID returns an immutable conflict. Metadata records
+are capped at 1 MiB. Profile registration additionally caps the complete serialized request at 256 KiB, so profile
+`parameters` and flattened `extra` cannot bypass either the request or metadata limit.
 
 The filesystem contract maps one app-owned storage root to:
 
@@ -31,6 +35,39 @@ then applies deterministic manual checks for required shape, identifiers, versio
 invariants, and case artifact references. The checked-in JSON Schema documents the same boundary; it is not executed by
 a runtime schema engine in this phase.
 
+## Phase 05 draft boundary
+
+Draft rows are created and edited through typed desktop commands. Draft IDs and benchmark IDs use the same portable
+bounded identifier rule as local records; titles are capped at 256 UTF-8 bytes, canonical draft documents at 256 KiB,
+and encoded draft requests at 512 KiB. Save requests include an expected revision. A matching replay is idempotent;
+stale edits are rejected, and a changed draft advances its revision without touching any published version.
+
+Draft saves canonicalize JSON but intentionally allow incomplete benchmark-v1 documents so the editor can save progress.
+Publishing revalidates the stored document and then writes an immutable benchmark version. The Phase 05 structured
+editor supports one narrow shape and stores an optional text expected answer or null. Benchmark-v1 can represent
+arbitrary JSON expected values, but this UI does not author or silently convert non-text values; such drafts are rejected
+when loaded into the structured editor. Browser preview shows unsaved form state only and never reads or writes these
+records.
+
+## Phase 06 profile and discovery boundary
+
+`ProfileRevision` is a typed immutable record with `profile_id`, positive `revision`, `model`, `runtime`, typed
+`parameters`, optional `system_prompt`, and flattened `extra`. Its identity is derived and checked as exactly
+`profile-id@revision`; callers cannot register a mismatched identity. The registration command and storage service
+both enforce the complete serialized profile request limit of 256 KiB. Model/runtime text and system-prompt bounds
+are also checked before the record is canonicalized and content-hashed. Replaying the same identity and content is
+idempotent (`AlreadyPresent`); replaying the identity with changed content is an immutable conflict. Profile listing
+is a typed read ordered by `created_at, record_id`, so the result is deterministic without mutating history.
+
+The Models surface calls only the fixed local Ollama endpoint `http://127.0.0.1:11434`. Discovery accepts at most
+512 model records, validates each normalized record's bounded text fields, caps each serialized metadata map at
+256 KiB, and sorts the returned records by name and digest. Unavailable transport/runtime states and malformed
+responses are typed unavailable/protocol errors. This slice records no endpoint or credential, downloads or deletes
+no model, and does not manage cloud providers or runtime process lifecycles.
+
+Browser preview has no profile/model persistence boundary: it displays unsaved fields and explicit preview states,
+never invokes desktop profile/model commands, queries Ollama, reads SQLite, or creates sample records.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.
@@ -47,3 +84,13 @@ a runtime schema engine in this phase.
 - **Runtime Binding** — the provider/runtime identity and capability snapshot used by an attempt.
 
 Historical semantic records must be append-only. A changed benchmark is a new version, not an in-place rewrite.
+
+## Bounded execution evidence
+
+`RunPlan` binds one benchmark version, case, immutable profile revision, generation request, and loopback-only Ollama
+configuration. The desktop execution command sends that plan to a fixed-name one-shot worker. The worker returns one
+typed terminal outcome and exits; the app, not the worker, owns SQLite and filesystem persistence. Completed outcomes can
+be replayed idempotently, while conflicting run, attempt, result, artifact, path, kind, schema, or hash metadata is
+rejected. Run listings and attempt reads are local, deterministically ordered, and reject empty/path-like IDs. Browser
+preview reads no app store and never executes a model. Full model-library management, cross-runtime grouping,
+recommendations, downloads, and deletion remain planned.
