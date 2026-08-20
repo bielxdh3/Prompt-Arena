@@ -1,4 +1,40 @@
+import type { ObjectiveVerificationEvidence } from "./bridge";
+
 export type AttemptStatusTone = "success" | "failure" | "neutral";
+
+export function objectiveVerificationEvidence(value: unknown): ObjectiveVerificationEvidence | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const passed = candidate.passed;
+  const expectedNormalizedByteCount = candidate.expectedNormalizedByteCount;
+  const actualNormalizedByteCount = candidate.actualNormalizedByteCount;
+  const expectedSha256 = candidate.expectedSha256;
+  const actualSha256 = candidate.actualSha256;
+  if (
+    candidate.verifierKind !== "exact_text" ||
+    typeof passed !== "boolean" ||
+    !nonNegativeSafeInteger(expectedNormalizedByteCount) ||
+    !nonNegativeSafeInteger(actualNormalizedByteCount) ||
+    !sha256(expectedSha256) ||
+    !sha256(actualSha256)
+  ) return null;
+  return {
+    passed,
+    verifierKind: "exact_text",
+    expectedNormalizedByteCount,
+    actualNormalizedByteCount,
+    expectedSha256,
+    actualSha256,
+  };
+}
+
+function nonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function sha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
 
 export function attemptStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {

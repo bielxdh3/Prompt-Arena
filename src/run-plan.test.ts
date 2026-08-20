@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { canonicalJson, type JsonValue } from "./benchmark-domain";
 import { EMPTY_DRAFT_FORM, formToDocument } from "./benchmark-authoring";
 import type { BenchmarkVersion, ProfileRevision } from "./bridge";
-import { buildRunPlan, type BuildRunPlanInput } from "./run-plan";
+import {
+  buildRunPlan,
+  MAX_OBJECTIVE_EXPECTATION_BYTES,
+  type BuildRunPlanInput,
+} from "./run-plan";
 
 function profile(): ProfileRevision {
   return {
@@ -78,8 +82,45 @@ describe("bounded run-plan contract", () => {
         systemPrompt: "Profile system\n\nTask system",
       },
     });
+    expect(plan.objectiveExpectation).toBeNull();
     expect(plan.generation.parameters).toMatchObject({ temperature: 0.2 });
     expect(plan.generation.parameters.topP).toBeNull();
+  });
+
+  it("carries only bounded text expectations outside the generation request", () => {
+    const plan = buildRunPlan({
+      ...input(),
+      version: versionWithDocument((document) => {
+        document.benchmarkVersion.tasks[0].cases[0].expected = "  expected answer\r\n";
+      }),
+    });
+
+    expect(plan.objectiveExpectation).toBe("  expected answer\r\n");
+    expect(plan.generation.metadata).toEqual({});
+    expect(JSON.stringify(plan.generation)).not.toContain("expected answer");
+  });
+
+  it("treats unsupported expectations as absent and rejects invalid or oversized text", () => {
+    expect(buildRunPlan({
+      ...input(),
+      version: versionWithDocument((document) => {
+        document.benchmarkVersion.tasks[0].cases[0].expected = { answer: "not supported" };
+      }),
+    }).objectiveExpectation).toBeNull();
+
+    expect(() => buildRunPlan({
+      ...input(),
+      version: versionWithDocument((document) => {
+        document.benchmarkVersion.tasks[0].cases[0].expected = "bad\0answer";
+      }),
+    })).toThrow("Objective expectation");
+
+    expect(() => buildRunPlan({
+      ...input(),
+      version: versionWithDocument((document) => {
+        document.benchmarkVersion.tasks[0].cases[0].expected = "x".repeat(MAX_OBJECTIVE_EXPECTATION_BYTES + 1);
+      }),
+    })).toThrow("Objective expectation");
   });
 
   it("rejects malformed identities, missing selections, and multiple repetitions", () => {

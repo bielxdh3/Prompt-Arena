@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use crate::{
     domain::{
         sha256_hex, stable_profile_revision_id, stable_version_id, ArtifactRef, Attempt,
-        ImmutableResultReference, ProfileRevision, Run,
+        ImmutableResultReference, ObjectiveVerificationEvidence, ObjectiveVerifierKind,
+        ProfileRevision, Run,
     },
     ollama::{OllamaConfig, OllamaProvider},
     runtime::{
@@ -22,6 +23,8 @@ pub const MAX_RUN_PLAN_BYTES: usize = 256 * 1024;
 pub const MAX_PROGRESS_EVENTS: usize = 64;
 /// The persisted summary is metadata only; response text remains in the artifact.
 pub const MAX_RESPONSE_SUMMARY_BYTES: usize = 8 * 1024;
+/// Gold text is a bounded policy input and never part of the generation request.
+pub const MAX_OBJECTIVE_EXPECTATION_BYTES: usize = 64 * 1024;
 const MAX_PROGRESS_TEXT_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -33,6 +36,8 @@ pub struct RunPlan {
     pub profile_revision: ProfileRevision,
     pub generation: GenerationRequest,
     pub runtime_config: OllamaConfig,
+    #[serde(default)]
+    pub objective_expectation: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,6 +68,7 @@ pub enum TerminalOutcome {
         run: Run,
         attempt: Attempt,
         response: GenerationResponse,
+        score: Option<ObjectiveVerificationEvidence>,
         progress: Vec<ProgressEvent>,
     },
     Cancelled {
@@ -178,6 +184,7 @@ impl RunPlan {
                 "generation model must match the profile revision model".to_owned(),
             ));
         }
+        validate_objective_expectation(self.objective_expectation.as_deref())?;
         self.generation
             .validate_shape()
             .map_err(OrchestrationError::Runtime)
@@ -254,6 +261,8 @@ pub fn execute_once_with_provider(
 
     match stream_result {
         Ok(response) => {
+            let score =
+                objective_verification(&response.text, plan.objective_expectation.as_deref());
             progress.finish(ProgressKind::Completed);
             Ok(TerminalOutcome::Completed {
                 run: build_run(plan, &attempt_id, "completed", &started_at, provider),
@@ -266,6 +275,7 @@ pub fn execute_once_with_provider(
                     None,
                 ),
                 response,
+                score,
                 progress: progress.into_events(),
             })
         }
@@ -313,9 +323,11 @@ pub fn persist_terminal_outcome(
             run,
             attempt,
             response,
+            score,
             progress,
         } => {
             let response_summary = response_summary_value(response)?;
+            let score_value = objective_score_value(score.as_ref())?;
             let response_bytes = serde_json::to_vec(response).map_err(|_| {
                 OrchestrationError::InvalidPlan(
                     "generation response cannot be serialized".to_owned(),
@@ -333,7 +345,7 @@ pub fn persist_terminal_outcome(
                 result_id: format!("{}-result", attempt.attempt_id),
                 content_hash: sha256_hex(&response_bytes),
                 artifact: artifact.clone(),
-                score: None,
+                score: score_value,
                 extra: BTreeMap::new(),
             };
             let mut persisted_attempt = attempt.clone();
@@ -403,6 +415,56 @@ fn response_summary_value(response: &GenerationResponse) -> Result<Value, Orches
         ));
     }
     Ok(value)
+}
+
+fn objective_score_value(
+    score: Option<&ObjectiveVerificationEvidence>,
+) -> Result<Option<Value>, OrchestrationError> {
+    score
+        .map(|score| {
+            serde_json::to_value(score).map_err(|_| {
+                OrchestrationError::InvalidResponseSummary(
+                    "objective evidence could not be serialized".to_owned(),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn validate_objective_expectation(expectation: Option<&str>) -> Result<(), OrchestrationError> {
+    if let Some(expectation) = expectation {
+        if expectation.contains('\0') || expectation.len() > MAX_OBJECTIVE_EXPECTATION_BYTES {
+            return Err(OrchestrationError::InvalidPlan(
+                "objective expectation is outside the 64 KiB bound".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn objective_verification(
+    response_text: &str,
+    expectation: Option<&str>,
+) -> Option<ObjectiveVerificationEvidence> {
+    let expectation = expectation?;
+    let expected = normalize_objective_text(expectation);
+    let actual = normalize_objective_text(response_text);
+    Some(ObjectiveVerificationEvidence {
+        passed: expected == actual,
+        verifier_kind: ObjectiveVerifierKind::ExactText,
+        expected_normalized_byte_count: expected.len() as u64,
+        actual_normalized_byte_count: actual.len() as u64,
+        expected_sha256: sha256_hex(expected.as_bytes()),
+        actual_sha256: sha256_hex(actual.as_bytes()),
+    })
+}
+
+fn normalize_objective_text(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_owned()
 }
 
 fn result_artifact(
@@ -624,12 +686,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        execute_once_with_provider, persist_terminal_outcome, stable_attempt_id,
-        OrchestrationError, ProgressKind, RunPlan, TerminalOutcome, MAX_PROGRESS_EVENTS,
-        MAX_RESPONSE_SUMMARY_BYTES,
+        execute_once_with_provider, objective_verification, persist_terminal_outcome,
+        stable_attempt_id, OrchestrationError, ProgressKind, RunPlan, TerminalOutcome,
+        MAX_OBJECTIVE_EXPECTATION_BYTES, MAX_PROGRESS_EVENTS, MAX_RESPONSE_SUMMARY_BYTES,
     };
     use crate::{
-        domain::ProfileRevision,
+        domain::{ObjectiveVerifierKind, ProfileRevision},
         ollama::OllamaConfig,
         runtime::{
             CancellationToken, Capability, GenerationChunk, GenerationParameter, GenerationRequest,
@@ -740,6 +802,7 @@ mod tests {
                 ..GenerationRequest::default()
             },
             runtime_config: OllamaConfig::default(),
+            objective_expectation: None,
         }
     }
 
@@ -854,6 +917,41 @@ mod tests {
     }
 
     #[test]
+    fn objective_verifier_matches_normalized_text_and_reports_mismatch_without_text() {
+        let matching = objective_verification(" answer\r\n", Some("answer\n")).expect("evidence");
+        assert_eq!(matching.verifier_kind, ObjectiveVerifierKind::ExactText);
+        assert!(matching.passed);
+        assert_eq!(matching.expected_normalized_byte_count, 6);
+        assert_eq!(matching.actual_normalized_byte_count, 6);
+        assert_eq!(matching.expected_sha256, matching.actual_sha256);
+
+        let mismatch = objective_verification("different", Some("answer")).expect("evidence");
+        assert!(!mismatch.passed);
+        assert_eq!(mismatch.expected_normalized_byte_count, 6);
+        assert_eq!(mismatch.actual_normalized_byte_count, 9);
+        assert_ne!(mismatch.expected_sha256, mismatch.actual_sha256);
+        assert!(!serde_json::to_string(&mismatch).unwrap().contains("answer"));
+        assert!(objective_verification("answer", None).is_none());
+    }
+
+    #[test]
+    fn plan_rejects_invalid_and_oversized_objective_expectations() {
+        let mut invalid = plan();
+        invalid.objective_expectation = Some("bad\0answer".to_owned());
+        assert!(matches!(
+            invalid.validate(),
+            Err(OrchestrationError::InvalidPlan(_))
+        ));
+
+        let mut oversized = plan();
+        oversized.objective_expectation = Some("x".repeat(MAX_OBJECTIVE_EXPECTATION_BYTES + 1));
+        assert!(matches!(
+            oversized.validate(),
+            Err(OrchestrationError::InvalidPlan(_))
+        ));
+    }
+
+    #[test]
     fn completed_outcomes_replay_and_oversized_responses_are_bounded() {
         let root = std::env::temp_dir().join(format!(
             "prompt-arena-orchestration-test-{}-{}",
@@ -952,6 +1050,7 @@ mod tests {
         assert_eq!(summary["toolCallCount"], json!(0));
         assert_eq!(summary["usage"]["totalTokens"], json!(5));
         assert_eq!(summary["timing"]["totalDurationNs"], json!(10));
+        assert_eq!(persisted.attempt.result.as_ref().unwrap().score, None);
         assert!(!serde_json::to_string(&persisted.attempt)
             .unwrap()
             .contains("\"text\":\"complete\""));
@@ -978,6 +1077,81 @@ mod tests {
             .expect("completed result reference");
         assert_eq!(
             storage.save_attempt_and_result(&conflicting, &result, "300"),
+            Err(StorageError::ImmutableConflict)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn objective_score_persists_replays_and_conflicts_without_response_text() {
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-objective-score-test-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let storage = StorageService::open(&root).unwrap();
+        let mut objective_plan = plan();
+        objective_plan.objective_expectation = Some("  complete\r\n".to_owned());
+        let plan_json = serde_json::to_value(&objective_plan).unwrap();
+        assert_eq!(plan_json["objectiveExpectation"], json!("  complete\r\n"));
+        assert!(plan_json["generation"]
+            .get("objectiveExpectation")
+            .is_none());
+        assert!(!serde_json::to_string(&objective_plan.generation)
+            .unwrap()
+            .contains("complete"));
+        let outcome = execute_once_with_provider(
+            &objective_plan,
+            &MockProvider {
+                error: None,
+                chunks: 1,
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let TerminalOutcome::Completed { score, .. } = &outcome else {
+            panic!("expected completion")
+        };
+        let score = score.clone().expect("objective score");
+        assert!(score.passed);
+        assert_eq!(score.verifier_kind, ObjectiveVerifierKind::ExactText);
+        assert_eq!(score.expected_normalized_byte_count, 8);
+        assert_eq!(score.actual_normalized_byte_count, 8);
+        assert_eq!(score.expected_sha256, score.actual_sha256);
+        let score_value = serde_json::to_value(&score).unwrap();
+
+        let persisted = persist_terminal_outcome(&storage, &outcome, "100").unwrap();
+        let result = persisted
+            .attempt
+            .result
+            .clone()
+            .expect("completed result reference");
+        assert_eq!(result.score, Some(score_value.clone()));
+        let result_json = serde_json::to_value(&result).unwrap();
+        assert_eq!(result_json["score"]["verifierKind"], json!("exact_text"));
+        assert_eq!(
+            result_json["score"]["expectedNormalizedByteCount"],
+            json!(8)
+        );
+        assert!(!serde_json::to_string(&persisted.attempt)
+            .unwrap()
+            .contains("\"text\":\"complete\""));
+        assert!(!serde_json::to_string(&result).unwrap().contains("complete"));
+        assert_eq!(
+            persist_terminal_outcome(&storage, &outcome, "200")
+                .unwrap()
+                .save_outcome,
+            crate::storage::SaveOutcome::AlreadyPresent
+        );
+
+        let mut conflicting_result = result.clone();
+        let mut conflicting_score = score_value;
+        conflicting_score["passed"] = json!(false);
+        conflicting_result.score = Some(conflicting_score);
+        let mut conflicting_attempt = persisted.attempt.clone();
+        conflicting_attempt.result = Some(conflicting_result.clone());
+        assert_eq!(
+            storage.save_attempt_and_result(&conflicting_attempt, &conflicting_result, "300"),
             Err(StorageError::ImmutableConflict)
         );
         let _ = fs::remove_dir_all(root);

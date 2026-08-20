@@ -117,11 +117,22 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 - No scoring, objective verification, human or AI evaluation, ranking, mutation, arbitrary file read, download, cloud,
   endpoint, credential, cancellation, or process-lifecycle surface is added; browser preview remains no-write.
 
+### Phase 10 — Objective exact-text verification slice — DONE (bounded)
+
+- String `expected` values become an optional, 64 KiB-bounded top-level `RunPlan` objective policy input. The expected
+  answer is never copied into `GenerationRequest.metadata` or sent to Ollama; Rust revalidates the same boundary.
+- After generation, the worker normalizes only CRLF/CR line endings and surrounding whitespace, then compares text in
+  memory. The immutable result reference stores only exact-text pass/fail, verifier kind, normalized byte counts, and
+  expected/actual SHA-256 hashes; no supported text expectation leaves `score` null.
+- Runs displays objective status/hash/count evidence only. Artifact payloads and expected/actual response text remain
+  unread; human/AI evaluation, rankings, external providers, and broader scoring remain outside this slice. Browser
+  preview remains no-write.
+
 ### Remaining Phase B work
 
-- `PLANNED` — Broader run authoring/controls, interruption recovery, and evaluation beyond the bounded Arena entry flow.
+- `PLANNED` — Broader run authoring/controls, interruption recovery, and human/AI evaluation beyond the bounded objective slice.
 - `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
-- Broader metrics, objective verification, blind human evaluation, scoring, ranking, and results analysis.
+- Broader metrics, blind human evaluation, AI judging, scoring/ranking analysis, and results analysis.
 
 ## Phase C — Official Benchmark Packs — PLANNED
 
