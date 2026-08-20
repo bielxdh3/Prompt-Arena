@@ -1,12 +1,16 @@
 # Data model
 
-Phase 01 establishes storage vocabulary and contracts, not live benchmark data.
+Phase 01 established storage vocabulary and contracts. Phase 02 adds local metadata persistence and immutable artifact
+writes without adding providers or runtime execution.
 
 ## Foundation records
 
 `schema_migrations` records applied migration versions and timestamps. `artifact_records` identifies an app-owned
-artifact by stable ID, kind, portable relative path, artifact schema version, optional SHA-256, and creation time. The
-foundation migration inserts no rows.
+artifact by stable ID, kind, portable relative path, artifact schema version, optional SHA-256, and creation time.
+`packs` and `benchmark_versions` store canonical JSON snapshots and content hashes. `profile_revisions`, `runs`,
+`attempts`, and `result_records` use the same immutable JSON-plus-hash pattern; result records reference an attempt.
+Replaying identical content returns `AlreadyPresent`; changing content under an existing ID returns an immutable
+conflict. Metadata records are capped at 1 MiB.
 
 The filesystem contract maps one app-owned storage root to:
 
@@ -15,7 +19,17 @@ The filesystem contract maps one app-owned storage root to:
 <root>/artifacts/<validated-relative-path>
 ```
 
-It resolves paths only; it does not create, write, delete, or follow symlinks yet.
+The storage service creates the app-owned directories, rejects symlinks in artifact parents, writes bytes through a
+temporary file, and creates the final name without replacement. It never follows an artifact symlink or rewrites an
+existing artifact. Artifact paths are portable relative paths with no traversal, absolute roots, drive prefixes,
+backslashes, or empty segments.
+
+## Benchmark validation
+
+`validate_benchmark_document` parses benchmark v1 with serde, preserves unknown JSON fields through flattened maps,
+then applies deterministic manual checks for required shape, identifiers, version identity, ranges, rubric/task
+invariants, and case artifact references. The checked-in JSON Schema documents the same boundary; it is not executed by
+a runtime schema engine in this phase.
 
 ## Benchmark vocabulary for later phases
 
