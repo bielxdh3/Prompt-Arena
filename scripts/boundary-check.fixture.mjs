@@ -7,6 +7,7 @@ import {
   findObviousKeyMaterial,
   findSecretLikePaths,
 } from "./boundary-check.mjs";
+import { targetTripleFromRustc, workerSidecarName } from "./prepare-worker-sidecar.mjs";
 
 const CSP = "default-src 'self'; connect-src 'self' http://localhost:1420 ws://localhost:1420 ipc: http://ipc.localhost; img-src 'self' asset: https://asset.localhost data:; style-src 'self'; font-src 'self'; script-src 'self'";
 
@@ -27,18 +28,41 @@ test("accepts the reviewed Windows/Linux workflow and local Tauri boundary", () 
             os: [windows-latest, ubuntu-latest]
         runs-on: \${{ matrix.os }}
         steps:
-          - run: npm install --no-audit --no-fund
+          - run: npm ci --no-audit --no-fund
           - run: npm run check:boundaries
           - run: npm audit --omit=dev --audit-level=high
   `;
   assert.deepEqual(checkWorkflowText(workflow), []);
+  const legacyWorkflow = workflow.replace("npm ci --no-audit --no-fund", "npm install --no-audit --no-fund");
+  assert.ok(checkWorkflowText(legacyWorkflow).some((failure) => failure.includes("after dependency installation")));
   assert.deepEqual(checkTauriConfig({
+    build: {
+      beforeDevCommand: "npm run dev",
+      beforeBuildCommand: "npm run prepare:worker-sidecar && npm run build",
+    },
     app: { security: { csp: CSP } },
-    bundle: { active: false, targets: ["nsis", "deb", "appimage"] },
+    bundle: {
+      active: true,
+      targets: ["nsis", "deb", "appimage"],
+      externalBin: ["binaries/prompt-arena-worker"],
+    },
   }), []);
   assert.deepEqual(checkCapabilityDocuments([
     ["src-tauri/capabilities/default.json", JSON.stringify({ identifier: "default", permissions: [] })],
   ]), []);
+});
+
+test("derives deterministic Windows/Linux worker sidecar names", () => {
+  assert.equal(
+    workerSidecarName("x86_64-unknown-linux-gnu"),
+    "prompt-arena-worker-x86_64-unknown-linux-gnu",
+  );
+  assert.equal(
+    workerSidecarName("x86_64-pc-windows-msvc"),
+    "prompt-arena-worker-x86_64-pc-windows-msvc.exe",
+  );
+  assert.equal(targetTripleFromRustc("rustc 1.84.0\nhost: aarch64-unknown-linux-gnu\n"), "aarch64-unknown-linux-gnu");
+  assert.throws(() => workerSidecarName("aarch64-apple-darwin"), /Windows\/Linux/);
 });
 
 test("rejects active macOS CI and packaging drift", () => {

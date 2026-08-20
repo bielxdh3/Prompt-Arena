@@ -13,7 +13,8 @@
     "test:boundaries": "node scripts/boundary-check.fixture.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "prepare:worker-sidecar": "node scripts/prepare-worker-sidecar.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.5.0",

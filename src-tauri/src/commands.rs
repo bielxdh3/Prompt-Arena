@@ -6,7 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::{
     domain::{
@@ -413,11 +413,11 @@ pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus
 /// its terminal outcome in the app-owned store.
 #[tauri::command]
 pub fn execute_run_once(app: AppHandle, plan: RunPlan) -> Result<PersistedExecution, CommandError> {
-    let outcome = invoke_worker_once(&plan)?;
+    let outcome = invoke_worker_once(&app, &plan)?;
     persist_terminal_outcome(&storage_for(&app)?, &outcome, &now_marker()).map_err(Into::into)
 }
 
-fn invoke_worker_once(plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
+fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
     let job_id = worker_job_id(plan);
     let request = WorkerRequest::GenerateOnce {
         protocol_version: WORKER_PROTOCOL_VERSION,
@@ -439,7 +439,12 @@ fn invoke_worker_once(plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
         code: "worker_unavailable",
         message: "the app executable path is unavailable".to_owned(),
     })?;
-    let worker_executable = resolve_worker_executable(&current_executable)?;
+    let packaged_worker = app
+        .path()
+        .resolve(worker_sidecar_resource_path(), BaseDirectory::Resource)
+        .ok();
+    let worker_executable =
+        resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
     let mut child = Command::new(worker_executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -532,6 +537,16 @@ fn worker_executable_name() -> &'static str {
     }
 }
 
+const WORKER_SIDECAR_PATH: &str = "binaries/prompt-arena-worker";
+const WORKER_SIDECAR_TARGET_TRIPLE: &str = env!("TAURI_ENV_TARGET_TRIPLE");
+
+fn worker_sidecar_resource_path() -> PathBuf {
+    let extension = if cfg!(windows) { ".exe" } else { "" };
+    PathBuf::from(format!(
+        "{WORKER_SIDECAR_PATH}-{WORKER_SIDECAR_TARGET_TRIPLE}{extension}"
+    ))
+}
+
 fn worker_executable_path(current_executable: &Path) -> Result<PathBuf, CommandError> {
     let parent = current_executable.parent().ok_or_else(|| CommandError {
         code: "worker_unavailable",
@@ -540,15 +555,23 @@ fn worker_executable_path(current_executable: &Path) -> Result<PathBuf, CommandE
     Ok(parent.join(worker_executable_name()))
 }
 
-fn resolve_worker_executable(current_executable: &Path) -> Result<PathBuf, CommandError> {
-    let worker = worker_executable_path(current_executable)?;
-    if !worker.is_file() {
-        return Err(CommandError {
-            code: "worker_unavailable",
-            message: "the app-owned one-shot worker executable is unavailable".to_owned(),
-        });
+fn resolve_worker_executable(
+    current_executable: &Path,
+    packaged_worker: Option<&Path>,
+) -> Result<PathBuf, CommandError> {
+    let dev_worker = worker_executable_path(current_executable)?;
+    if dev_worker.is_file() {
+        return Ok(dev_worker);
     }
-    Ok(worker)
+    if let Some(packaged_worker) = packaged_worker {
+        if packaged_worker.is_file() {
+            return Ok(packaged_worker.to_path_buf());
+        }
+    }
+    Err(CommandError {
+        code: "worker_unavailable",
+        message: "the app-owned one-shot worker executable is unavailable".to_owned(),
+    })
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
@@ -659,13 +682,14 @@ fn supported_platform() -> SupportedPlatform {
 mod tests {
     use std::{
         fs,
-        path::Path,
+        path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
     };
 
     use super::{
-        app_status, read_benchmark_version_from_storage, worker_executable_name,
-        worker_executable_path, StorageState,
+        app_status, read_benchmark_version_from_storage, resolve_worker_executable,
+        worker_executable_name, worker_executable_path, worker_sidecar_resource_path, StorageState,
+        WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
 
@@ -686,6 +710,77 @@ mod tests {
             Some(worker_executable_name())
         );
         assert!(!path.to_string_lossy().contains("prompt-arena.exe/"));
+    }
+
+    #[test]
+    fn worker_resolution_prefers_the_dev_sibling_over_the_packaged_resource() {
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-worker-resolution-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let app = root.join("prompt-arena.exe");
+        let dev_worker = root.join(worker_executable_name());
+        let resource_worker = worker_sidecar_resource_path();
+        let resource_worker = root.join("resource").join(resource_worker);
+        fs::create_dir_all(resource_worker.parent().unwrap()).expect("resource directory creates");
+        fs::write(&app, []).expect("app fixture writes");
+        fs::write(&dev_worker, []).expect("dev worker fixture writes");
+        fs::write(&resource_worker, []).expect("packaged worker fixture writes");
+
+        let resolved = resolve_worker_executable(&app, Some(resource_worker.as_path()))
+            .expect("dev worker resolves");
+        assert_eq!(resolved, dev_worker);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn worker_resolution_falls_back_to_the_fixed_packaged_resource() {
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-packaged-worker-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let app = root.join("prompt-arena.exe");
+        let packaged_worker = root.join("resource").join(worker_sidecar_resource_path());
+        fs::create_dir_all(packaged_worker.parent().unwrap()).expect("resource directory creates");
+        fs::write(&app, []).expect("app fixture writes");
+        fs::write(&packaged_worker, []).expect("packaged worker fixture writes");
+
+        let resolved = resolve_worker_executable(&app, Some(packaged_worker.as_path()))
+            .expect("packaged worker resolves");
+        assert_eq!(resolved, packaged_worker);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tauri_config_declares_the_fixed_windows_linux_worker_sidecar() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("config parses");
+        let bundle = config.get("bundle").expect("bundle config exists");
+        assert_eq!(
+            bundle.get("active").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            bundle
+                .get("externalBin")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|paths| paths.first())
+                .and_then(serde_json::Value::as_str),
+            Some(WORKER_SIDECAR_PATH)
+        );
+    }
+
+    #[test]
+    fn packaged_worker_resource_uses_the_tauri_target_triple_suffix() {
+        let extension = if cfg!(windows) { ".exe" } else { "" };
+        assert_eq!(
+            worker_sidecar_resource_path(),
+            PathBuf::from(format!(
+                "{WORKER_SIDECAR_PATH}-{WORKER_SIDECAR_TARGET_TRIPLE}{extension}"
+            ))
+        );
     }
 
     #[test]
