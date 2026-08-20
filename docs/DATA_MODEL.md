@@ -105,6 +105,19 @@ attempt ID, progress, and terminal outcome are displayed, and history navigation
 preview invokes no bridge command and creates no sample state. Cancellation, broader repetition controls, and process
 lifecycle remain outside this boundary.
 
+## Phase 09 bounded attempt evidence
+
+An attempt keeps its existing immutable identity, status, effective configuration snapshot, result reference, and artifact
+references. A completed attempt additionally stores one `responseSummary` value in its flattened extra fields. The
+summary is bounded to 8 KiB and contains model, finish reason, response text UTF-8 byte count, tool-call count, and
+optional usage/timing counters. It contains no response text; the immutable result artifact remains the only response
+payload. Failed and cancelled attempts do not receive this completed-response summary.
+
+The existing `list_run_attempts` read returns these typed attempt records. The Runs surface may display summary metrics,
+profile/case IDs, the effective-configuration boundary, and artifact/hash presence, but it does not read artifact files
+or claim scores/evaluation. Replays are idempotent and changed summary metadata under an existing attempt identity is an
+immutable conflict.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.
