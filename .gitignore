@@ -6,6 +6,18 @@ src-tauri/gen/
 .env.*
 !.env.example
 *.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+*.secrets
+*.token
+credentials*.json
+.npmrc
+secrets/
 
 # Local application data and generated artifacts
 *.db

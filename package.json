@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
+    "check:boundaries": "node scripts/boundary-check.mjs",
+    "test:boundaries": "node scripts/boundary-check.fixture.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

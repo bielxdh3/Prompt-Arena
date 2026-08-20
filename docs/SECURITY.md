@@ -25,6 +25,12 @@ estimation validates dated price snapshots and bounded usage, fails closed when 
 decisions never authorize execution by themselves. Unknown provider-selection fields, including credential-like fields,
 are discarded before a sanitized summary is returned. Local Ollama remains the only executable runtime.
 
+Phase 17 adds a dependency-free review checker. It reads fixed repository configuration and Git-tracked paths, never emits
+file contents, and validates the Windows/Linux pull-request matrix, inactive non-macOS packaging, local-only CSP/font and
+loopback invariants, secret-file ignore rules, lockfiles, and obvious key-material absence. CI also runs a high-severity
+production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
+repository state.
+
 The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
 command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
 does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
@@ -40,7 +46,9 @@ model paths, download files, or send telemetry.
 - Worker input is untrusted JSON and is rejected on malformed JSON, unsupported protocol versions, or unsafe job IDs.
 - The execution command resolves only the fixed worker binary beside the current app executable, supplies no shell or
   arbitrary command arguments, and bounds both request and response bytes.
-- Benchmark documents are deserialized and manually validated at the domain boundary; unknown JSON fields are retained.
+- Benchmark documents are capped at 256 KiB of raw input before serde parsing or canonicalization, then deserialized and
+  manually validated at the domain boundary; oversized input returns a typed `benchmark_too_large` error and unknown
+  JSON fields are retained.
 - Published version reads validate the deterministic bounded `benchmark-id@version` identity and return only the stored
   canonical document JSON plus summary. They do not import, rewrite, re-canonicalize, or publish benchmark history.
 - Benchmark drafts are canonicalized before local storage and enforce portable IDs, a 256-byte title limit, a 256 KiB
@@ -61,10 +69,10 @@ model paths, download files, or send telemetry.
   serialized metadata map at 256 KiB, and sorts records by name and digest. The standard-library HTTP client accepts
   only explicit plain-HTTP loopback endpoints; the Phase 06 command uses exactly `http://127.0.0.1:11434` and rejects
   credentials, query strings, fragments, and non-loopback hosts. Unavailable transport failures and malformed runtime
-  responses remain typed unavailable/protocol errors. Status/header/NDJSON lines are capped at 64 KiB, non-stream
-  bodies at 16 MiB, and cumulative streamed NDJSON payload bytes at 16 MiB. Every response also has a finite 10-minute
-  overall read deadline by default, configurable from 1 ms through 60 minutes, in addition to the 500 ms per-read
-  socket timeout.
+  responses remain typed unavailable/protocol errors. Status/header/NDJSON lines are capped at 64 KiB; aggregate HTTP
+  response headers and chunk trailers are separately capped at 64 KiB and 128 entries; non-stream bodies are capped at
+  16 MiB, cumulative streamed NDJSON payload bytes at 16 MiB, and every response has a finite 10-minute overall read
+  deadline by default, configurable from 1 ms through 60 minutes, in addition to the 500 ms per-read socket timeout.
 - Hardware discovery uses only `std::thread::available_parallelism`, the fixed Linux `/proc/meminfo` file, and a narrow
   Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are not guessed:
   they remain null with unavailable status/confidence when feature detection is absent. The snapshot is read-only and
@@ -79,8 +87,11 @@ model paths, download files, or send telemetry.
   stored document. It exposes no raw JSON, endpoint, credential, cancellation, or process-lifecycle input; progress and
   terminal text are rendered as text and no run record exists until explicit one-shot execution.
 - Completed attempt summaries are bounded metadata only: they omit response text, are stored in the immutable attempt's
-  flattened extra fields, and are rejected when they exceed the 8 KiB summary bound. The Runs view uses the existing
-  typed `list_run_attempts` read and displays artifact/hash references without resolving or rendering artifact files.
+  flattened extra fields, and are rejected when they exceed the 8 KiB summary bound. The effective-configuration snapshot
+  retains only approved provider/endpoint/runtime/profile/model, runtime scalar, and capability fields; the full
+  `GenerationRequest` and its prompt, messages, system prompt, metadata, and tool definitions are never persisted there.
+  The Runs view uses the existing typed `list_run_attempts` read and displays artifact/hash references without resolving
+  or rendering artifact files.
   Failed/cancelled attempts have no completed-response summary. String expected values are separately capped at 64 KiB,
   validated at both plan boundaries, kept out of generation metadata/runtime requests, and reduced after generation to
   exact-text pass/fail, normalized byte counts, and SHA-256 hashes only; no response or expected text is copied into the
@@ -106,6 +117,10 @@ model paths, download files, or send telemetry.
   models, profiles, metrics, or credentials.
 - Phase 16 provider metadata and cost helpers are ephemeral and read-only. They never accept, log, persist, export, or
   transmit secrets; all four external identities remain unconfigured, identity-unverified, and network-not-wired.
+- Phase 17 boundary checks are fail-closed diagnostics over repository policy. They inspect every Git-tracked capability JSON
+  under `src-tauri/capabilities`, require its current empty/allowlisted permission boundary, and parse exact reviewed
+  `script-src`, `style-src`, `font-src`, and `connect-src` CSP allowlists. They report only generic failures or paths, never
+  matched contents, and documentation references to macOS are not treated as active support targets.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
   summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
