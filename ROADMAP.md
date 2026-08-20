@@ -230,15 +230,22 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
 
 External providers are secondary and must not block the local-first core.
 
-## Phase G — Personalization and Polish
+## Phase G — Personalization and Polish — IN PROGRESS
 
-- Full Appearance editor.
-- Font selection, font sizing, colors, accents, borders, chart palette, radii, and presets.
-- Restore defaults.
-- Theme persistence.
+### Phase 15 — Bounded local appearance preferences — DONE (bounded)
+
+- Settings provides the existing seven local font stacks, a bounded font scale, fixed accent choices, compact/rounded
+  radius presets, dark-neutral/warm/paper surfaces, reduced-motion control, restore defaults, and a live visual preview.
+- Preferences are normalized in a pure TypeScript module. CSS receives only fixed data-attribute values and maps those
+  values to safe local tokens; no arbitrary CSS, external fonts, or remote theme service is accepted.
+- Tauri desktop mode persists only sanitized presentation preferences in the local webview storage. Browser preview
+  shows an explicit no-persistence boundary and does not read or write localStorage or desktop records.
+
+### Future Phase G work
+
 - Theme import/export if feasible.
 - Refined dashboard and all primary surfaces.
-- Accessibility and reduced-motion behavior.
+- Accessibility review beyond the bounded reduced-motion behavior.
 - Storage cleanup/retention UI.
 - Local diagnostics.
 

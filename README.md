@@ -63,6 +63,10 @@ Phase 14 — DONE (bounded) — adds a read-only single-run comparability diagno
 blind-evaluation gate permits attempt evidence. It checks benchmark identity, terminal state, profile/runtime/model
 consistency, completed-attempt coverage, and exact-text evidence, then shows only a diagnostic pass/fail ordering or tie
 representation. It is not an official ranking, cross-run comparison, regression, tournament, human score, or AI judge.
+Phase 15 — DONE (bounded) — replaces the font-only Settings control with a local appearance editor. Seven existing
+system-font stacks, bounded font scale, allowlisted accents, compact/rounded corners, dark-neutral/warm/paper surfaces,
+reduced motion, restore defaults, and a truthful live preview are available. Only sanitized preferences persist in the
+Tauri desktop webview; browser preview changes are temporary and never write localStorage or desktop records.
 
 ## Run locally
 
@@ -110,6 +114,10 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 - The hardware baseline is a read-only local snapshot. It does not spawn a shell, inspect model paths, download anything,
   report telemetry, or guess unavailable GPU/VRAM data. Recommendation thresholds are bounded UI state only and compare
   reported Ollama model size with detected RAM as a transparent heuristic.
+- Appearance is presentation-only state. Font, scale, accent, radius, surface, and reduced-motion values are normalized
+  against fixed allowlists/bounds before CSS data attributes or local Tauri webview storage receive them. Browser preview
+  has no appearance persistence and creates no desktop record; there is no theme import, export, account, cloud sync, or
+  external font loading.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
   document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
@@ -154,7 +162,7 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   model-library management, broader runtime UI, and Docker-backed coding sandbox execution remain future work. The
   official programming pack records the sandbox as unavailable and must not be used to run unsafe code.
 - Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
-  selectable local font stacks; proprietary fonts are not bundled.
+  selectable local font stacks; proprietary fonts are not bundled. Appearance presets remain local and sanitized.
 
 See [ROADMAP.md](ROADMAP.md) and the concise [architecture](docs/ARCHITECTURE.md), [development](docs/DEVELOPMENT.md),
 [security](docs/SECURITY.md), [privacy](docs/PRIVACY.md), [data model](docs/DATA_MODEL.md), [testing](docs/TESTING.md),
