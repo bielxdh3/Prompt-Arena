@@ -71,6 +71,10 @@ Phase 16 — DONE (bounded foundation) — adds a read-only catalog for generic 
 Gemini provider identities plus pure dated-price cost and budget helpers. Every external provider remains unconfigured,
 network-not-wired, identity-unverified, and non-executable; no API keys, environment reads, network calls, telemetry, or
 provider persistence are added. Local Ollama remains the only executable runtime.
+Phase 17 — DONE (bounded hardening) — adds a dependency-free boundary checker and deterministic fixtures for the reviewed
+Windows/Linux CI matrix, inactive non-macOS packaging targets, Tauri CSP/local-font/loopback invariants, secret ignores,
+lockfiles, and tracked key-material screening. Pull-request CI runs the checker and high-severity production dependency
+audit after install; no release, signing, deployment, publication, or merge behavior is enabled.
 
 ## Run locally
 
@@ -126,6 +130,10 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   source state, identity confidence, and dated price-table shape. Pure cost estimates fail closed on missing/invalid
   prices, budget decisions can allow/confirm/deny, and sanitization discards unknown credential-like fields. No provider
   adapter, API-key input, secure storage, outbound request, cost history, or external execution exists.
+- The Phase 17 boundary checker reads only reviewed repository configuration and Git-tracked paths, reports no file contents,
+  and validates Windows/Linux CI, non-macOS inactive packaging, local Tauri CSP/fonts/loopback, secret ignores, lockfiles,
+  and obvious key-material absence. Pull-request CI also runs `npm audit --omit=dev --audit-level=high`; no release or
+  deployment workflow is present.
 - Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
   document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
@@ -174,4 +182,4 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
 
 See [ROADMAP.md](ROADMAP.md) and the concise [architecture](docs/ARCHITECTURE.md), [development](docs/DEVELOPMENT.md),
 [security](docs/SECURITY.md), [privacy](docs/PRIVACY.md), [data model](docs/DATA_MODEL.md), [testing](docs/TESTING.md),
-and [design system](docs/DESIGN_SYSTEM.md) notes.
+[release checklist](docs/RELEASE_CHECKLIST.md), and [design system](docs/DESIGN_SYSTEM.md) notes.

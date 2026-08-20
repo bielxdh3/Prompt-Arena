@@ -24,6 +24,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Check repository boundaries
+        run: npm run check:boundaries
+
+      - name: Test boundary checker
+        run: npm run test:boundaries
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Typecheck
         run: npm run typecheck
 

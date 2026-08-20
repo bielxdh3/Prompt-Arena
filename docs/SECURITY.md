@@ -25,6 +25,12 @@ estimation validates dated price snapshots and bounded usage, fails closed when 
 decisions never authorize execution by themselves. Unknown provider-selection fields, including credential-like fields,
 are discarded before a sanitized summary is returned. Local Ollama remains the only executable runtime.
 
+Phase 17 adds a dependency-free review checker. It reads fixed repository configuration and Git-tracked paths, never emits
+file contents, and validates the Windows/Linux pull-request matrix, inactive non-macOS packaging, local-only CSP/font and
+loopback invariants, secret-file ignore rules, lockfiles, and obvious key-material absence. CI also runs a high-severity
+production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
+repository state.
+
 The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
 command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
 does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
@@ -106,6 +112,8 @@ model paths, download files, or send telemetry.
   models, profiles, metrics, or credentials.
 - Phase 16 provider metadata and cost helpers are ephemeral and read-only. They never accept, log, persist, export, or
   transmit secrets; all four external identities remain unconfigured, identity-unverified, and network-not-wired.
+- Phase 17 boundary checks are fail-closed diagnostics over repository policy. They report only generic failures or paths,
+  never matched contents, and documentation references to macOS are not treated as active support targets.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
   summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
