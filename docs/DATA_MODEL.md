@@ -132,6 +132,28 @@ normalized UTF-8 byte counts, and expected/actual SHA-256 hashes. The evidence c
 Replay with identical evidence is idempotent; changed evidence under the same immutable result/attempt identity is an
 immutable conflict. Runs recognizes and displays only the exact-text shape and never opens the artifact payload.
 
+## Phase 11 bounded blind human evaluation
+
+Migration `0004_blind_evaluations.sql` adds an immutable `blind_evaluations` JSON-record table. Preparation does not
+write a record: it selects completed attempts for one real run, reads only a registered `generation-response` artifact
+through the storage service, and verifies its app-owned relative path, kind, schema version, regular-file boundary, size,
+and SHA-256 before parsing `GenerationResponse`. The selected response text exists only in the preparation result and
+the in-memory desktop review; it is never copied into Attempts, Results, or the evaluation record.
+
+Preparation returns an evaluation ID derived from the run, stable anonymous `Response 1..N` labels, deterministic tokens,
+and a deterministic order derived from the run/attempt identities. The prepared bridge shape contains only those labels,
+tokens, and plain response text. The lock request contains one score per token (overall score 1–5 plus a bounded optional
+criterion map) and an optional complete ranking represented as token groups. The immutable `BlindEvaluationRecord` keeps
+the run/evaluation IDs, locked status, label/token/attempt-ID presentation mapping for post-lock audit, normalized
+scores/ranking, and creation/lock timestamps; response text is deliberately absent. Identical lock replay returns the
+same record and conflicting content is an immutable conflict.
+
+The Runs UI uses a parent-owned blind-surface state gate. While loading, preparing, prepared, empty, or in error, it does
+not mount `AttemptDetail`; the review surface therefore exposes anonymous cards and score/ranking controls without model,
+profile, provider, endpoint, metric, objective, or attempt-ID evidence. Only a successful lock re-enables the existing
+attempt read surface and resolved audit IDs. This is a local single-user overall-score/ranking lock for one run, with no
+AI judge, multi-rater workflow, cross-run ranking, rubric authoring, or broader scoring semantics.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.

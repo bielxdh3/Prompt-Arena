@@ -128,11 +128,27 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
   unread; human/AI evaluation, rankings, external providers, and broader scoring remain outside this slice. Browser
   preview remains no-write.
 
+### Phase 11 — Blind human-evaluation lock — DONE (bounded)
+
+- Desktop-only preparation reads completed generation responses through the app-owned artifact registry and a safe,
+  size-bounded, SHA-256-verified reader. It derives stable anonymous labels, tokens, and order from real attempt data;
+  it does not mutate Attempts, Results, or artifact files.
+- The Runs parent gates AttemptDetail and all identifying attempt evidence while evaluation is loading, preparing,
+  prepared, empty, or in error. The prepared surface exposes only untrusted plain-text response cards plus bounded
+  1–5 overall score and optional complete token-ranking controls; after lock, the immutable audit record may resolve
+  anonymous tokens to attempt IDs.
+- Migration `0004_blind_evaluations.sql` stores a separate immutable evaluation record containing presentation/audit
+  mapping, scores, ranking, and timestamps. Response text is never copied into that record, and browser preview remains
+  no-write.
+- This is a single-user local overall-score/ranking lock for one run. It does not add AI judging, multi-rater review,
+  cross-run rankings, rubric authoring, or broader scoring/analysis.
+
 ### Remaining Phase B work
 
-- `PLANNED` — Broader run authoring/controls, interruption recovery, and human/AI evaluation beyond the bounded objective slice.
+- `PLANNED` — Broader run authoring/controls, interruption recovery, and human-evaluation workflows beyond this bounded
+  single-user blind lock, including multi-rater review and richer rubrics.
 - `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
-- Broader metrics, blind human evaluation, AI judging, scoring/ranking analysis, and results analysis.
+- `PLANNED` — AI judging, cross-run rankings, broader scoring/analysis, and results analysis.
 
 ## Phase C — Official Benchmark Packs — PLANNED
 

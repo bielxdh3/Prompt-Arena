@@ -630,6 +630,91 @@ h3 {
   color: var(--color-text);
 }
 
+.evaluation-panel {
+  margin-top: 28px;
+}
+
+.blind-review-content,
+.locked-evaluation {
+  display: grid;
+  gap: 18px;
+}
+
+.blind-review-warning {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.blind-response-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.blind-response-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+}
+
+.blind-response-text {
+  min-height: 88px;
+  margin: 10px 0 16px;
+  padding: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.blind-score-control {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.4fr) minmax(130px, 0.6fr);
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.blind-score-control select {
+  width: 100%;
+}
+
+.blind-ranking-controls {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.evaluation-validation {
+  color: var(--color-danger);
+}
+
+.locked-evaluation-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.locked-evaluation-list strong,
+.locked-evaluation-list span {
+  display: block;
+}
+
+.locked-evaluation-list strong {
+  color: var(--color-text);
+}
+
 .section-heading {
   justify-content: space-between;
   gap: 16px;
