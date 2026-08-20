@@ -56,14 +56,17 @@ from an already-running local Ollama service; it does not spawn or forcibly term
   version/document identity, selected task/case identity, non-empty prompt, immutable profile identity/runtime/model,
   supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It always emits the
   fixed/default `http://127.0.0.1:11434` Ollama configuration and delegates only to the existing one-shot worker.
-- Browser preview is a no-write surface: it renders unsaved editor/profile state and explicit profile/model preview
-  states only. It cannot invoke draft/version/profile/model commands, validate benchmarks, query Ollama, or invent
+- The Arena view accepts only selected identities returned by typed immutable version/profile reads and the selected
+  stored document. It exposes no raw JSON, endpoint, credential, cancellation, or process-lifecycle input; progress and
+  terminal text are rendered as text and no run record exists until explicit one-shot execution.
+- Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
+  only. It cannot invoke draft/version/profile/model/Arena commands, validate benchmarks, query Ollama, or invent
   records. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
 
 ## Required future controls
 
-External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, run authoring/model
-execution UI beyond the bounded plan helper, evaluation, official benchmark packs, full model-library management,
+External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
+model execution UI beyond the bounded Arena flow, evaluation, official benchmark packs, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.

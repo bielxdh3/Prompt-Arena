@@ -6,8 +6,8 @@ Validation is proportional to the foundation and must remain honest about what i
 
 - TypeScript project references: `npm run typecheck`.
 - Frontend bundle: `npm run build`.
-- Frontend unit tests for fonts, benchmark authoring bounds/shape handling, Phase 06 profile identity/bounds, and
-  browser-preview surface states:
+- Frontend unit tests for fonts, benchmark authoring bounds/shape handling, Phase 06 profile identity/bounds, bounded
+  Arena option extraction/selection/preview behavior, and browser-preview surface states:
   `npm run test`.
 - Rust formatting: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`.
 - Rust compilation: `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`.
@@ -33,14 +33,16 @@ Validation is proportional to the foundation and must remain honest about what i
 ## Not claimed yet
 
 The tests exercise the local SQLite service and immutable artifact writer using temporary app-owned roots, the bounded
-one-shot orchestration contract, the Phase 05 draft boundary, the Phase 06 profile/discovery slice, and the normalized
-runtime/Ollama adapter through a local mock server. There is no desktop integration test that launches the Tauri app
-and worker together, no run authoring or model execution UI, app-managed long-lived runtime lifecycle, full model
-download/catalog/deletion flow, external or cloud provider test, bundled official benchmark pack, or production-data
-migration test. Those checks belong with the phases that implement each behavior; the current tests verify the live
-command/worker contracts and local evidence boundaries without claiming a full Arena UI.
+one-shot orchestration contract, the Phase 05 draft boundary, the Phase 06 profile/discovery slice, the bounded Arena
+helper, and the normalized runtime/Ollama adapter through a local mock server. There is no desktop integration test
+that launches the Tauri app and worker together, no broader run authoring/control UI, app-managed long-lived runtime
+lifecycle, full model download/catalog/deletion flow, external or cloud provider test, bundled official benchmark pack,
+or production-data migration test. Those checks belong with the phases that implement each behavior; the current tests
+verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
+desktop UI integration.
 
 For UI review, check keyboard navigation, focus visibility, narrow desktop widths, font switching, reduced motion, the
 structured editor’s bounded text-only expectation behavior, the Models view’s unavailable/protocol/empty states, and
-the loading, bridge-error, empty, and browser no-write states for profiles and models in both browser preview and the
+the Arena view’s loading, bridge-error, malformed-document, empty, deterministic preview, busy, terminal success/
+failure/cancelled, attempt/progress, history-navigation, and browser no-write states in both browser preview and the
 Windows/Linux desktop shell.

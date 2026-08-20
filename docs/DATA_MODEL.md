@@ -92,6 +92,19 @@ bounded by the existing one-shot plan limit. The bridge exposes typed version re
 but browser preview does not call either function, create records, or invent task/case/profile data. Full repetition
 controls, run authoring, cancellation, and process lifecycle remain planned.
 
+## Phase 08 Arena UI boundary
+
+The Core Arena view reads the existing immutable version summary and profile-revision list, then reads the selected
+stored canonical version document. It offers only identities present in those records and the document: one benchmark
+version, one immutable profile revision, one task, and one case. It renders the run-plan prompt/system/model preview and
+fixed runtime boundary without exposing raw JSON, endpoint, or credential fields.
+
+The view does not create a run record while selecting or previewing. On explicit desktop execution it gives the existing
+run-plan helper a new bounded run identity and invokes the existing one-shot command with one repetition; the returned
+attempt ID, progress, and terminal outcome are displayed, and history navigation remains a read surface. Browser
+preview invokes no bridge command and creates no sample state. Cancellation, broader repetition controls, and process
+lifecycle remain outside this boundary.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.

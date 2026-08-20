@@ -760,6 +760,125 @@ button.benchmark-record-row:hover {
   border-color: var(--color-border);
 }
 
+.arena-state-panel,
+.arena-empty-grid,
+.arena-selection-panel,
+.arena-preview-panel {
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.arena-empty-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.arena-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.22fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.arena-selection-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.arena-select-control {
+  display: block;
+  min-width: 0;
+}
+
+.arena-select-control .font-select {
+  width: 100%;
+}
+
+.arena-preview-facts,
+.arena-boundary,
+.arena-terminal-facts {
+  border-top: 1px solid var(--color-border);
+}
+
+.arena-prompt-block {
+  margin-top: 22px;
+}
+
+.arena-prompt {
+  max-height: 220px;
+  margin: 9px 0 0;
+  padding: 14px;
+  overflow: auto;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.arena-boundary {
+  margin-top: 22px;
+}
+
+.arena-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-top: 24px;
+}
+
+.arena-actions .text-button {
+  margin-top: 0;
+}
+
+.arena-execution-status,
+.arena-terminal {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--color-border);
+}
+
+.arena-terminal .compact-heading {
+  margin-bottom: 18px;
+}
+
+.arena-status-success {
+  color: var(--color-success);
+}
+
+.arena-status-cancelled {
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.arena-status-failure {
+  color: var(--color-danger);
+  border-color: rgb(224 160 154 / 0.38);
+}
+
+.arena-progress {
+  margin-top: 22px;
+}
+
+.arena-progress-list {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.arena-progress-list strong {
+  color: var(--color-text);
+}
+
 .new-draft-button {
   margin-top: 18px;
 }
@@ -979,7 +1098,7 @@ button.benchmark-record-row:hover {
   }
 
   .primary-nav {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .nav-heading,
@@ -1009,6 +1128,10 @@ button.benchmark-record-row:hover {
   .models-layout {
     grid-template-columns: 1fr;
   }
+
+  .arena-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 680px) {
@@ -1027,7 +1150,8 @@ button.benchmark-record-row:hover {
   }
 
   .hero-panel,
-  .settings-grid {
+  .settings-grid,
+  .arena-empty-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1042,6 +1166,16 @@ button.benchmark-record-row:hover {
   .form-grid,
   .form-grid-three {
     grid-template-columns: 1fr;
+  }
+
+  .arena-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .arena-actions button {
+    justify-content: center;
+    width: 100%;
   }
 
   .form-span-three {
