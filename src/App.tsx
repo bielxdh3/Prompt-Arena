@@ -80,6 +80,17 @@ import {
   officialPacksPreviewCopy,
 } from "./benchmark-ui";
 import {
+  ACCENT_OPTIONS,
+  APPEARANCE_STORAGE_KEY,
+  DEFAULT_APPEARANCE,
+  RADIUS_OPTIONS,
+  SURFACE_OPTIONS,
+  normalizeAppearance,
+  parseAppearancePreferences,
+  serializeAppearancePreferences,
+  type AppearancePreferences,
+} from "./appearance";
+import {
   boundedRecommendationThresholds,
   classifyModelRecommendation,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
@@ -112,9 +123,18 @@ const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] =
   { id: "settings", label: "Settings", description: "Appearance and boundaries" },
 ];
 
+function loadAppearancePreferences(): AppearancePreferences {
+  if (!isDesktopEnvironment()) return { ...DEFAULT_APPEARANCE };
+  try {
+    return parseAppearancePreferences(window.localStorage.getItem(APPEARANCE_STORAGE_KEY));
+  } catch {
+    return { ...DEFAULT_APPEARANCE };
+  }
+}
+
 function App() {
   const [activeView, setActiveView] = useState<ViewId>("overview");
-  const [fontId, setFontId] = useState("times");
+  const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
 
   useEffect(() => {
@@ -148,8 +168,25 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isDesktopEnvironment()) return;
+    try {
+      window.localStorage.setItem(APPEARANCE_STORAGE_KEY, serializeAppearancePreferences(appearance));
+    } catch {
+      // Local presentation preferences are best-effort when the webview storage is unavailable.
+    }
+  }, [appearance]);
+
   return (
-    <div className="app-shell" data-font={fontId}>
+    <div
+      className="app-shell"
+      data-font={appearance.fontId}
+      data-font-scale={appearance.fontScale}
+      data-accent={appearance.accentId}
+      data-radius={appearance.radiusId}
+      data-surface={appearance.surfaceId}
+      data-reduced-motion={appearance.reducedMotion ? "true" : "false"}
+    >
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>
@@ -219,7 +256,14 @@ function App() {
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView />}
-          {activeView === "settings" && <Settings fontId={fontId} onFontChange={setFontId} />}
+          {activeView === "settings" && (
+            <Settings
+              appearance={appearance}
+              desktop={isDesktopEnvironment()}
+              onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
+              onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
+            />
+          )}
         </main>
       </div>
     </div>
@@ -2186,59 +2230,182 @@ function StateMessage({
   );
 }
 
-function Settings({ fontId, onFontChange }: { fontId: string; onFontChange: (id: string) => void }) {
+function Settings({
+  appearance,
+  desktop,
+  onAppearanceChange,
+  onRestoreDefaults,
+}: {
+  appearance: AppearancePreferences;
+  desktop: boolean;
+  onAppearanceChange: (next: AppearancePreferences) => void;
+  onRestoreDefaults: () => void;
+}) {
+  function updateAppearance<K extends keyof AppearancePreferences>(field: K, value: AppearancePreferences[K]) {
+    onAppearanceChange({ ...appearance, [field]: value });
+  }
+
   return (
     <div className="view-stack">
       <section className="panel page-intro">
         <p className="eyebrow">Appearance and boundaries</p>
         <h2>Settings</h2>
-        <p>These controls are local presentation preferences. No account or cloud connection is required.</p>
+        <p>
+          Shape this local workspace for reading comfort. Changes preview immediately and stay inside the current
+          installation; there is no account, cloud sync, external font, or theme service.
+        </p>
       </section>
 
-      <section className="settings-grid">
-        <div className="panel settings-card">
+      <section className="appearance-grid">
+        <div className="panel settings-card appearance-controls">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Typography</p>
-              <h3>Choose a reading voice</h3>
+              <p className="eyebrow">Personalization</p>
+              <h3>Make the workspace yours</h3>
             </div>
             <span className="section-index">A</span>
           </div>
-          <label className="field-label" htmlFor="font-choice">
-            Interface font
-          </label>
+
+          <label className="field-label" htmlFor="font-choice">Interface font</label>
           <select
             className="font-select"
             id="font-choice"
-            value={fontId}
-            onChange={(event) => onFontChange(event.target.value)}
+            value={appearance.fontId}
+            onChange={(event) => updateAppearance("fontId", event.target.value)}
           >
-            {FONT_OPTIONS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
+            {FONT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
           </select>
           <p className="field-help">
-            Times New Roman is the default intent. Linux falls back to Liberation Serif, Nimbus Roman, DejaVu
-            Serif, then the system serif when it is not installed.
+            Seven local system stacks are available. Times New Roman remains the default intent, with honest Linux
+            fallbacks when a font is not installed.
           </p>
-          <p className="font-preview">Prompt Arena — evidence over noise.</p>
+
+          <div className="appearance-field">
+            <div className="field-label-row">
+              <label className="field-label" htmlFor="font-scale">Font scale</label>
+              <output className="control-value" htmlFor="font-scale">{appearance.fontScale}%</output>
+            </div>
+            <input
+              className="font-scale-control"
+              id="font-scale"
+              type="range"
+              min="90"
+              max="115"
+              step="5"
+              value={appearance.fontScale}
+              onChange={(event) => updateAppearance("fontScale", Number(event.target.value))}
+            />
+            <div className="range-labels" aria-hidden="true"><span>Compact</span><span>Standard</span><span>Large</span></div>
+          </div>
+
+          <fieldset className="appearance-fieldset">
+            <legend className="field-label">Accent color</legend>
+            <div className="appearance-choice-grid">
+              {ACCENT_OPTIONS.map((option) => (
+                <button
+                  className={`appearance-choice ${appearance.accentId === option.id ? "is-selected" : ""}`}
+                  data-accent={option.id}
+                  key={option.id}
+                  type="button"
+                  aria-pressed={appearance.accentId === option.id}
+                  onClick={() => updateAppearance("accentId", option.id)}
+                >
+                  <span className="appearance-swatch" data-accent={option.id} aria-hidden="true" />
+                  <span>{option.label}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="appearance-fieldset">
+            <legend className="field-label">Corner shape</legend>
+            <div className="appearance-choice-grid appearance-choice-grid-two">
+              {RADIUS_OPTIONS.map((option) => (
+                <button
+                  className={`appearance-choice appearance-choice-wide ${appearance.radiusId === option.id ? "is-selected" : ""}`}
+                  key={option.id}
+                  type="button"
+                  aria-pressed={appearance.radiusId === option.id}
+                  onClick={() => updateAppearance("radiusId", option.id)}
+                >
+                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="appearance-fieldset">
+            <legend className="field-label">Surface</legend>
+            <div className="appearance-choice-grid">
+              {SURFACE_OPTIONS.map((option) => (
+                <button
+                  className={`appearance-choice appearance-choice-wide ${appearance.surfaceId === option.id ? "is-selected" : ""}`}
+                  key={option.id}
+                  type="button"
+                  aria-pressed={appearance.surfaceId === option.id}
+                  onClick={() => updateAppearance("surfaceId", option.id)}
+                >
+                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <label className="appearance-toggle">
+            <input
+              type="checkbox"
+              checked={appearance.reducedMotion}
+              onChange={(event) => updateAppearance("reducedMotion", event.target.checked)}
+            />
+            <span><strong>Reduce motion</strong><small>Keep transitions and animations minimal.</small></span>
+          </label>
+
+          <button className="secondary-button restore-button" type="button" onClick={onRestoreDefaults}>
+            Restore defaults
+          </button>
         </div>
 
-        <div className="panel settings-card">
+        <div className="panel settings-card appearance-preview-card">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Data boundary</p>
-              <h3>Local by construction</h3>
+              <p className="eyebrow">Live preview</p>
+              <h3>Read it before you keep it</h3>
             </div>
             <span className="section-index">B</span>
           </div>
-          <div className="boundary-list">
+
+          <div className="appearance-preview" aria-live="polite">
+            <p className="eyebrow">Current presentation</p>
+            <h3>Evidence over noise.</h3>
+            <p>One quiet surface for inspecting prompts, runs, and local records.</p>
+            <div className="preview-sample-row">
+              <span className="status-chip is-ready">Local only</span>
+              <button className="primary-button" type="button">Sample action <span aria-hidden="true">→</span></button>
+            </div>
+          </div>
+
+          <p className="field-help preview-note">
+            This sample uses the current font, scale, accent, surface, corner, and motion settings. It is a visual
+            preview only; it creates no record.
+          </p>
+
+          <div className="storage-notice" role="status">
+            <span className="storage-notice-mark" aria-hidden="true">{desktop ? "✓" : "◇"}</span>
+            <div>
+              <strong>{desktop ? "Saved in this desktop webview" : "Browser preview: not persisted"}</strong>
+              <p>
+                {desktop
+                  ? "Only sanitized presentation preferences are stored locally. No desktop records, telemetry, or cloud sync are involved."
+                  : "Changes are temporary and this preview does not read or write localStorage or desktop records."}
+              </p>
+            </div>
+          </div>
+
+          <div className="boundary-list appearance-boundary-list">
             <BoundaryRow label="Prompt Arena server" value="None" />
-            <BoundaryRow label="Telemetry" value="Disabled" />
-            <BoundaryRow label="Worker lifetime" value="One request" />
-            <BoundaryRow label="Storage status" value="Local SQLite + artifacts" />
+            <BoundaryRow label="External fonts" value="Disabled" />
+            <BoundaryRow label="Theme telemetry" value="Disabled" />
+            <BoundaryRow label="Theme sync" value="Not available" />
           </div>
         </div>
       </section>
