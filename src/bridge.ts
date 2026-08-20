@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type StorageState = "contract_only";
+export type StorageState = "local";
 
 export type AppStatus = {
   appName: string;
