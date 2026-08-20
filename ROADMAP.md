@@ -95,11 +95,21 @@ downloads, benchmark fixtures, evaluation, or any external/cloud provider.
   worker command. This slice has no run-authoring UI, fake records, arbitrary endpoint or credential input, cancellation,
   process lifecycle, downloads, cloud providers, or browser writes; broader run controls remain planned.
 
+### Phase 08 — Bounded Core Arena UI and one-shot run entry — DONE (bounded)
+
+- The Arena view reads real immutable benchmark-version summaries and profile revisions through the typed bridge, then
+  reads the selected stored canonical version document without rewriting or inventing records.
+- The user selects one existing version, profile revision, task, and case. The view shows deterministic prompt/system/model
+  preview, fixed loopback Ollama configuration, one repetition, honest loading/error/empty/malformed/busy/terminal states,
+  attempt ID and progress, and navigation to the existing Runs read surface.
+- Desktop execution invokes the existing `buildRunPlan` and one-shot command only after selection; browser preview invokes
+  no bridge command and creates no state. Broader run authoring, cancellation, process lifecycle, evaluation, and runtime
+  controls remain planned.
+
 ### Remaining Phase B work
 
-- `PLANNED` — Run authoring/controls, interruption recovery, and evaluation.
+- `PLANNED` — Broader run authoring/controls, interruption recovery, and evaluation beyond the bounded Arena entry flow.
 - `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
-- Arena builder.
 - Metrics and effective configuration snapshots.
 - Objective verification.
 - Blind human evaluation.

@@ -4,7 +4,7 @@ Prompt Arena is a standalone local-first desktop application with three delibera
 
 ```text
 React/TypeScript UI
-        │ typed status, validation, draft/version persistence, profile/model reads, execution, and Runs reads
+        │ typed status, validation, draft/version persistence, profile/model reads, Arena execution, and Runs reads
 Tauri 2 desktop boundary
         ├─ app-owned local storage service
         │  ├─ SQLite metadata migrations
@@ -87,9 +87,16 @@ profile generation parameters, uses exactly one repetition, and emits the existi
 `http://127.0.0.1:11434` Ollama configuration. The typed bridge can send that plan to the existing one-shot command;
 browser preview helpers remain no-write.
 
+Phase 08 adds the bounded Core Arena view. Desktop mode reads typed immutable version summaries and profile revisions,
+loads the selected stored canonical document, and offers only existing version/profile/task/case selections. The view
+renders the deterministic prompt/system/model preview and fixed runtime boundary, then invokes `buildRunPlan` and the
+existing one-shot command for one repetition. Loading, malformed-document, bridge-error, busy, terminal, progress, and
+history-navigation states are explicit; browser preview invokes no bridge command and creates no records. The view does
+not add raw JSON editing, endpoint or credential fields, cancellation, or process-lifecycle controls.
+
 ## Future boundaries
 
-Run authoring and model execution controls beyond this one-plan helper, evaluation, full model-library
+Broader run authoring and model execution controls beyond this bounded Arena entry flow, evaluation, full model-library
 management/downloads/deletion, official benchmark packs, imports and broader benchmark-authoring flows, external/cloud
 provider adapters, interruption recovery, and any long-lived worker/runtime lifecycle remain later phases. They must keep
 provenance, effective configuration, error taxonomy, and historical records explicit rather than smuggling behavior

@@ -26,6 +26,11 @@ profile revision, and selected task/case identities; it derives the model from t
 deterministically, uses exactly one repetition, and supplies the fixed/default Ollama runtime configuration. The typed
 bridge can execute the existing one-shot command, but there is no run-authoring UI, fake record, cancellation control,
 arbitrary endpoint, credential, cloud, or process-lifecycle surface.
+Phase 08 — DONE (bounded) — adds the Core Arena view. Desktop mode reads real immutable version summaries, profile
+revisions, and the selected stored canonical document, then lets the user choose one existing task and case for a
+deterministic preview and the existing one-shot command. It reports honest loading, malformed, bridge, busy, terminal,
+progress, and history-navigation states. Browser preview remains no-write, and broader run authoring, cancellation,
+process lifecycle, downloads, cloud providers, and arbitrary runtime configuration remain out of scope.
 
 ## Run locally
 
@@ -68,6 +73,10 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
   size violations before producing a plan. The helper has no endpoint or credential input and always uses the fixed
   `http://127.0.0.1:11434` default configuration with one repetition.
+- The Arena view reads only those typed immutable records, presents the composed prompt/system/model and fixed runtime
+  boundary, and creates no run record until the user invokes the existing one-shot command. Browser preview invokes no
+  bridge command and creates no sample state; the view exposes no raw JSON, endpoint, credential, cancellation, or
+  process-lifecycle control.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.
