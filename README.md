@@ -59,6 +59,10 @@ the standard library, Linux RAM uses the fixed `/proc/meminfo` source, and Windo
 GPU and VRAM remain explicit unavailable fields when no safe feature detection is present. Model rows receive pure,
 session-only Ideal/Acceptable/Heavy/Unavailable explanations from bounded RAM-share thresholds; no thresholds are
 persisted and no empirical performance history is claimed.
+Phase 14 — DONE (bounded) — adds a read-only single-run comparability diagnostic in Runs after the existing
+blind-evaluation gate permits attempt evidence. It checks benchmark identity, terminal state, profile/runtime/model
+consistency, completed-attempt coverage, and exact-text evidence, then shows only a diagnostic pass/fail ordering or tie
+representation. It is not an official ranking, cross-run comparison, regression, tournament, human score, or AI judge.
 
 ## Run locally
 
@@ -127,6 +131,9 @@ The worker is deliberately one-shot. After a Rust build, a contract smoke can be
   suppresses AttemptDetail and identifying evidence for loading/preparing/prepared/error/empty states; within that blind
   review surface, identity becomes available only in the immutable post-lock audit record. Scores are overall 1–5 with bounded optional criterion maps,
   and ranking is token-based and must cover the prepared response set. Evaluation records never persist response text.
+- The Runs comparability foundation is a pure, read-only diagnostic for one local run. It mounts only after the existing
+  blind-evaluation gate permits attempt evidence, keeps browser preview no-read/no-write, and never claims official
+  ranking, cross-run comparability, regression, tournament, AI judging, calibration, or cost analysis.
 - Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
   hash invariants. The checked-in JSON Schema is the versioned contract/reference; Phase 02 does not run a JSON Schema
   engine.

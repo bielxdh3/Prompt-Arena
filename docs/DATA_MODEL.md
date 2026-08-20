@@ -186,6 +186,19 @@ pure helper explains its RAM-size heuristic and refuses to guess when either inp
 overrides, empirical measurements, unified search/download state, duplicate state, and deletion state are not data-model
 records in this phase.
 
+## Phase 14 bounded comparability state
+
+Comparability is an ephemeral diagnostic result, not a SQLite record or migration. The pure TypeScript helper consumes
+one local `RunRecord` and its `AttemptRecord` list and reports declared benchmark identity, terminal status, completed
+attempt count, profile/runtime/model consistency, and recognized exact-text evidence availability. A ready result emits
+only a diagnostic objective pass/fail ordering with explicit tie groups; it does not create a score, official ranking, or
+cross-run comparison record. Missing or inconsistent dimensions return `not_ready` with reasons.
+
+Runs mounts this diagnostic only after the existing blind-evaluation gate permits attempt evidence. Before that gate,
+attempt IDs and identity/metrics/objective evidence remain suppressed. Browser preview invokes no run/attempt command and
+invents no comparability result. Regression, tournaments, AI judging, calibration, cost analysis, and persistent
+comparability history remain future work.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.
