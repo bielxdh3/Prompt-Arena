@@ -101,9 +101,17 @@ immutable result artifact. The typed UI calls the existing `list_run_attempts` c
 then renders status, immutable IDs, safe effective-configuration facts, and artifact/hash references without opening
 artifact files. Failed and cancelled attempts remain unchanged, and scoring/evaluation/ranking are not implied.
 
+Phase 10 adds one bounded objective verifier for string expectations. `RunPlan.objectiveExpectation` is a top-level,
+64 KiB-bounded policy field with no copy in `GenerationRequest.metadata`; both TypeScript and Rust validate it. The
+worker compares generated response text in memory after normalizing only CRLF/CR line endings and surrounding whitespace.
+The persisted result `score` remains a generic JSON field for backward-compatible and future evidence; this slice writes
+only exact-text pass/fail, verifier kind, normalized byte counts, and expected/actual SHA-256 hashes into it. When no
+supported string expectation exists it remains null. Runs renders those facts only when the exact-text shape is present,
+never reads artifact payloads, and makes no human/AI evaluation or ranking claim.
+
 ## Future boundaries
 
-Broader run authoring and model execution controls beyond this bounded Arena entry flow, evaluation, full model-library
+Broader run authoring and model execution controls beyond this bounded Arena entry flow, human/AI evaluation, full model-library
 management/downloads/deletion, official benchmark packs, imports and broader benchmark-authoring flows, external/cloud
 provider adapters, interruption recovery, and any long-lived worker/runtime lifecycle remain later phases. They must keep
 provenance, effective configuration, error taxonomy, and historical records explicit rather than smuggling behavior

@@ -118,6 +118,20 @@ profile/case IDs, the effective-configuration boundary, and artifact/hash presen
 or claim scores/evaluation. Replays are idempotent and changed summary metadata under an existing attempt identity is an
 immutable conflict.
 
+## Phase 10 bounded objective verification
+
+For a case whose `expected` value is a string, the typed `RunPlan` carries one optional `objectiveExpectation` policy
+value capped at 64 KiB. It is top-level RunPlan data, not `GenerationRequest.metadata`, and is not sent to the runtime.
+Both the TypeScript plan builder and Rust worker boundary validate its UTF-8 byte bound and reject null characters.
+
+After generation, the worker normalizes only CRLF/CR line endings and surrounding whitespace and compares the normalized
+response text with the normalized expectation in memory. The immutable result reference keeps its generic JSON `score`
+field for backward-compatible and future human/AI evidence; this slice writes either null when there is no supported
+string expectation or one bounded exact-text evidence object containing pass/fail, verifier kind, expected/actual
+normalized UTF-8 byte counts, and expected/actual SHA-256 hashes. The evidence contains no expected or response text.
+Replay with identical evidence is idempotent; changed evidence under the same immutable result/attempt identity is an
+immutable conflict. Runs recognizes and displays only the exact-text shape and never opens the artifact payload.
+
 ## Benchmark vocabulary for later phases
 
 - **Draft** — editable user-authored benchmark content.

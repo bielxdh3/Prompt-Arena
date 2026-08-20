@@ -62,7 +62,14 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 - Completed attempt summaries are bounded metadata only: they omit response text, are stored in the immutable attempt's
   flattened extra fields, and are rejected when they exceed the 8 KiB summary bound. The Runs view uses the existing
   typed `list_run_attempts` read and displays artifact/hash references without resolving or rendering artifact files.
-  Failed/cancelled attempts have no completed-response summary, and no score or evaluation is inferred.
+  Failed/cancelled attempts have no completed-response summary. String expected values are separately capped at 64 KiB,
+  validated at both plan boundaries, kept out of generation metadata/runtime requests, and reduced after generation to
+  exact-text pass/fail, normalized byte counts, and SHA-256 hashes only; no response or expected text is copied into the
+  result score or Runs UI.
+- Objective verification is deterministic evidence, not human/AI evaluation: the immutable result score is null without
+  a supported string expectation, and this slice writes only the bounded verifier kind, status, counts, and hashes. The
+  persisted score field remains extensible generic JSON, while Runs displays objective details only for the recognized
+  exact-text shape and preserves unknown/future score values without rendering them.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/Arena commands, validate benchmarks, query Ollama, or invent
   records. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
@@ -70,7 +77,7 @@ from an already-running local Ollama service; it does not spawn or forcibly term
 ## Required future controls
 
 External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, scoring/evaluation, official benchmark packs, full model-library management,
+model execution UI beyond the bounded Arena flow, human/AI evaluation, rankings, broader scoring/analysis, official benchmark packs, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.

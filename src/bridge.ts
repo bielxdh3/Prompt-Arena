@@ -58,6 +58,15 @@ export type ImmutableResultReference = {
   [key: string]: unknown;
 };
 
+export type ObjectiveVerificationEvidence = {
+  passed: boolean;
+  verifierKind: "exact_text";
+  expectedNormalizedByteCount: number;
+  actualNormalizedByteCount: number;
+  expectedSha256: string;
+  actualSha256: string;
+};
+
 export type BenchmarkVersionSummary = {
   versionId: string;
   benchmarkId: string;
@@ -147,6 +156,7 @@ export type RunPlan = {
   profileRevision: ProfileRevision;
   generation: GenerationRequest;
   runtimeConfig: OllamaConfig;
+  objectiveExpectation: string | null;
 };
 
 export type AttemptRecord = {
