@@ -178,6 +178,20 @@ When Tauri is present, the UI reads and writes one versioned local webview-stora
 appearance preferences. Browser preview does not access localStorage, writes nothing, and says so explicitly. There is no
 theme import/export, account or cloud sync, external font loading, telemetry, or macOS support in this slice.
 
+## Phase 16 external-provider architecture and cost-safety foundation
+
+The provider foundation is pure TypeScript data and arithmetic only. A fixed catalog names generic OpenAI-compatible,
+OpenAI, Anthropic, and Gemini identities and records capability status, external-transport status, credential-source state,
+and identity confidence. The catalog is descriptive: all external execution and discovery are not wired, and local Ollama
+remains the only executable runtime.
+
+The dated `PriceTableSnapshot` shape and cost helper accept no credentials and make no network calls. Estimates validate
+provider/model/date/price/usage bounds and return unavailable when prices are missing or invalid. Budget decisions are
+explicit allow/confirm/deny outcomes against optional confirmation and ceiling values. Provider selection sanitization
+keeps only a known provider and bounded model identity, discarding unknown fields. Settings renders this boundary read-only;
+actual adapters, secure credential storage, user-selected network consent, usage/cost history, and provider identity
+verification remain future work.
+
 ## Future boundaries
 
 Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human
