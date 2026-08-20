@@ -137,8 +137,8 @@ function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
           <p className="eyebrow">A quiet place for reproducible work</p>
           <h2>Compare models with evidence, not noise.</h2>
           <p>
-            Prompt Arena is a standalone local-first desktop workspace. The foundation is ready; benchmark
-            authoring and model execution arrive in the next phase.
+            Prompt Arena is a standalone local-first desktop workspace. Local benchmark persistence is ready;
+            full authoring and model execution arrive in later phases.
           </p>
           <button className="primary-button" type="button" onClick={onOpenBenchmarks}>
             Explore benchmarks
@@ -153,7 +153,7 @@ function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
       </section>
 
       <section className="metric-grid" aria-label="Workspace foundation status">
-        <MetricCard label="Benchmark records" value="Not connected" detail="Storage contract only" />
+        <MetricCard label="Benchmark records" value="Not connected" detail="Local SQLite + artifacts" />
         <MetricCard label="Worker mode" value="One-shot" detail="App-owned protocol" />
         <MetricCard label="Data boundary" value="Local" detail="No Prompt Arena server" />
       </section>
@@ -168,7 +168,7 @@ function Overview({ onOpenBenchmarks }: { onOpenBenchmarks: () => void }) {
         </div>
         <EmptyState
           title="No benchmark versions yet"
-          description="This installation has no benchmark records to show. Create and freeze a benchmark version in the upcoming core arena phase."
+          description="This installation has no local benchmark records yet. Full authoring UI arrives in a later core-arena increment."
           actionLabel="Open benchmark area"
           onAction={onOpenBenchmarks}
         />
@@ -196,7 +196,7 @@ function CollectionView({ kind }: { kind: "benchmarks" | "runs" }) {
         <h2>{isBenchmarks ? "Benchmarks" : "Runs"}</h2>
         <p>
           {isBenchmarks
-            ? "Drafts and immutable benchmark versions will appear here once the core arena is implemented."
+            ? "Immutable benchmark versions can be persisted locally; the full authoring UI arrives in a later core-arena increment."
             : "Completed, interrupted, and failed runs will appear here once runtime orchestration is implemented."}
         </p>
       </section>
@@ -266,7 +266,7 @@ function Settings({ fontId, onFontChange }: { fontId: string; onFontChange: (id:
             <BoundaryRow label="Prompt Arena server" value="None" />
             <BoundaryRow label="Telemetry" value="Disabled" />
             <BoundaryRow label="Worker lifetime" value="One request" />
-            <BoundaryRow label="Storage status" value="Contract only" />
+            <BoundaryRow label="Storage status" value="Local SQLite + artifacts" />
           </div>
         </div>
       </section>
