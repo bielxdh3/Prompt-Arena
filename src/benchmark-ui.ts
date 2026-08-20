@@ -13,9 +13,13 @@ export function classifyBenchmarkSurface(input: {
 }
 
 export function benchmarkEmptyCopy(): string {
-  return "There are no local benchmark drafts or immutable versions yet. Nothing is bundled or invented in this view.";
+  return "There are no local benchmark drafts or immutable versions yet. Bundled official packs are read-only source records; no sample local records are invented.";
 }
 
 export function benchmarkPreviewCopy(): string {
   return "Browser preview shows the editor only. It does not load, save, validate, or publish desktop records.";
+}
+
+export function officialPacksPreviewCopy(): string {
+  return "Browser preview does not load the bundled catalog or expose official documents; it performs no desktop reads or writes.";
 }

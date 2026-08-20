@@ -4,7 +4,7 @@
 
 The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
 typed status, benchmark/profile/draft persistence, fixed-loopback Ollama discovery, one-shot execution, Runs read
-operations, and bounded blind-evaluation preparation/lock plus a read-only published benchmark-version command; they
+operations, bounded blind-evaluation preparation/lock, and read-only official-pack/published-version commands; they
 operate only on typed data and the app-owned local storage root. Draft saves use bounded requests and
 optimistic revisions; publishing revalidates the stored document before creating an immutable benchmark version. The
 capability file contains no plugin permissions. The worker accepts a tagged protocol, validates its version, job ID,
@@ -78,14 +78,19 @@ from an already-running local Ollama service; it does not spawn or forcibly term
   evidence. The parent gate also keeps that evidence hidden for loading, empty, and error states; only a successful lock
   re-enables post-lock audit IDs. The persisted record contains no response text, and scores/ranking are validated at
   the Rust boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
+- Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
+  records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
+  summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
+  sandbox status; the programming pack marks Docker-backed sandbox execution unavailable, so no local code is run.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
-  only. It cannot invoke draft/version/profile/model/Arena commands, validate benchmarks, query Ollama, or invent
-  records. Future model output is untrusted content and must be sanitized before Markdown/HTML rendering.
+  only. It cannot invoke draft/version/profile/model/Arena/official-pack commands, validate benchmarks, query Ollama, or
+  invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output is
+  untrusted content and must be sanitized before Markdown/HTML rendering.
 
 ## Required future controls
 
 External/cloud provider credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, official benchmark packs, full model-library management,
+model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, broader official-pack coverage, Docker-backed coding sandbox execution, full model-library management,
 broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.
