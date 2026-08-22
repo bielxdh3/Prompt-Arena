@@ -6,6 +6,7 @@ authors = ["Prompt Arena contributors"]
 edition = "2021"
 rust-version = "1.77"
 build = "build.rs"
+default-run = "prompt-arena"
 
 [lib]
 name = "prompt_arena_lib"
