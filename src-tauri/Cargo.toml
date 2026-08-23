@@ -1,0 +1,34 @@
+[package]
+name = "prompt-arena"
+version = "0.1.0"
+description = "Local-first desktop workspace for Prompt Arena"
+authors = ["Prompt Arena contributors"]
+edition = "2021"
+rust-version = "1.77"
+build = "build.rs"
+default-run = "prompt-arena"
+
+[lib]
+name = "prompt_arena_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "prompt-arena"
+path = "src/main.rs"
+
+[[bin]]
+name = "prompt-arena-worker"
+path = "src/bin/prompt-arena-worker.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+sha2 = "0.10.9"
+tauri = { version = "2.0.0", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Win32_Graphics_Dxgi"] }
