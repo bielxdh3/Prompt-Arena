@@ -158,6 +158,12 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -190,7 +196,9 @@ a:focus-visible {
 .app-shell {
   display: grid;
   grid-template-columns: 254px minmax(0, 1fr);
+  height: 100dvh;
   min-height: 100vh;
+  overflow: hidden;
   color: var(--color-text);
   background: var(--color-canvas);
   font-size: calc(16px * var(--font-scale));
@@ -217,6 +225,11 @@ a:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 46px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 30px 18px 20px;
   background: color-mix(in srgb, var(--color-surface) 92%, transparent);
   border-right: 1px solid var(--color-border);
@@ -369,11 +382,16 @@ a:focus-visible {
 
 .workspace {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .topbar {
   justify-content: space-between;
   gap: 24px;
+  min-width: 0;
   padding: 30px 5vw 26px;
   border-bottom: 1px solid rgb(52 54 60 / 0.75);
 }
@@ -449,6 +467,7 @@ h3 {
 
 .bridge-error {
   display: flex;
+  min-width: 0;
   gap: 12px;
   margin: 24px 5vw 0;
   padding: 14px 16px;
@@ -471,7 +490,8 @@ h3 {
 }
 
 .main-content {
-  width: min(1180px, 90vw);
+  width: min(1180px, calc(100% - 48px));
+  max-width: 100%;
   margin: 0 auto;
   padding: 42px 0 70px;
 }
@@ -482,10 +502,47 @@ h3 {
 }
 
 .panel {
+  min-width: 0;
   background: linear-gradient(145deg, var(--color-surface-raised), var(--color-surface));
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-panel);
+}
+
+.view-stack > *,
+.topbar > *,
+.bridge-error > *,
+.section-heading > *,
+.boundary-row > *,
+.provider-card-heading > *,
+.provider-facts > *,
+.provider-facts div > *,
+.storage-notice > *,
+.run-row > *,
+.model-row > *,
+.profile-record-row > *,
+.benchmark-record-row > * {
+  min-width: 0;
+}
+
+.boundary-row strong,
+.run-row .eyebrow,
+.run-row h3,
+.model-row h3,
+.profile-record-row strong,
+.benchmark-record-row strong,
+.benchmark-record-row small,
+.provider-card-heading h4,
+.provider-facts strong,
+.provider-facts div > *,
+.bridge-error p,
+.field-help,
+.field-error,
+.profile-record-row small,
+.artifact-evidence-list strong,
+.locked-evaluation-list span,
+.comparability-ordering strong {
+  overflow-wrap: anywhere;
 }
 
 .hero-panel {
@@ -1868,13 +1925,20 @@ button.official-pack-row:hover,
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .sidebar {
     gap: 20px;
+    height: auto;
+    overflow: visible;
     padding: 18px;
     border-right: 0;
     border-bottom: 1px solid var(--color-border);
+  }
+
+  .workspace {
+    height: auto;
   }
 
   .primary-nav {
