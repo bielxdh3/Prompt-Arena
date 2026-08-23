@@ -41,7 +41,7 @@ successful BL4 implementation or native acceptance.
 
 ## Package evidence
 
-The local Windows NSIS artifact is `Prompt Arena Setup 0.1.0.exe` (3,342,361 bytes), SHA-256
-`3611AB2FAC155F129465FDDCD067473B820F44A44E2D6342E2667B254760B17E`. It is unsigned and has not undergone clean-install
+The local Windows NSIS artifact is `Prompt Arena Setup 0.1.0.exe` (3,347,581 bytes), SHA-256
+`BB4DDCCB9054178DE58534F6495FD5C1BD4E4301ED1069A706D0FD82CEB52343`. It is unsigned and has not undergone clean-install
 smoke. The dispatch workflow `.github/workflows/package.yml` uploads normalized installers and `checksums-sha256.txt`
 for an exact commit. No GitHub Release or tag is created by this stack.
