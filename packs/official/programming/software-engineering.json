@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "kind": "benchmark",
+  "pack": {
+    "packId": "official-programming-software-engineering",
+    "name": "Official Programming / Software Engineering",
+    "description": "Small, text-only engineering tasks for code review and API design. This source pack never executes submitted code.",
+    "categories": [
+      {
+        "categoryId": "programming",
+        "name": "Programming",
+        "children": [
+          {
+            "categoryId": "software-engineering",
+            "name": "Software Engineering",
+            "children": [
+              {
+                "categoryId": "code-review",
+                "name": "Code Review",
+                "children": []
+              },
+              {
+                "categoryId": "api-design",
+                "name": "API Design",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "benchmark": {
+    "benchmarkId": "software-engineering",
+    "name": "Software Engineering Essentials",
+    "description": "Static engineering judgment with deterministic answer checks where a concise contract is appropriate."
+  },
+  "benchmarkVersion": {
+    "versionId": "software-engineering@1",
+    "versionNumber": 1,
+    "defaultRepetitions": 1,
+    "tasks": [
+      {
+        "taskId": "review-null-contract",
+        "name": "Review a null-handling contract",
+        "prompt": "Review the stated behavior as a senior engineer. Identify the main correctness risk and propose the smallest safe contract-level fix. Do not execute code.",
+        "cases": [
+          {
+            "caseId": "missing-user",
+            "prompt": "A function is documented as `find_user(id) -> User`, but it returns null when the ID is absent and callers immediately read `user.email`. State the minimal safe API correction.",
+            "expected": "Return an explicit not-found result or raise a documented not-found error; callers must not dereference a missing user.",
+            "artifacts": []
+          }
+        ],
+        "rubricId": "static-engineering-review",
+        "difficulty": 2,
+        "context": "Text-only static review. No code execution, filesystem access, or network access is provided."
+      },
+      {
+        "taskId": "design-error-contract",
+        "name": "Design a stable error contract",
+        "prompt": "Give a concise API design answer that is explicit about caller behavior, machine-readable fields, and compatibility. Do not invent an executable environment.",
+        "cases": [
+          {
+            "caseId": "missing-resource",
+            "prompt": "A JSON HTTP API currently returns either `{\"error\":\"missing\"}` or an HTML error page for an absent resource. State the smallest stable contract that clients should receive.",
+            "expected": "Return a documented JSON error shape with a stable code such as `not_found`, a human message, and the appropriate 404 status for every missing resource.",
+            "artifacts": []
+          }
+        ],
+        "rubricId": "static-engineering-review",
+        "difficulty": 3,
+        "context": "Text-only API reasoning. Docker-backed coding sandbox support is unavailable in this slice."
+      }
+    ],
+    "rubrics": [
+      {
+        "rubricId": "static-engineering-review",
+        "name": "Static engineering review",
+        "criteria": [
+          {
+            "criterionId": "correctness",
+            "name": "Correctness",
+            "description": "Identifies the actual contract or safety failure without proposing unsafe execution.",
+            "weight": 0.5
+          },
+          {
+            "criterionId": "minimality",
+            "name": "Minimal safe change",
+            "description": "Proposes a small, compatible correction with clear caller behavior.",
+            "weight": 0.3
+          },
+          {
+            "criterionId": "clarity",
+            "name": "Clarity",
+            "description": "Communicates the recommendation in precise engineering language.",
+            "weight": 0.2
+          }
+        ]
+      }
+    ]
+  },
+  "execution": {
+    "capability": "text_generation",
+    "status": "available",
+    "requiresSandbox": false,
+    "sandboxStatus": "unavailable",
+    "evaluationMode": "mixed",
+    "requirement": "Text-only static reasoning; no code execution, filesystem access, or network access is provided.",
+    "notes": "Docker-backed coding sandbox is not implemented in this slice. Execution-required coding tests remain unavailable and must not be run as ordinary text prompts."
+  }
+}
