@@ -79,8 +79,13 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   if (benchmarkVersion.versionId !== benchmarkVersionId || benchmarkVersionId !== summaryVersionId) {
     throw new Error("Benchmark document version identity is invalid.");
   }
-  if (benchmarkVersion.defaultRepetitions !== 1) {
-    throw new Error("This bounded run-plan slice supports exactly one repetition.");
+  if (
+    typeof benchmarkVersion.defaultRepetitions !== "number"
+    || !Number.isSafeInteger(benchmarkVersion.defaultRepetitions)
+    || benchmarkVersion.defaultRepetitions < 1
+    || benchmarkVersion.defaultRepetitions > 10
+  ) {
+    throw new Error("Benchmark repetitions must be between one and ten.");
   }
 
   const tasks = arrayValue(benchmarkVersion.tasks, "Benchmark tasks");
@@ -108,7 +113,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
 
   const profile = normalizeProfile(input.profileRevision);
   const prompt = combinePrompts([taskPrompt, casePrompt]);
-  const systemPrompt = combinePrompts([profile.systemPrompt, taskSystemPrompt]);
+  const systemPrompt = combineOptionalPrompts([profile.systemPrompt, taskSystemPrompt]);
   const plan: RunPlan = {
     runId,
     benchmarkVersionId: summaryVersionId,
@@ -235,6 +240,11 @@ function combinePrompts(parts: Array<string | null>): string {
   const combined = parts.filter((part): part is string => part !== null).join("\n\n");
   if (!combined.trim()) throw new Error("Run prompt cannot be empty.");
   return combined;
+}
+
+function combineOptionalPrompts(parts: Array<string | null>): string | null {
+  const combined = parts.filter((part): part is string => part !== null).join("\n\n").trim();
+  return combined || null;
 }
 
 function requiredPrompt(value: unknown, label: string): string {

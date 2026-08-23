@@ -1595,6 +1595,123 @@ button.official-pack-row:hover,
   margin-top: 0;
 }
 
+.arena-competitor-picker {
+  margin: 24px 0 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+}
+
+.competitor-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.competitor-option {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.competitor-option:hover,
+.competitor-option.is-selected {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+.competitor-option input {
+  margin-top: 3px;
+  accent-color: var(--color-accent);
+}
+
+.competitor-option span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.competitor-option small {
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.arena-results-panel {
+  display: grid;
+  gap: 20px;
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.arena-metric-grid {
+  margin: 0;
+}
+
+.arena-competitor-results,
+.blind-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.competitor-result-card,
+.blind-response-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+}
+
+.competitor-result-card .compact-heading,
+.blind-response-card .compact-heading {
+  margin-bottom: 0;
+}
+
+.arena-response-text {
+  max-height: 320px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.arena-sample-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.blind-arena-surface {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+}
+
+.blind-response-card .font-select {
+  margin-top: 7px;
+}
+
 .arena-execution-status,
 .arena-terminal {
   margin-top: 26px;

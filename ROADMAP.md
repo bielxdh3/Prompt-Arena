@@ -1,290 +1,100 @@
-# Prompt Arena Roadmap
+# Prompt Arena roadmap
 
-This roadmap is the current implementation baseline for Prompt Arena. The authoritative autonomous build mission is in `docs/PROMPT_ARENA_MASTER_AUTONOMOUS_BUILD_MISSION.md`.
+This file describes the current product truth. A contract, schema, catalog, or read-only preview is not a completed
+product phase. A phase becomes `COMPLETE` only after its user-facing acceptance path works in the real Tauri app.
 
 ## Product invariants
 
-- Open source and local-first.
-- Single-user per installation.
-- Windows and Linux only. macOS is not an official target or roadmap item.
-- No Prompt Arena cloud service, hosted inference, accounts, or telemetry.
-- Local models are the primary experience; external APIs are optional BYOK integrations.
-- Prompt Arena remains standalone and is not coupled to BielOS or any other hub/project.
-- Benchmark history, benchmark versions, run evidence, and result provenance must be explicit and auditable.
+- Local-first, single-user, Windows and Linux only.
+- No Prompt Arena cloud service, hosted inference, account system, or telemetry.
+- Local runtimes are the default; external providers are optional BYOK and must disclose network egress.
+- Benchmark versions, profile revisions, run evidence, evaluations, and exports remain immutable and auditable.
+- Imported prompts and model output are untrusted content; Docker-required tasks never fall back to host execution.
 
-## Phase A — Foundation — DONE (bounded contract foundation)
+## Phase status
 
-- `DONE` — Tauri 2 + React + TypeScript + Rust workspace with a narrow typed desktop command boundary.
-- `DONE` — App-owned one-shot worker protocol and executable boundary; no daemon lifecycle.
-- `DONE` — Windows/Linux-only CI definition.
-- `DONE` — Versioned SQLite foundation migration and path-safe filesystem artifact-store contract.
-- `DONE` — Semantic dark-neutral-gray tokens, strongly rounded shell, keyboard focus states, reduced-motion handling,
-  and truthful loading/error/empty UI states.
-- `DONE` — Times New Roman default intent with explicit Linux fallbacks and seven selectable local font stacks.
-- `DONE` — Foundation theme configuration hook and concise architecture, development, security, privacy, data-model,
-  testing, and design-system documentation.
+### P0 — Foundation and trust boundary — COMPLETE
 
-Phase A did not claim worker spawning from the app, model execution, providers, or benchmark authoring UI. Later phases
-consume those contracts without deleting or rewriting history.
+Tauri 2 + React + TypeScript + Rust shell, SQLite/artifact storage, fixed app-owned worker boundary, local-only CSP,
+Windows/Linux packaging configuration, benchmark/profile/run records, and security/boundary checks are in place.
 
-## Phase B — Core Arena — IN PROGRESS
+Acceptance: the shell builds and the reviewed local trust boundary is enforced by automated checks.
 
-- `DONE` — Benchmark v1 typed/manual validation with deterministic IDs, unknown-field preservation, and artifact-reference checks.
-- `DONE` — Local SQLite migrations for benchmark metadata, immutable profile/run/attempt/result records, and artifact metadata.
-- `DONE` — Atomic immutable artifact writes with portable path, size, and hash controls.
-- `DONE` — Typed validation, benchmark-version save, and benchmark-version list commands.
-- `DONE` — Immutable profile-revision registration, bounded one-shot orchestration through the app-owned worker, and
-  terminal run/attempt/result persistence with replay-safe evidence.
-- `DONE` — Typed Runs read commands and a truthful local Runs view; browser preview does not execute models.
-- `DONE` — Phase 05 bounded benchmark drafts and structured authoring: editable SQLite drafts, optimistic revision
-  checks, typed desktop list/read/save/validate/publish commands, and immutable benchmark-version publication.
+### P1 — Core multi-model Arena — IN PROGRESS
 
-### Phase 03 — Runtime/Ollama adapter slice — DONE (bounded)
+Implemented in the current completion stack:
 
-- Generic normalized runtime/provider contracts for chat, text generation, model discovery/metadata, streaming,
-  cancellation, typed errors, and capability/parameter negotiation.
-- Ollama health, model listing/metadata, generation, and NDJSON streaming through a standard-library HTTP client
-  restricted to explicit loopback-only endpoints.
-- HTTP safety limits: 64 KiB per status/header/NDJSON line, 16 MiB non-stream bodies, and 16 MiB cumulative streamed
-  NDJSON payload bytes. Cancellation is cooperative between socket reads/chunks.
-- Mock coverage for adapter mapping, endpoint rejection, typed failures, bounds, cancellation, and an optional live
-  health check that self-skips when Ollama is unavailable.
+- Visual Arena builder for a published benchmark version, task, case, repetitions 1/3/5/10, and 2–8 immutable profile
+  revisions.
+- Sequential fair execution through the existing app-owned worker, isolated competitor failures, queued-work cancellation,
+  per-sample persistence, progress counts, verified response-artifact reads, side-by-side comparison, blind scoring/lock,
+  and JSON/Markdown/CSV export.
+- Objective policy helpers for exact text, numeric tolerance, bounded JSON fields, classification, and safe patterns.
 
-This slice is backend-only. It does not claim model execution UI, run orchestration, app-managed runtime lifecycle,
-downloads, benchmark fixtures, evaluation, or any external/cloud provider.
+Remaining before completion: native Tauri smoke of two and three competitors, live streaming events during execution,
+close/tray recovery semantics, and a single aggregate immutable Arena record instead of one immutable run per sample.
 
-### Phase 04 — One-shot orchestration and evidence — DONE (bounded)
+Acceptance: a normal user completes one Arena with at least two models, sees every status/result, survives one failure,
+locks a blind review, reopens history, and exports evidence without editing JSON or using a terminal.
 
-- Validated `RunPlan` execution is delegated from the desktop command to a fixed-name, app-owned one-shot worker with
-  bounded JSON request/response handling and no shell or arbitrary executable arguments.
-- The worker executes the loopback-only Ollama adapter once and returns a typed terminal outcome; the app owns SQLite
-  and artifact persistence, including completed-outcome replay and immutable conflict handling.
-- Runs, attempts, and profile revisions have typed local read/registration commands. The UI exposes only the local Runs
-  read surface; run authoring, evaluation, interruption recovery, and full execution controls remain planned.
+### P2 — Verification, packs, and statistics — IN PROGRESS
 
-### Phase 05 — Benchmark authoring slice — DONE (bounded)
+The three official packs and exact-text verifier remain usable. Objective helper coverage is present in TypeScript.
+Docker-backed programming execution, materialized procedural cases/seeds, formal numeric/JSON/schema persistence, and full
+repetition statistics (median, min, max, standard deviation, uncertainty/tie margin) remain to be wired to benchmark
+versions and the Rust evidence store.
 
-- A migration-backed `benchmark_drafts` table stores editable draft state separately from immutable
-  `benchmark_versions`; draft IDs, benchmark IDs, titles, documents, and requests are bounded.
-- The desktop boundary exposes typed draft list/read/save/publish commands plus benchmark-v1 validation. Saves use
-  optimistic revision checks; publishing validates the complete document and preserves immutable version history.
-- The structured editor writes one narrow benchmark shape and optional text expected answers. It does not expose raw
-  JSON expectations, imports, cloning, multi-item authoring, or browser persistence; browser preview shows unsaved
-  editor state only.
+Acceptance: each headline pack has at least one executable/evaluable task with its declared verifier and saved repetition
+evidence; programming tasks block clearly when Docker is unavailable.
 
-### Phase 06 — Local profiles and Ollama model discovery — DONE (bounded)
+### P3 — Full Model Library — IN PROGRESS
 
-- Immutable profile revisions can be listed and registered through typed desktop commands. Registration validates the
-  deterministic `profile-id@revision` identity and the complete bounded request, including `parameters` and flattened
-  `extra`; replay is idempotent and changed historical content remains an immutable conflict.
-- The Models view reads installed local Ollama models through the existing adapter and exactly
-  `http://127.0.0.1:11434`, with at most 512 records, per-record bounded metadata, deterministic ordering, and typed
-  unavailable/protocol errors. It does not accept endpoint or credential input and has no download, deletion, cloud, or
-  process-lifecycle behavior.
-- Browser preview never invokes profile/model/hardware commands and never invents profile, model, or hardware records.
-  Full model-library management, cross-runtime grouping, downloads, and deletion remain planned.
+Ollama discovery, start flow, immutable profile registration, hardware snapshot, and transparent fit recommendations work.
+LM Studio, llama.cpp/GGUF, unified discovery, backend-native downloads/cancellation, duplicate grouping, and safe official
+removal are not yet complete.
 
-### Phase 07 — Published version loading and bounded run-plan contract — DONE (bounded)
+Acceptance: a user discovers and manages supported local runtimes without leaving Prompt Arena for normal workflows.
 
-- One typed desktop read validates a bounded portable `benchmark-id@version` identity and returns the immutable
-  published version summary plus its stored canonical document JSON without rewriting history.
-- A pure, tested TypeScript helper selects an existing task and case from that document and combines them with a real
-  immutable profile revision into the existing `RunPlan` shape. It derives the generation model from the profile,
-  combines profile/task system prompts and task/case prompts deterministically, and permits exactly one repetition.
-- The helper and typed bridge use the fixed/default `http://127.0.0.1:11434` Ollama configuration and existing one-shot
-  worker command. This slice has no run-authoring UI, fake records, arbitrary endpoint or credential input, cancellation,
-  process lifecycle, downloads, cloud providers, or browser writes; broader run controls remain planned.
+### P4 — Advanced Arena — IN PROGRESS
 
-### Phase 08 — Bounded Core Arena UI and one-shot run entry — DONE (bounded)
+Single-run comparability diagnostics exist. Cross-run rankings, regression replay, tournaments, calibration storage, frozen
+AI-judge panels, and explicit human-vs-AI disagreement views remain to be implemented.
 
-- The Arena view reads real immutable benchmark-version summaries and profile revisions through the typed bridge, then
-  reads the selected stored canonical version document without rewriting or inventing records.
-- The user selects one existing version, profile revision, task, and case. The view shows deterministic prompt/system/model
-  preview, fixed loopback Ollama configuration, one repetition, honest loading/error/empty/malformed/busy/terminal states,
-  attempt ID and progress, and navigation to the existing Runs read surface.
-- Desktop execution invokes the existing `buildRunPlan` and one-shot command only after selection; browser preview invokes
-  no bridge command and creates no state. Broader run authoring, cancellation, process lifecycle, evaluation, and runtime
-  controls remain planned.
+Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence.
 
-### Phase 09 — Bounded results and attempt evidence read slice — DONE (bounded)
+### P5 — External BYOK — IN PROGRESS
 
-- Completed attempts persist a bounded flattened `responseSummary` with model, finish reason, response byte count,
-  tool-call count, and optional usage/timing counters. Response text remains solely in the immutable result artifact;
-  failed and cancelled attempts do not receive a completed-response summary.
-- The typed bridge reads the existing `list_run_attempts` command. Runs provides honest loading/error/empty states and
-  read-only attempt detail for status, profile/case IDs, summary metrics, effective-configuration boundary, and
-  artifact/hash presence without reading artifact payloads.
-- No scoring, objective verification, human or AI evaluation, ranking, mutation, arbitrary file read, download, cloud,
-  endpoint, credential, cancellation, or process-lifecycle surface is added; browser preview remains no-write.
+Provider catalog and cost-safety helpers exist; no external request is silently enabled. Secure OS credential storage,
+OpenAI-compatible/OpenAI/Anthropic/Gemini adapters, network-egress confirmation, dated prices, budgets, usage, and
+provider identity/version evidence remain to be implemented.
 
-### Phase 10 — Objective exact-text verification slice — DONE (bounded)
+Acceptance: a user with their own credential can run a paid Arena with explicit egress, estimate, ceiling, and immutable
+price/usage history; CI never calls a paid API.
 
-- String `expected` values become an optional, 64 KiB-bounded top-level `RunPlan` objective policy input. The expected
-  answer is never copied into `GenerationRequest.metadata` or sent to Ollama; Rust revalidates the same boundary.
-- After generation, the worker normalizes only CRLF/CR line endings and surrounding whitespace, then compares text in
-  memory. The immutable result reference stores only exact-text pass/fail, verifier kind, normalized byte counts, and
-  expected/actual SHA-256 hashes; no supported text expectation leaves `score` null.
-- Runs displays objective status/hash/count evidence only. Artifact payloads and expected/actual response text remain
-  unread; human/AI evaluation, rankings, external providers, and broader scoring remain outside this slice. Browser
-  preview remains no-write.
+### P6 — Product polish — IN PROGRESS
 
-### Phase 11 — Blind human-evaluation lock — DONE (bounded)
+Responsive shell, accessibility focus states, reduced motion, local appearance controls, and local diagnostics copy exist.
+Dashboard data, storage cleanup/retention, richer appearance import/export, and full accessibility/native review remain.
 
-- Desktop-only preparation reads completed generation responses through the app-owned artifact registry and a safe,
-  size-bounded, SHA-256-verified reader. It derives stable anonymous labels, tokens, and order from real attempt data;
-  it does not mutate Attempts, Results, or artifact files.
-- The Runs parent gates AttemptDetail and all identifying attempt evidence while evaluation is loading, preparing,
-  prepared, empty, or in error. The prepared surface exposes only untrusted plain-text response cards plus bounded
-  1–5 overall score and optional complete token-ranking controls; after lock, the immutable audit record may resolve
-  anonymous tokens to attempt IDs.
-- Migration `0004_blind_evaluations.sql` stores a separate immutable evaluation record containing presentation/audit
-  mapping, scores, ranking, and timestamps. Response text is never copied into that record, and browser preview remains
-  no-write.
-- This is a single-user local overall-score/ranking lock for one run. It does not add AI judging, multi-rater review,
-  cross-run rankings, rubric authoring, or broader scoring/analysis.
+Acceptance: the primary flow reads as a model-comparison laboratory, not developer scaffolding, on supported desktop sizes.
 
-### Remaining Phase B work
+### P7 — Packaging and clean install — IN PROGRESS
 
-- `PLANNED` — Broader run authoring/controls, interruption recovery, and human-evaluation workflows beyond this bounded
-  single-user blind lock, including multi-rater review and richer rubrics.
-- `PLANNED` — Full model-library management beyond the bounded local profile/discovery slice.
-- `PLANNED` — AI judging, cross-run rankings, broader scoring/analysis, and results analysis.
+Tauri is configured for Windows NSIS + MSI and Linux `.deb` + `.AppImage`; a manual Windows NSIS installer was produced
+locally and the dispatch-only artifact workflow checks out an exact ref, validates, packages, hashes, and uploads without
+creating a GitHub Release. MSI is technically supported but the current local WiX `light.exe` run failed; Linux artifacts
+await the Linux CI runner.
 
-## Phase C — Official Benchmark Packs — IN PROGRESS
+Acceptance: Windows clean-install/start/restart/uninstall smoke and Linux package/launch smoke pass, with exact artifact
+names/checksums and no Node/Rust/terminal requirement for end users.
 
-### Phase 12 — Bundled official-pack catalog — DONE (bounded)
+## Publication boundaries
 
-- Three checked-in benchmark-v1 documents are bundled under `packs/official`: programming/software-engineering,
-  reasoning/math/knowledge, and writing/analysis/instruction-following. Each has a stable benchmark version ID,
-  nested category structure, bounded difficulty/repetition metadata, and either deterministic expected answers or an
-  explicit human-review rubric.
-- A Rust `include_str!` catalog validates every source with the existing canonical validator, returns deterministic
-  summaries/content hashes, and provides read-only full-document lookup. Tauri and TypeScript bridge methods expose
-  list/get only; no draft, SQLite, artifact, Attempt, Result, or historical version is mutated.
-- The Benchmarks view lists and inspects pack metadata and validated canonical JSON in desktop mode. Browser preview
-  remains no-write and does not invoke catalog commands. Execution metadata is explicit: the programming pack is
-  text-only and marks Docker-backed sandbox capability unavailable; it does not silently execute code.
+This stack may be pushed and opened as draft PRs and may run the packaging workflow. It must not force-push, merge,
+create a release tag, publish a final GitHub Release, deploy, or create/rotate secrets without a later explicit approval.
 
-### Future Phase C work
+## Final closeout gate
 
-- Broader programming, reasoning, knowledge, writing, and analysis coverage beyond the three bounded source documents.
-- Larger official packs with procedural cases, materialized seeds/cases, and expanded rubric/version governance.
-- Docker-backed coding sandbox where required; no implementation is claimed by Phase 12.
-
-## Phase D — Model Library — IN PROGRESS
-
-### Phase 13 — Hardware baseline and pure recommendations — DONE (bounded)
-
-- The Models view keeps the fixed-loopback Ollama discovery/profile behavior and adds a typed read-only hardware
-  snapshot. Logical CPUs use the standard library; Linux RAM reads only fixed `/proc/meminfo`; Windows RAM uses a
-  narrow kernel API binding. GPU/VRAM stay explicitly unavailable when no safe feature detection is present.
-- Model rows classify reported model-size pressure as Ideal, Acceptable, Heavy, or Unavailable using pure TypeScript
-  logic and bounded session-only RAM-share thresholds. Explanations identify the heuristic and missing telemetry.
-- Browser preview invokes no model, profile, or hardware command and invents no hardware. No telemetry, persistence,
-  downloads, deletion, arbitrary model-path inspection, or process spawning is added.
-
-### Future Phase D work
-
-- Unified runtime/model auto-discovery beyond the fixed local Ollama discovery slice.
-- Unified search across supported sources and backend-native downloads.
-- Broader quantization/format/license/context metadata and runtime compatibility.
-- Temporary/permanent hardware corrections and feature-detectable GPU/VRAM support beyond this baseline.
-- Empirical recommendation history using tokens/s, RAM/VRAM, offload, OOM, load time, and stability, with confidence
-  and sample size.
-- Cross-runtime grouping, duplicate detection, and safe/advanced deletion workflows.
-
-## Phase E — Advanced Benchmarking — IN PROGRESS
-
-### Phase 14 — Bounded local comparability diagnostics — DONE (bounded)
-
-- Runs exposes a pure read-only diagnostic for one local `RunRecord` and its typed `AttemptRecord` list. It checks
-  declared benchmark identity, terminal status, profile/runtime/model consistency, completed-attempt count, and valid
-  objective exact-text evidence availability.
-- When the completed attempts meet those dimensions, the panel shows a clearly labeled diagnostic objective pass/fail
-  ordering or tie representation. It is not an official ranking, cross-run comparison, regression, tournament, human
-  score, AI judge, calibration result, or cost analysis.
-- The panel is mounted only after the existing blind-evaluation gate permits attempt evidence. Browser preview remains
-  no-read/no-write, and no Rust storage, migration, or new persistence boundary is added.
-
-### Future Phase E work
-
-- Rankings by benchmark/category and cross-run comparability.
-- Regression mode and tournaments.
-- Context compilation policies.
-- Statistics and sample-size visibility.
-- AI judge architecture.
-- Immutable Calibration Benchmark.
-- Independent/pre-deliberation official scoring by default.
-- Optional deliberation tracked separately.
-- Historical cost snapshots and current-price simulation.
-
-## Phase F — External Providers — IN PROGRESS
-
-### Phase 16 — External-provider architecture and cost-safety foundation — DONE (bounded)
-
-- A pure TypeScript catalog covers generic OpenAI-compatible, OpenAI, Anthropic, and Gemini identities with explicit
-  capability, transport, credential-source, and identity-confidence states. All external execution remains not wired.
-- Pure helpers define dated USD price-table snapshots, bounded token-cost estimates, and allow/confirm/deny budget
-  decisions. Missing or invalid prices fail closed, and provider selection sanitization retains no credential-like fields.
-- Settings exposes only a read-only explanation of BYOK, unconfigured providers, estimate/confirmation/ceiling concepts,
-  and the local-only boundary. No API key input, environment read, network call, telemetry, or persistence is added.
-
-### Future Phase F work
-
-- Generic OpenAI-compatible, native OpenAI, Anthropic, and Gemini adapters with explicit user-selected network consent.
-- OS secure credential storage and bounded session/environment credential policy.
-- Provider-reported model identity, actual usage/cost capture, historical dated price snapshots, and paid-work controls.
-- Streaming, cancellation, retries, provider-specific errors, and integration tests using safe mock transports.
-
-External providers are secondary and must not block the local-first core.
-
-## Phase G — Personalization and Polish — IN PROGRESS
-
-### Phase 15 — Bounded local appearance preferences — DONE (bounded)
-
-- Settings provides the existing seven local font stacks, a bounded font scale, fixed accent choices, compact/rounded
-  radius presets, dark-neutral/warm/paper surfaces, reduced-motion control, restore defaults, and a live visual preview.
-- Preferences are normalized in a pure TypeScript module. CSS receives only fixed data-attribute values and maps those
-  values to safe local tokens; no arbitrary CSS, external fonts, or remote theme service is accepted.
-- Tauri desktop mode persists only sanitized presentation preferences in the local webview storage. Browser preview
-  shows an explicit no-persistence boundary and does not read or write localStorage or desktop records.
-
-### Future Phase G work
-
-- Theme import/export if feasible.
-- Refined dashboard and all primary surfaces.
-- Accessibility review beyond the bounded reduced-motion behavior.
-- Storage cleanup/retention UI.
-- Local diagnostics.
-
-## Phase H — Hardening and Review Readiness — IN PROGRESS
-
-### Phase 17 — Bounded boundary and review-readiness checks — DONE (bounded)
-
-- A dependency-free Node checker validates the Windows/Linux pull-request matrix, fixed worker sidecar packaging,
-  local-font/CSP/loopback invariants, secret-file ignore rules, required lockfiles, and tracked secret-like/key material
-  absence without printing file contents.
-- Deterministic checker fixtures cover accepted/rejected workflow and packaging states, ignore rules, and generated key
-  screening. CI runs the checker and `npm audit --omit=dev --audit-level=high` after install on both official runners.
-- `docs/RELEASE_CHECKLIST.md` defines local validation, package/build boundaries, security/privacy scan, provenance,
-  remote CI, draft-PR/no-merge, and human-only visual/browser QA. No publication, signing, release, deploy, or merge is
-  enabled by this phase.
-
-### Future Phase H work
-
-- Security closeout and review of remaining findings.
-- Windows/Linux build/package validation when explicitly authorized.
-- Performance/resource profiling and clean-install smoke testing where possible.
-- Documentation sync, draft PR preparation, and the human-action queue.
-
-## Status legend
-
-Use these states as implementation begins:
-
-- `DONE`
-- `IN PROGRESS`
-- `PLANNED`
-- `BLOCKED`
-- `HUMAN-GATED`
-
-Do not mark mocked or contract-only integrations as fully complete when live behavior remains unverified.
+The final verdict remains `PROMPT_ARENA_INCOMPLETE` until P1–P7 acceptance evidence exists. BL4 `app_server` provenance
+is now attested for a bounded review attempt, but that attempt was marked failed and did not replace native acceptance.
+Green unit tests or a local package alone never change the verdict.
