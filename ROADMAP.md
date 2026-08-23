@@ -28,8 +28,8 @@ Implemented in the current completion stack:
   revisions.
 - Sequential fair execution through the existing app-owned worker, isolated competitor failures, queued-work cancellation,
   per-sample persistence, progress counts, verified response-artifact reads, side-by-side comparison, blind scoring/lock,
-  and JSON/Markdown/CSV export.
-- Objective policy helpers for exact text, numeric tolerance, bounded JSON fields, classification, and safe patterns.
+  explicit post-lock human/objective ranking, repetition summary statistics, and JSON/Markdown/CSV export.
+- Objective policy helpers for exact text, numeric tolerance, bounded JSON schema/fields, classification, and literal-safe patterns.
 
 Remaining before completion: native Tauri smoke of two and three competitors, live streaming events during execution,
 close/tray recovery semantics, and a single aggregate immutable Arena record instead of one immutable run per sample.
@@ -39,10 +39,10 @@ locks a blind review, reopens history, and exports evidence without editing JSON
 
 ### P2 — Verification, packs, and statistics — IN PROGRESS
 
-The three official packs and exact-text verifier remain usable. Objective helper coverage is present in TypeScript.
-Docker-backed programming execution, materialized procedural cases/seeds, formal numeric/JSON/schema persistence, and full
-repetition statistics (median, min, max, standard deviation, uncertainty/tie margin) remain to be wired to benchmark
-versions and the Rust evidence store.
+The three official packs and exact-text verifier remain usable. Objective helper coverage, bounded JSON schema checks, and
+Arena repetition summary statistics are present in TypeScript. Docker-backed programming execution, materialized
+procedural cases/seeds, formal verifier persistence, and uncertainty/tie margins remain to be wired to benchmark versions
+and the Rust evidence store.
 
 Acceptance: each headline pack has at least one executable/evaluable task with its declared verifier and saved repetition
 evidence; programming tasks block clearly when Docker is unavailable.
@@ -57,8 +57,9 @@ Acceptance: a user discovers and manages supported local runtimes without leavin
 
 ### P4 — Advanced Arena — IN PROGRESS
 
-Single-run comparability diagnostics exist. Cross-run rankings, regression replay, tournaments, calibration storage, frozen
-AI-judge panels, and explicit human-vs-AI disagreement views remain to be implemented.
+Single-run comparability diagnostics and explicit per-Arena human/objective ranking exist. Cross-run rankings, regression
+replay, tournaments, calibration storage, frozen AI-judge panels, and explicit human-vs-AI disagreement views remain to
+be implemented.
 
 Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence.
 

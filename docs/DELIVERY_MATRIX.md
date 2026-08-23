@@ -10,7 +10,7 @@ check; `Native QA` requires the real Tauri/WebView or installed package. No row 
 | Live streaming/progress | existing worker progress plus Arena progress counts | Live Arena | Rust orchestration tests | Live event timing not yet tested | IN PROGRESS |
 | Blind evaluation and reveal | `src/App.tsx`, existing blind commands | Blind Evaluation panel | existing Rust evaluation tests + Arena tests | Required in Tauri | IN PROGRESS |
 | Objective verifiers | `src/objective-verifiers.ts` | Objective evidence boundary | `objective-verifiers.test.ts` | Needs persisted benchmark policy | IN PROGRESS |
-| Repetition statistics | `src/arena-runner.ts` | Arena summary | Arena tests | Native repetition run required | IN PROGRESS |
+| Repetition statistics | `src/arena-runner.ts` | Arena summary | Arena tests cover mean/median/min/max/stddev/success rate | Native repetition run required | IN PROGRESS |
 | History and verified response reopen | `src/bridge.ts`, `commands.rs` | Runs and comparison | Rust storage tests, Rust command build | Installed restart/reopen required | IN PROGRESS |
 | JSON/Markdown/CSV exports | `src/arena-runner.ts`, `src/App.tsx` | Arena results | Arena export test | Installed save/open smoke required | IN PROGRESS |
 | Official packs | `packs/official`, `official_packs.rs` | Benchmarks | Rust pack validation | Execute each pack in Tauri | IN PROGRESS |
@@ -20,7 +20,8 @@ check; `Native QA` requires the real Tauri/WebView or installed package. No row 
 | llama.cpp/GGUF | not yet wired | Models | None | Required | NOT IMPLEMENTED |
 | Downloads/removal/duplicates | not yet wired | Models | None | Required | NOT IMPLEMENTED |
 | Hardware/recommendations | `hardware.rs`, `model-library.ts` | Models | Rust + TS tests | Real hardware review required | IN PROGRESS |
-| Rankings/regression/tournament | single-run comparability only | Runs | comparability tests | Required | NOT IMPLEMENTED |
+| Arena ranking | `src/arena-runner.ts`, `src/App.tsx` | Locked Arena results | ranking tests | Required in Tauri | IN PROGRESS |
+| Cross-run rankings/regression/tournament | not yet wired | Runs | comparability tests only | Required | NOT IMPLEMENTED |
 | AI judge/calibration | provider foundation only | Runs | None | Required | NOT IMPLEMENTED |
 | External BYOK/cost controls | provider foundation only | Settings | provider helper tests | Required | NOT IMPLEMENTED |
 | Appearance/accessibility | `appearance.ts`, `styles.css` | Settings | appearance tests | Native accessibility review required | IN PROGRESS |

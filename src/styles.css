@@ -1699,6 +1699,33 @@ button.official-pack-row:hover,
   font-size: 12px;
 }
 
+.arena-ranking {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+}
+
+.arena-ranking-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.arena-ranking-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-muted);
+}
+
+.arena-ranking-list strong {
+  color: var(--color-text);
+}
+
 .blind-arena-surface {
   display: grid;
   gap: 16px;

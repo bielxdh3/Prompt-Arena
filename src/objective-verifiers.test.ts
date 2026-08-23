@@ -12,6 +12,8 @@ describe("objective verifiers", () => {
   it("checks bounded JSON fields and rejects unsafe patterns", () => {
     expect(verifyObjective({ kind: "required_fields", fields: ["answer.value"] }, '{"answer":{"value":1}}').passed).toBe(true);
     expect(verifyObjective({ kind: "json_schema", expected: {}, required: ["label"] }, '{"label":"ok"}').passed).toBe(true);
+    expect(verifyObjective({ kind: "json_schema", expected: { type: "object", required: ["score"], properties: { score: { type: "number", minimum: 0, maximum: 1 } }, additionalProperties: false } }, '{"score":0.5}').passed).toBe(true);
+    expect(verifyObjective({ kind: "json_schema", expected: { type: "object", required: ["score"], properties: { score: { type: "number", minimum: 0, maximum: 1 } }, additionalProperties: false } }, '{"score":"high"}').passed).toBe(false);
     expect(verifyObjective({ kind: "safe_pattern", pattern: "(?<bad>ok)" }, "ok").passed).toBe(false);
     expect(verifyObjective({ kind: "safe_pattern", pattern: "(a+)+$" }, `${"a".repeat(32)}!`).passed).toBe(false);
     expect(normalizeObjectivePolicy({ kind: "numeric_tolerance", expected: 1, tolerance: 0.1 })).toEqual({ kind: "numeric_tolerance", expected: 1, tolerance: 0.1 });
