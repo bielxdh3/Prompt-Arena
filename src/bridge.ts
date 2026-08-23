@@ -288,9 +288,11 @@ export type ModelInfo = {
   metadata: Record<string, unknown>;
 };
 
+export type OllamaStartStatus = "already_running" | "running";
+
 export type HardwarePlatform = "windows" | "linux" | "other";
 export type HardwareMetricStatus = "available" | "unavailable";
-export type HardwareSource = "stdlib" | "linux_procfs" | "windows_kernel32" | "not_detected";
+export type HardwareSource = "stdlib" | "linux_procfs" | "windows_kernel32" | "windows_dxgi" | "not_detected";
 export type HardwareConfidence = "high" | "medium" | "low" | "unavailable";
 
 export type HardwareMetric<T> = {
@@ -482,6 +484,13 @@ export async function readLocalOllamaModels(): Promise<ModelInfo[]> {
   return invokeDesktop<ModelInfo[]>(
     "list_local_ollama_models",
     "The local Ollama model list could not be reached.",
+  );
+}
+
+export async function startLocalOllama(): Promise<OllamaStartStatus> {
+  return invokeDesktop<OllamaStartStatus>(
+    "start_local_ollama",
+    "Ollama could not be started.",
   );
 }
 

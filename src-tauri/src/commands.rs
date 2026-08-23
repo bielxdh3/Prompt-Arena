@@ -2,7 +2,9 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
     thread,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -26,7 +28,7 @@ use crate::{
         list_official_packs as list_official_pack_records, OfficialPackDocument, OfficialPackError,
         OfficialPackSummary,
     },
-    ollama::OllamaProvider,
+    ollama::{OllamaConfig, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     orchestration::{
         persist_terminal_outcome, OrchestrationError, PersistedExecution, RunPlan, TerminalOutcome,
     },
@@ -72,6 +74,20 @@ pub struct CommandError {
     pub code: &'static str,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OllamaStartStatus {
+    AlreadyRunning,
+    Running,
+}
+
+const OLLAMA_EXECUTABLE: &str = "ollama";
+const OLLAMA_SERVE_ARGUMENT: &str = "serve";
+const OLLAMA_START_RETRIES: usize = 20;
+const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
+// ponytail: one app-wide startup lock; split locks only if startup contention matters.
+static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 
 impl From<ValidationError> for CommandError {
     fn from(error: ValidationError) -> Self {
@@ -355,6 +371,83 @@ pub fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
     OllamaProvider::default_local()?
         .list_models()
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn start_local_ollama() -> Result<OllamaStartStatus, CommandError> {
+    let _start_guard = OLLAMA_START_LOCK.lock().map_err(|_| CommandError {
+        code: "ollama_start_failed",
+        message: "Ollama could not be started.".to_owned(),
+    })?;
+    let provider = OllamaProvider::new(OllamaConfig {
+        endpoint: DEFAULT_OLLAMA_ENDPOINT.to_owned(),
+        connect_timeout_ms: 250,
+        read_timeout_ms: 250,
+        read_deadline_ms: 1_000,
+    })
+    .map_err(Into::<CommandError>::into)?;
+    start_ollama_with(
+        || ollama_is_healthy(&provider),
+        || ollama_server_command().spawn().map_err(ollama_spawn_error),
+        |delay| thread::sleep(delay),
+    )
+}
+
+fn ollama_is_healthy(provider: &OllamaProvider) -> bool {
+    matches!(provider.health(), Ok(health) if health.available)
+}
+
+fn ollama_server_command() -> Command {
+    let mut command = Command::new(OLLAMA_EXECUTABLE);
+    command
+        .arg(OLLAMA_SERVE_ARGUMENT)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+fn start_ollama_with<F, L, T, S>(
+    mut health_check: F,
+    launch: L,
+    mut sleep: S,
+) -> Result<OllamaStartStatus, CommandError>
+where
+    F: FnMut() -> bool,
+    L: FnOnce() -> Result<T, CommandError>,
+    S: FnMut(Duration),
+{
+    if health_check() {
+        return Ok(OllamaStartStatus::AlreadyRunning);
+    }
+
+    let _launched = launch()?;
+    for attempt in 0..OLLAMA_START_RETRIES {
+        if attempt > 0 {
+            sleep(Duration::from_millis(OLLAMA_START_RETRY_DELAY_MS));
+        }
+        if health_check() {
+            return Ok(OllamaStartStatus::Running);
+        }
+    }
+    Err(CommandError {
+        code: "ollama_start_failed",
+        message: "Ollama did not become ready after start.".to_owned(),
+    })
+}
+
+fn ollama_spawn_error(error: std::io::Error) -> CommandError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        CommandError {
+            code: "ollama_not_found",
+            message: "Ollama executable was not found.".to_owned(),
+        }
+    } else {
+        CommandError {
+            code: "ollama_start_failed",
+            message: "Ollama could not be started.".to_owned(),
+        }
+    }
 }
 
 #[tauri::command]
@@ -681,15 +774,17 @@ fn supported_platform() -> SupportedPlatform {
 #[cfg(test)]
 mod tests {
     use std::{
+        ffi::OsStr,
         fs,
         path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
     };
 
     use super::{
-        app_status, read_benchmark_version_from_storage, resolve_worker_executable,
-        worker_executable_name, worker_executable_path, worker_sidecar_resource_path, StorageState,
-        WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
+        app_status, ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
+        resolve_worker_executable, start_ollama_with, worker_executable_name,
+        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus, StorageState,
+        OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
 
@@ -700,6 +795,79 @@ mod tests {
         let status = app_status();
         assert!(matches!(status.storage_state, StorageState::Local));
         assert_eq!(status.protocol_version, 1);
+    }
+
+    #[test]
+    fn ollama_start_status_and_not_found_error_are_typed() {
+        assert_eq!(
+            serde_json::to_string(&OllamaStartStatus::AlreadyRunning).unwrap(),
+            "\"already_running\""
+        );
+        assert_eq!(
+            ollama_spawn_error(std::io::Error::from(std::io::ErrorKind::NotFound)).code,
+            "ollama_not_found"
+        );
+        assert_eq!(
+            ollama_spawn_error(std::io::Error::from(std::io::ErrorKind::NotFound)).message,
+            "Ollama executable was not found."
+        );
+    }
+
+    #[test]
+    fn already_running_health_short_circuits_launch() {
+        let mut health_checks = 0;
+        let mut launches = 0;
+        let status = start_ollama_with(
+            || {
+                health_checks += 1;
+                true
+            },
+            || {
+                launches += 1;
+                Ok::<(), super::CommandError>(())
+            },
+            |_| panic!("already-running Ollama must not wait"),
+        )
+        .expect("already-running status");
+        assert_eq!(status, OllamaStartStatus::AlreadyRunning);
+        assert_eq!(health_checks, 1);
+        assert_eq!(launches, 0);
+    }
+
+    #[test]
+    fn ollama_launch_command_is_fixed_and_shell_free() {
+        let command = ollama_server_command();
+        assert_eq!(command.get_program(), OsStr::new("ollama"));
+        assert_eq!(
+            command
+                .get_args()
+                .map(OsStr::to_string_lossy)
+                .collect::<Vec<_>>(),
+            vec!["serve"]
+        );
+    }
+
+    #[test]
+    fn ollama_start_retries_are_bounded_without_a_live_server() {
+        let mut health_checks = 0;
+        let mut launches = 0;
+        let mut sleeps = 0;
+        let error = start_ollama_with(
+            || {
+                health_checks += 1;
+                false
+            },
+            || {
+                launches += 1;
+                Ok::<(), super::CommandError>(())
+            },
+            |_| sleeps += 1,
+        )
+        .expect_err("unready Ollama must fail after the retry bound");
+        assert_eq!(error.code, "ollama_start_failed");
+        assert_eq!(health_checks, OLLAMA_START_RETRIES + 1);
+        assert_eq!(launches, 1);
+        assert_eq!(sleeps, OLLAMA_START_RETRIES - 1);
     }
 
     #[test]

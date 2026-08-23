@@ -3,6 +3,11 @@ use std::num::NonZeroUsize;
 #[cfg(target_os = "linux")]
 use std::{fs::File, io::Read};
 
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+};
+
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "linux")]
@@ -29,6 +34,7 @@ pub enum HardwareSource {
     Stdlib,
     LinuxProcfs,
     WindowsKernel32,
+    WindowsDxgi,
     NotDetected,
 }
 
@@ -81,12 +87,13 @@ pub struct HardwareSnapshot {
 }
 
 pub fn read_hardware_snapshot() -> HardwareSnapshot {
+    let (gpu_name, vram_bytes) = gpu_metrics();
     HardwareSnapshot {
         platform: current_platform(),
         logical_cpu_count: logical_cpu_metric(),
         memory_bytes: memory_metric(),
-        gpu_name: HardwareMetric::unavailable(HardwareSource::NotDetected),
-        vram_bytes: HardwareMetric::unavailable(HardwareSource::NotDetected),
+        gpu_name,
+        vram_bytes,
     }
 }
 
@@ -131,6 +138,100 @@ fn memory_metric() -> HardwareMetric<u64> {
     {
         HardwareMetric::unavailable(HardwareSource::NotDetected)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GpuAdapterCandidate {
+    description: String,
+    dedicated_video_memory: u64,
+    software: bool,
+    vendor_id: u32,
+    device_id: u32,
+    subsystem_id: u32,
+    revision: u32,
+}
+
+fn gpu_metrics() -> (HardwareMetric<String>, HardwareMetric<u64>) {
+    #[cfg(target_os = "windows")]
+    {
+        return gpu_metrics_from_candidate(windows_gpu_candidate(), HardwareSource::WindowsDxgi);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        gpu_metrics_from_candidate(None, HardwareSource::NotDetected)
+    }
+}
+
+fn gpu_metrics_from_candidate(
+    candidate: Option<GpuAdapterCandidate>,
+    source: HardwareSource,
+) -> (HardwareMetric<String>, HardwareMetric<u64>) {
+    match candidate {
+        Some(candidate) => (
+            HardwareMetric::available(candidate.description, source, HardwareConfidence::High),
+            HardwareMetric::available(
+                candidate.dedicated_video_memory,
+                source,
+                HardwareConfidence::High,
+            ),
+        ),
+        None => (
+            HardwareMetric::unavailable(source),
+            HardwareMetric::unavailable(source),
+        ),
+    }
+}
+
+fn select_gpu_adapter(mut candidates: Vec<GpuAdapterCandidate>) -> Option<GpuAdapterCandidate> {
+    candidates.sort_by(|left, right| {
+        right
+            .dedicated_video_memory
+            .cmp(&left.dedicated_video_memory)
+            .then_with(|| left.description.cmp(&right.description))
+            .then_with(|| left.vendor_id.cmp(&right.vendor_id))
+            .then_with(|| left.device_id.cmp(&right.device_id))
+            .then_with(|| left.subsystem_id.cmp(&right.subsystem_id))
+            .then_with(|| left.revision.cmp(&right.revision))
+    });
+    candidates
+        .into_iter()
+        .find(|candidate| !candidate.software && !candidate.description.is_empty())
+}
+
+fn decode_adapter_description(description: &[u16]) -> String {
+    String::from_utf16_lossy(description)
+        .trim_end_matches('\0')
+        .trim()
+        .to_owned()
+}
+
+#[cfg(target_os = "windows")]
+const MAX_DXGI_ADAPTERS: u32 = 64;
+
+#[cfg(target_os = "windows")]
+fn windows_gpu_candidate() -> Option<GpuAdapterCandidate> {
+    let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
+    let mut candidates = Vec::new();
+    for index in 0..MAX_DXGI_ADAPTERS {
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(adapter) => adapter,
+            Err(_) => break,
+        };
+        let description = match unsafe { adapter.GetDesc1() } {
+            Ok(description) => description,
+            Err(_) => continue,
+        };
+        candidates.push(GpuAdapterCandidate {
+            description: decode_adapter_description(&description.Description),
+            dedicated_video_memory: description.DedicatedVideoMemory as u64,
+            software: description.Flags & (DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0,
+            vendor_id: description.VendorId,
+            device_id: description.DeviceId,
+            subsystem_id: description.SubSysId,
+            revision: description.Revision,
+        });
+    }
+    select_gpu_adapter(candidates)
 }
 
 #[cfg(target_os = "linux")]
@@ -194,7 +295,8 @@ fn parse_linux_meminfo(input: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_linux_meminfo, read_hardware_snapshot, HardwareConfidence, HardwareMetric,
+        decode_adapter_description, gpu_metrics_from_candidate, parse_linux_meminfo,
+        select_gpu_adapter, GpuAdapterCandidate, HardwareConfidence, HardwareMetric,
         HardwareMetricStatus, HardwareSource,
     };
 
@@ -218,8 +320,72 @@ mod tests {
     }
 
     #[test]
+    fn adapter_description_parser_trims_utf16_nul_terminators() {
+        let mut description = [0_u16; 8];
+        description[..4].copy_from_slice(&['G' as u16, 'P' as u16, 'U' as u16, 0]);
+        assert_eq!(decode_adapter_description(&description), "GPU");
+    }
+
+    #[test]
+    fn adapter_selection_ignores_software_and_prefers_dedicated_memory() {
+        let candidate = |description: &str, memory: u64, software: bool| GpuAdapterCandidate {
+            description: description.to_owned(),
+            dedicated_video_memory: memory,
+            software,
+            vendor_id: 0,
+            device_id: 0,
+            subsystem_id: 0,
+            revision: 0,
+        };
+        let selected = select_gpu_adapter(vec![
+            candidate("Software", 32 * 1024 * 1024 * 1024, true),
+            candidate("Integrated", 2 * 1024 * 1024 * 1024, false),
+            candidate("Discrete", 8 * 1024 * 1024 * 1024, false),
+        ])
+        .expect("a hardware adapter remains");
+        assert_eq!(selected.description, "Discrete");
+        assert_eq!(selected.dedicated_video_memory, 8 * 1024 * 1024 * 1024);
+
+        let tie = select_gpu_adapter(vec![
+            candidate("Zulu", 8 * 1024 * 1024 * 1024, false),
+            candidate("Alpha", 8 * 1024 * 1024 * 1024, false),
+        ])
+        .expect("a tied hardware adapter remains");
+        assert_eq!(tie.description, "Alpha");
+    }
+
+    #[test]
+    fn available_gpu_metrics_report_dxgi_source() {
+        let candidate = GpuAdapterCandidate {
+            description: "Discrete".to_owned(),
+            dedicated_video_memory: 8 * 1024 * 1024 * 1024,
+            software: false,
+            vendor_id: 1,
+            device_id: 2,
+            subsystem_id: 3,
+            revision: 4,
+        };
+        let (gpu_name, vram_bytes) =
+            gpu_metrics_from_candidate(Some(candidate), HardwareSource::WindowsDxgi);
+        assert_eq!(gpu_name.source, HardwareSource::WindowsDxgi);
+        assert_eq!(vram_bytes.source, HardwareSource::WindowsDxgi);
+        assert_eq!(gpu_name.value.as_deref(), Some("Discrete"));
+        assert_eq!(vram_bytes.value, Some(8 * 1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn gpu_detection_failure_stays_unavailable() {
+        let (gpu_name, vram_bytes) = gpu_metrics_from_candidate(None, HardwareSource::WindowsDxgi);
+        assert_eq!(gpu_name.status, HardwareMetricStatus::Unavailable);
+        assert_eq!(vram_bytes.status, HardwareMetricStatus::Unavailable);
+        assert_eq!(gpu_name.value, None);
+        assert_eq!(vram_bytes.value, None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
     fn snapshot_keeps_gpu_and_vram_unavailable_without_feature_detection() {
-        let snapshot = read_hardware_snapshot();
+        let snapshot = super::read_hardware_snapshot();
         assert_eq!(snapshot.gpu_name.status, HardwareMetricStatus::Unavailable);
         assert_eq!(
             snapshot.vram_bytes.status,

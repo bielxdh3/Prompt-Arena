@@ -3,9 +3,14 @@ import {
   documentJsonForDraft,
   documentToForm,
   EMPTY_DRAFT_FORM,
+  draftFieldErrorId,
+  draftFieldId,
   formToDocument,
+  isRequiredDraftField,
   MAX_DRAFT_DOCUMENT_BYTES,
   MAX_DRAFT_TITLE_BYTES,
+  updateDraftFieldError,
+  validateDraftForm,
   type DraftFormState,
 } from "./benchmark-authoring";
 
@@ -35,6 +40,49 @@ describe("structured benchmark authoring", () => {
       "Benchmark ID must use portable",
     );
     expect(() => formToDocument({ ...validForm(), taskPrompt: "" })).toThrow("Task prompt is required");
+  });
+
+  it("maps required fields and focuses the first invalid field in form order", () => {
+    const validation = validateDraftForm(EMPTY_DRAFT_FORM);
+    expect(validation.valid).toBe(false);
+    expect(validation.firstInvalidField).toBe("benchmarkId");
+    expect(validation.errors).toMatchObject({
+      benchmarkId: "Benchmark ID is required.",
+      benchmarkName: "Benchmark name is required.",
+      taskName: "Task name is required.",
+      taskPrompt: "Task prompt is required.",
+      rubricName: "Rubric name is required.",
+      criterionName: "Criterion name is required.",
+    });
+    expect(validation.errorCount).toBe(6);
+
+    const next = updateDraftFieldError(validation, EMPTY_DRAFT_FORM, "benchmarkId", "logic");
+    expect(next?.firstInvalidField).toBe("benchmarkName");
+    expect(next?.errors.benchmarkId).toBeUndefined();
+  });
+
+  it("updates an edited field error and clears it only after the value is valid", () => {
+    const form = { ...validForm(), benchmarkId: "bad/id" };
+    const validation = validateDraftForm(form);
+    expect(validation.errors.benchmarkId).toContain("portable");
+
+    const stillInvalid = updateDraftFieldError(validation, form, "benchmarkId", "still/bad");
+    expect(stillInvalid?.errors.benchmarkId).toContain("portable");
+
+    const fixed = updateDraftFieldError(
+      stillInvalid,
+      { ...form, benchmarkId: "still/bad" },
+      "benchmarkId",
+      "logic",
+    );
+    expect(fixed).toBeNull();
+  });
+
+  it("keeps required markers and inline error identifiers deterministic", () => {
+    expect(isRequiredDraftField("benchmarkId")).toBe(true);
+    expect(isRequiredDraftField("casePrompt")).toBe(false);
+    expect(draftFieldId("criterionWeight")).toBe("criterion-weight");
+    expect(draftFieldErrorId("criterionWeight")).toBe("criterion-weight-error");
   });
 
   it("keeps expected answers text-only and enforces draft bounds", () => {

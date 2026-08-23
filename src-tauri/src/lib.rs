@@ -30,6 +30,7 @@ pub fn run() -> tauri::Result<()> {
             commands::register_profile_revision,
             commands::list_profile_revisions,
             commands::list_local_ollama_models,
+            commands::start_local_ollama,
             commands::read_hardware_snapshot,
             commands::list_runs,
             commands::list_run_attempts,
