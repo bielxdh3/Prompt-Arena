@@ -932,6 +932,12 @@ h3 {
   margin-bottom: 32px;
 }
 
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .field-label {
   display: block;
   margin-bottom: 9px;
@@ -1677,6 +1683,11 @@ button.official-pack-row:hover,
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.draft-action-feedback {
+  flex: 1 1 240px;
+  margin: 0;
 }
 
 .secondary-button {

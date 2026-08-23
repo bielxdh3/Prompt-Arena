@@ -60,6 +60,186 @@ export const EMPTY_DRAFT_FORM: DraftFormState = {
   criterionWeight: "1",
 };
 
+export type DraftField = Exclude<keyof DraftFormState, "draftId" | "expectedRevision">;
+
+export type DraftFormValidation = {
+  valid: boolean;
+  errors: Partial<Record<DraftField, string>>;
+  firstInvalidField: DraftField | null;
+  errorCount: number;
+};
+
+const DRAFT_FIELD_ORDER: readonly DraftField[] = [
+  "packId",
+  "packName",
+  "categoryId",
+  "categoryName",
+  "benchmarkId",
+  "benchmarkName",
+  "versionNumber",
+  "defaultRepetitions",
+  "taskId",
+  "taskName",
+  "taskDifficulty",
+  "taskPrompt",
+  "caseId",
+  "casePrompt",
+  "expected",
+  "rubricId",
+  "rubricName",
+  "criterionId",
+  "criterionName",
+  "criterionDescription",
+  "criterionWeight",
+];
+
+const REQUIRED_DRAFT_FIELDS: readonly DraftField[] = [
+  "packId",
+  "packName",
+  "categoryId",
+  "categoryName",
+  "benchmarkId",
+  "benchmarkName",
+  "versionNumber",
+  "defaultRepetitions",
+  "taskId",
+  "taskName",
+  "taskPrompt",
+  "caseId",
+  "rubricId",
+  "rubricName",
+  "criterionId",
+  "criterionName",
+  "criterionWeight",
+];
+
+const DRAFT_FIELD_LABELS: Record<DraftField, string> = {
+  packId: "Pack ID",
+  packName: "Pack name",
+  categoryId: "Category ID",
+  categoryName: "Category name",
+  benchmarkId: "Benchmark ID",
+  benchmarkName: "Benchmark name",
+  versionNumber: "Version number",
+  defaultRepetitions: "Default repetitions",
+  taskId: "Task ID",
+  taskName: "Task name",
+  taskDifficulty: "Difficulty",
+  taskPrompt: "Task prompt",
+  caseId: "Case ID",
+  casePrompt: "Case prompt",
+  expected: "Expected answer",
+  rubricId: "Rubric ID",
+  rubricName: "Rubric name",
+  criterionId: "Criterion ID",
+  criterionName: "Criterion name",
+  criterionDescription: "Criterion description",
+  criterionWeight: "Criterion weight",
+};
+
+export function isRequiredDraftField(field: DraftField): boolean {
+  return REQUIRED_DRAFT_FIELDS.includes(field);
+}
+
+export function draftFieldId(field: DraftField): string {
+  return field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+export function draftFieldErrorId(field: DraftField): string {
+  return `${draftFieldId(field)}-error`;
+}
+
+function addDraftError(
+  errors: Partial<Record<DraftField, string>>,
+  field: DraftField,
+  message: string,
+): void {
+  if (!errors[field]) errors[field] = message;
+}
+
+function isPortableIdentifier(value: string): boolean {
+  return value.length <= 128 && /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+function isPositiveInteger(value: string, maximum = 4_294_967_295): boolean {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= maximum;
+}
+
+export function validateDraftForm(form: DraftFormState): DraftFormValidation {
+  const errors: Partial<Record<DraftField, string>> = {};
+  for (const field of REQUIRED_DRAFT_FIELDS) {
+    if (!form[field].trim()) addDraftError(errors, field, `${DRAFT_FIELD_LABELS[field]} is required.`);
+  }
+
+  for (const field of ["packId", "categoryId", "benchmarkId", "taskId", "caseId", "rubricId", "criterionId"] as const) {
+    const value = form[field].trim();
+    if (value && !isPortableIdentifier(value)) {
+      addDraftError(errors, field, `${DRAFT_FIELD_LABELS[field]} must use portable letters, numbers, dots, dashes, or underscores.`);
+    }
+  }
+
+  const benchmarkName = form.benchmarkName.trim();
+  if (benchmarkName && (benchmarkName.includes("\0") || utf8ByteLength(benchmarkName) > MAX_DRAFT_TITLE_BYTES)) {
+    addDraftError(errors, "benchmarkName", "Benchmark name must be at most 256 UTF-8 bytes and contain no null characters.");
+  }
+
+  for (const field of ["versionNumber", "defaultRepetitions"] as const) {
+    const value = form[field].trim();
+    if (value && !isPositiveInteger(value)) {
+      addDraftError(errors, field, `${DRAFT_FIELD_LABELS[field]} must be a whole number between 1 and 4,294,967,295.`);
+    }
+  }
+
+  const difficulty = form.taskDifficulty.trim();
+  if (difficulty && !isPositiveInteger(difficulty, 5)) {
+    addDraftError(errors, "taskDifficulty", "Difficulty must be a whole number between 1 and 5.");
+  }
+
+  const weight = form.criterionWeight.trim();
+  if (weight) {
+    const parsed = Number(weight);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1_000_000) {
+      addDraftError(errors, "criterionWeight", "Criterion weight must be a positive number no greater than 1,000,000.");
+    }
+  }
+
+  const firstInvalidField = DRAFT_FIELD_ORDER.find((field) => Boolean(errors[field])) ?? null;
+  const errorCount = DRAFT_FIELD_ORDER.filter((field) => Boolean(errors[field])).length;
+  return {
+    valid: errorCount === 0,
+    errors,
+    firstInvalidField,
+    errorCount,
+  };
+}
+
+function validationFromErrors(
+  errors: Partial<Record<DraftField, string>>,
+): DraftFormValidation | null {
+  const firstInvalidField = DRAFT_FIELD_ORDER.find((candidate) => Boolean(errors[candidate])) ?? null;
+  const errorCount = DRAFT_FIELD_ORDER.filter((candidate) => Boolean(errors[candidate])).length;
+  if (errorCount === 0) return null;
+  return { valid: false, errors, firstInvalidField, errorCount };
+}
+
+export function updateDraftFieldError(
+  validation: DraftFormValidation | null,
+  form: DraftFormState,
+  field: DraftField,
+  value: string,
+): DraftFormValidation | null {
+  if (!validation) return null;
+  const nextValidation = validateDraftForm({ ...form, [field]: value });
+  const errors = { ...validation.errors };
+  if (nextValidation.errors[field]) {
+    errors[field] = nextValidation.errors[field];
+  } else {
+    delete errors[field];
+  }
+  return validationFromErrors(errors);
+}
+
 export function newDraftId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `draft-${crypto.randomUUID()}`;

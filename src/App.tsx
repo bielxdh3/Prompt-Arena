@@ -6,6 +6,7 @@ import {
   prepareBlindEvaluation,
   readHardwareSnapshot,
   readLocalOllamaModels,
+  startLocalOllama,
   readBenchmarkVersion,
   readBlindEvaluation,
   readOfficialPack,
@@ -68,9 +69,14 @@ import {
   documentJsonForDraft,
   documentToForm,
   EMPTY_DRAFT_FORM,
+  draftFieldId,
   formTitle,
   formToDocument,
   newDraftId,
+  updateDraftFieldError,
+  validateDraftForm,
+  type DraftField,
+  type DraftFormValidation,
   type DraftFormState,
 } from "./benchmark-authoring";
 import {
@@ -368,6 +374,8 @@ function BenchmarksView() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [draftValidation, setDraftValidation] = useState<DraftFormValidation | null>(null);
+  const [draftActionMessage, setDraftActionMessage] = useState<string | null>(null);
 
   async function refreshRecords() {
     if (!isDesktopEnvironment()) {
@@ -398,10 +406,37 @@ function BenchmarksView() {
     void refreshRecords();
   }, []);
 
-  function updateField(field: Exclude<keyof DraftFormState, "expectedRevision">, value: string) {
+  function updateField(field: DraftField, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
     setDirty(true);
-    setFeedback(null);
+    setFeedback((current) => current?.kind === "error" ? current : null);
+    setDraftActionMessage(null);
+    setDraftValidation((current) => updateDraftFieldError(current, form, field, value));
+  }
+
+  function focusFirstInvalidField(field: DraftField | null) {
+    if (!field) return;
+    const element = document.getElementById(draftFieldId(field));
+    if (!(element instanceof HTMLElement)) return;
+    element.focus({ preventScroll: true });
+    if (typeof element.scrollIntoView === "function") {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  function validateBeforeDraftAction(): boolean {
+    const validation = validateDraftForm(form);
+    if (validation.valid) {
+      setDraftValidation(null);
+      setDraftActionMessage(null);
+      return true;
+    }
+    setDraftValidation(validation);
+    const noun = validation.errorCount === 1 ? "field" : "fields";
+    const verb = validation.errorCount === 1 ? "needs" : "need";
+    setDraftActionMessage(`${validation.errorCount} ${noun} ${verb} attention.`);
+    focusFirstInvalidField(validation.firstInvalidField);
+    return false;
   }
 
   function buildDocument() {
@@ -414,6 +449,7 @@ function BenchmarksView() {
       setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
       return;
     }
+    if (!validateBeforeDraftAction()) return;
     setBusy(true);
     try {
       const { documentJson } = buildDocument();
@@ -448,6 +484,7 @@ function BenchmarksView() {
       setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
       return;
     }
+    if (!validateBeforeDraftAction()) return;
     setBusy(true);
     try {
       const { documentJson } = buildDocument();
@@ -511,6 +548,8 @@ function BenchmarksView() {
       }
       setForm(documentToForm(parsed, draft.draftId, draft.revision));
       setDirty(false);
+      setDraftValidation(null);
+      setDraftActionMessage(null);
       setFeedback({ kind: "info", message: `Loaded revision ${draft.revision}.` });
     } catch (error: unknown) {
       setFeedback({
@@ -540,6 +579,8 @@ function BenchmarksView() {
   function handleNewDraft() {
     setForm(EMPTY_DRAFT_FORM);
     setDirty(false);
+    setDraftValidation(null);
+    setDraftActionMessage(null);
     setFeedback({ kind: "info", message: "New unsaved draft. Save it to create a local record." });
   }
 
@@ -630,30 +671,30 @@ function BenchmarksView() {
           <fieldset className="form-section">
             <legend>Pack</legend>
             <div className="form-grid form-grid-three">
-              <FormInput id="pack-id" label="Pack ID" value={form.packId} onChange={(value) => updateField("packId", value)} />
-              <FormInput id="pack-name" label="Pack name" value={form.packName} onChange={(value) => updateField("packName", value)} />
-              <FormInput id="category-id" label="Category ID" value={form.categoryId} onChange={(value) => updateField("categoryId", value)} />
-              <FormInput id="category-name" label="Category name" value={form.categoryName} onChange={(value) => updateField("categoryName", value)} />
+              <FormInput id="pack-id" label="Pack ID" required error={draftValidation?.errors.packId} value={form.packId} onChange={(value) => updateField("packId", value)} />
+              <FormInput id="pack-name" label="Pack name" required error={draftValidation?.errors.packName} value={form.packName} onChange={(value) => updateField("packName", value)} />
+              <FormInput id="category-id" label="Category ID" required error={draftValidation?.errors.categoryId} value={form.categoryId} onChange={(value) => updateField("categoryId", value)} />
+              <FormInput id="category-name" label="Category name" required error={draftValidation?.errors.categoryName} value={form.categoryName} onChange={(value) => updateField("categoryName", value)} />
             </div>
           </fieldset>
           <fieldset className="form-section">
             <legend>Benchmark and version</legend>
             <div className="form-grid form-grid-three">
-              <FormInput id="benchmark-id" label="Benchmark ID" value={form.benchmarkId} onChange={(value) => updateField("benchmarkId", value)} />
-              <FormInput id="benchmark-name" label="Benchmark title" value={form.benchmarkName} onChange={(value) => updateField("benchmarkName", value)} />
-              <FormInput id="version-number" label="Version number" type="number" min="1" value={form.versionNumber} onChange={(value) => updateField("versionNumber", value)} />
-              <FormInput id="default-repetitions" label="Default repetitions" type="number" min="1" value={form.defaultRepetitions} onChange={(value) => updateField("defaultRepetitions", value)} />
+              <FormInput id="benchmark-id" label="Benchmark ID" required error={draftValidation?.errors.benchmarkId} value={form.benchmarkId} onChange={(value) => updateField("benchmarkId", value)} />
+              <FormInput id="benchmark-name" label="Benchmark title" required error={draftValidation?.errors.benchmarkName} value={form.benchmarkName} onChange={(value) => updateField("benchmarkName", value)} />
+              <FormInput id="version-number" label="Version number" type="number" min="1" required error={draftValidation?.errors.versionNumber} value={form.versionNumber} onChange={(value) => updateField("versionNumber", value)} />
+              <FormInput id="default-repetitions" label="Default repetitions" type="number" min="1" required error={draftValidation?.errors.defaultRepetitions} value={form.defaultRepetitions} onChange={(value) => updateField("defaultRepetitions", value)} />
               <p className="field-help form-note">Version ID is derived deterministically as benchmark ID + @ + version number.</p>
             </div>
           </fieldset>
           <fieldset className="form-section">
             <legend>Task and case</legend>
             <div className="form-grid form-grid-three">
-              <FormInput id="task-id" label="Task ID" value={form.taskId} onChange={(value) => updateField("taskId", value)} />
-              <FormInput id="task-name" label="Task name" value={form.taskName} onChange={(value) => updateField("taskName", value)} />
-              <FormInput id="task-difficulty" label="Difficulty (1–5)" type="number" min="1" max="5" value={form.taskDifficulty} onChange={(value) => updateField("taskDifficulty", value)} />
-              <FormTextArea className="form-span-three" id="task-prompt" label="Task prompt" value={form.taskPrompt} onChange={(value) => updateField("taskPrompt", value)} />
-              <FormInput id="case-id" label="Case ID" value={form.caseId} onChange={(value) => updateField("caseId", value)} />
+              <FormInput id="task-id" label="Task ID" required error={draftValidation?.errors.taskId} value={form.taskId} onChange={(value) => updateField("taskId", value)} />
+              <FormInput id="task-name" label="Task name" required error={draftValidation?.errors.taskName} value={form.taskName} onChange={(value) => updateField("taskName", value)} />
+              <FormInput id="task-difficulty" label="Difficulty (1–5)" type="number" min="1" max="5" error={draftValidation?.errors.taskDifficulty} value={form.taskDifficulty} onChange={(value) => updateField("taskDifficulty", value)} />
+              <FormTextArea className="form-span-three" id="task-prompt" label="Task prompt" required error={draftValidation?.errors.taskPrompt} value={form.taskPrompt} onChange={(value) => updateField("taskPrompt", value)} />
+              <FormInput id="case-id" label="Case ID" required error={draftValidation?.errors.caseId} value={form.caseId} onChange={(value) => updateField("caseId", value)} />
               <FormInput id="case-prompt" label="Case prompt (optional)" value={form.casePrompt} onChange={(value) => updateField("casePrompt", value)} />
               <FormInput id="expected" label="Expected answer (text)" value={form.expected} onChange={(value) => updateField("expected", value)} />
             </div>
@@ -661,15 +702,16 @@ function BenchmarksView() {
           <fieldset className="form-section">
             <legend>Rubric</legend>
             <div className="form-grid form-grid-three">
-              <FormInput id="rubric-id" label="Rubric ID" value={form.rubricId} onChange={(value) => updateField("rubricId", value)} />
-              <FormInput id="rubric-name" label="Rubric name" value={form.rubricName} onChange={(value) => updateField("rubricName", value)} />
-              <FormInput id="criterion-id" label="Criterion ID" value={form.criterionId} onChange={(value) => updateField("criterionId", value)} />
-              <FormInput id="criterion-name" label="Criterion name" value={form.criterionName} onChange={(value) => updateField("criterionName", value)} />
-              <FormInput id="criterion-weight" label="Criterion weight" type="number" min="0.000001" step="any" value={form.criterionWeight} onChange={(value) => updateField("criterionWeight", value)} />
+              <FormInput id="rubric-id" label="Rubric ID" required error={draftValidation?.errors.rubricId} value={form.rubricId} onChange={(value) => updateField("rubricId", value)} />
+              <FormInput id="rubric-name" label="Rubric name" required error={draftValidation?.errors.rubricName} value={form.rubricName} onChange={(value) => updateField("rubricName", value)} />
+              <FormInput id="criterion-id" label="Criterion ID" required error={draftValidation?.errors.criterionId} value={form.criterionId} onChange={(value) => updateField("criterionId", value)} />
+              <FormInput id="criterion-name" label="Criterion name" required error={draftValidation?.errors.criterionName} value={form.criterionName} onChange={(value) => updateField("criterionName", value)} />
+              <FormInput id="criterion-weight" label="Criterion weight" type="number" min="0.000001" step="any" required error={draftValidation?.errors.criterionWeight} value={form.criterionWeight} onChange={(value) => updateField("criterionWeight", value)} />
               <FormTextArea className="form-span-three" id="criterion-description" label="Criterion description (optional)" value={form.criterionDescription} onChange={(value) => updateField("criterionDescription", value)} />
             </div>
           </fieldset>
           <div className="editor-actions">
+            {draftActionMessage && <p className="form-feedback form-feedback-error draft-action-feedback" role="alert">{draftActionMessage}</p>}
             <button className="primary-button" type="button" onClick={() => void handleSave()} disabled={busy || !isDesktopEnvironment()}>
               Save draft
             </button>
@@ -782,6 +824,8 @@ function FormInput({
   min,
   max,
   step,
+  required = false,
+  error,
 }: {
   id: string;
   label: string;
@@ -791,11 +835,27 @@ function FormInput({
   min?: string;
   max?: string;
   step?: string;
+  required?: boolean;
+  error?: string;
 }) {
   return (
-    <label className="form-control" htmlFor={id}>
-      <span className="field-label">{label}</span>
-      <input id={id} type={type} min={min} max={max} step={step} value={value} onChange={(event) => onChange(event.currentTarget.value)} />
+    <label className={`form-control ${error ? "has-error" : ""}`} htmlFor={id}>
+      <span className="field-label">
+        {label}{required && <span className="required-marker" aria-hidden="true">*</span>}
+      </span>
+      {error && <span id={`${id}-error`} className="field-error" role="alert">{error}</span>}
+      <input
+        id={id}
+        type={type}
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        required={required}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
     </label>
   );
 }
@@ -806,17 +866,32 @@ function FormTextArea({
   value,
   onChange,
   className = "",
+  required = false,
+  error,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  required?: boolean;
+  error?: string;
 }) {
   return (
-    <label className={`form-control ${className}`} htmlFor={id}>
-      <span className="field-label">{label}</span>
-      <textarea id={id} value={value} onChange={(event) => onChange(event.currentTarget.value)} rows={3} />
+    <label className={`form-control ${className} ${error ? "has-error" : ""}`} htmlFor={id}>
+      <span className="field-label">
+        {label}{required && <span className="required-marker" aria-hidden="true">*</span>}
+      </span>
+      {error && <span id={`${id}-error`} className="field-error" role="alert">{error}</span>}
+      <textarea
+        id={id}
+        value={value}
+        required={required}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        rows={3}
+      />
     </label>
   );
 }
@@ -832,6 +907,12 @@ type ModelsState =
   | { status: "ready"; models: ModelInfo[] }
   | { status: "error"; message: string }
   | { status: "preview" };
+
+type OllamaStartState =
+  | { status: "idle" }
+  | { status: "starting" }
+  | { status: "running" }
+  | { status: "error"; message: string };
 
 type HardwareState =
   | { status: "loading" }
@@ -849,6 +930,8 @@ function ModelsView() {
   const [form, setForm] = useState<ProfileFormState>(EMPTY_PROFILE_FORM);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ollamaStartState, setOllamaStartState] = useState<OllamaStartState>({ status: "idle" });
+  const ollamaStartInFlight = useRef(false);
 
   async function refreshProfiles() {
     if (!isDesktopEnvironment()) {
@@ -880,6 +963,26 @@ function ModelsView() {
         message: error instanceof Error ? error.message : "The local Ollama model list is unavailable.",
       });
     }
+  }
+
+  async function handleStartOllama() {
+    if (!isDesktopEnvironment() || ollamaStartInFlight.current) return;
+    ollamaStartInFlight.current = true;
+    setOllamaStartState({ status: "starting" });
+    try {
+      await startLocalOllama();
+    } catch (error: unknown) {
+      setOllamaStartState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Ollama could not be started.",
+      });
+      ollamaStartInFlight.current = false;
+      return;
+    }
+
+    setOllamaStartState({ status: "running" });
+    await refreshModels();
+    ollamaStartInFlight.current = false;
   }
 
   async function refreshHardware() {
@@ -965,10 +1068,27 @@ function ModelsView() {
               <p className="eyebrow">Ollama / local only</p>
               <h3>Installed models</h3>
             </div>
-            <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!isDesktopEnvironment() || busy}>
-              Refresh
-            </button>
+            <div className="model-actions">
+              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!isDesktopEnvironment() || busy}>
+                Refresh
+              </button>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => void handleStartOllama()}
+                disabled={!isDesktopEnvironment() || busy || ollamaStartState.status === "starting"}
+              >
+                {ollamaStartState.status === "starting" ? "Starting Ollama…" : "Start Ollama"}
+              </button>
+            </div>
           </div>
+          {ollamaStartState.status === "starting" && <p className="field-help" role="status">Starting Ollama…</p>}
+          {ollamaStartState.status === "running" && <p className="field-help" role="status">Ollama running.</p>}
+          {ollamaStartState.status === "error" && (
+            <p className="form-feedback form-feedback-error" role="alert">
+              <strong>Start Ollama failed:</strong> {ollamaStartState.message}
+            </p>
+          )}
           {modelState.status === "preview" && (
             <StateMessage icon="◇" title="Browser preview" description={modelPreviewCopy()} />
           )}
