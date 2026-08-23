@@ -8,7 +8,7 @@ inference service, or telemetry.
 
 In the real Tauri app, open Arena, choose a published benchmark task, select at least two immutable model profile
 revisions, choose 1/3/5/10 repetitions, run the comparison, inspect isolated failures and verified responses, lock a blind
-review, reveal the competitors, reopen history, and export JSON, Markdown, or CSV evidence. Local execution is sequential
+review, reveal the competitors and explicit ranking, reopen history, and export JSON, Markdown, or CSV evidence. Local execution is sequential
 by default so speed comparisons do not imply GPU-parallel fairness.
 
 Ollama is the currently executable runtime. LM Studio, llama.cpp/GGUF, Docker-backed programming tasks, advanced
@@ -39,7 +39,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ## Packaging
 
 `npm run tauri:build` produces unsigned desktop bundles. The workflow `.github/workflows/package.yml` is
-`workflow_dispatch` only: it checks out an exact ref, validates dependencies/frontend/Rust, builds mandatory Windows NSIS,
+`workflow_dispatch` plus pull-request validation: it checks out an exact ref, validates dependencies/frontend/Rust, builds mandatory Windows NSIS,
 attempts MSI best-effort, builds Linux `.deb`/`.AppImage`, computes relative-path SHA-256 checksums, and uploads artifacts
 without publishing a GitHub Release.
 Unsigned installers may trigger SmartScreen warnings.

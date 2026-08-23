@@ -15,6 +15,7 @@ export type ObjectiveCheck = {
 const MAX_POLICY_BYTES = 64 * 1024;
 const MAX_PATTERN_BYTES = 4096;
 const MAX_REQUIRED_FIELDS = 32;
+const MAX_SCHEMA_DEPTH = 16;
 
 export function verifyObjective(policy: ObjectiveVerifierPolicy, actual: string): ObjectiveCheck {
   assertPolicy(policy);
@@ -42,7 +43,8 @@ export function verifyObjective(policy: ObjectiveVerifierPolicy, actual: string)
       try { parsed = JSON.parse(actual) as unknown; } catch { return result(policy.kind, false, "response is not valid JSON"); }
       const required = policy.required ?? (isRecord(policy.expected) && Array.isArray(policy.expected.required) ? policy.expected.required.filter((field): field is string => typeof field === "string") : []);
       const missing = required.filter((field) => !hasPath(parsed, field));
-      return result(policy.kind, missing.length === 0, missing.length === 0 ? "bounded JSON shape accepted" : `missing: ${missing.join(", ")}`);
+      const shapeAccepted = missing.length === 0 && matchesJsonSchema(parsed, policy.expected, 0);
+      return result(policy.kind, shapeAccepted, missing.length > 0 ? `missing: ${missing.join(", ")}` : shapeAccepted ? "bounded JSON shape accepted" : "JSON shape does not match the declared schema");
     }
   }
 }
@@ -97,6 +99,52 @@ function hasPath(value: unknown, path: string): boolean {
     value = value[part];
     return true;
   });
+}
+
+function matchesJsonSchema(value: unknown, schema: unknown, depth: number): boolean {
+  if (schema === null || schema === undefined) return true;
+  if (depth > MAX_SCHEMA_DEPTH || !isRecord(schema)) return false;
+  if (Array.isArray(schema.enum) && !schema.enum.some((candidate) => JSON.stringify(candidate) === JSON.stringify(value))) return false;
+  if (Array.isArray(schema.anyOf) && !schema.anyOf.some((candidate) => matchesJsonSchema(value, candidate, depth + 1))) return false;
+  if (typeof schema.type === "string" && !matchesJsonType(value, schema.type)) return false;
+
+  if (typeof value === "string") {
+    if (typeof schema.minLength === "number" && value.length < schema.minLength) return false;
+    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) return false;
+  }
+  if (typeof value === "number") {
+    if (schema.type === "integer" && !Number.isInteger(value)) return false;
+    if (typeof schema.minimum === "number" && value < schema.minimum) return false;
+    if (typeof schema.maximum === "number" && value > schema.maximum) return false;
+  }
+  if (Array.isArray(value)) {
+    if (typeof schema.minItems === "number" && value.length < schema.minItems) return false;
+    if (typeof schema.maxItems === "number" && value.length > schema.maxItems) return false;
+    if (schema.items !== undefined && !value.every((item) => matchesJsonSchema(item, schema.items, depth + 1))) return false;
+  }
+  if (isRecord(value)) {
+    const required = Array.isArray(schema.required) ? schema.required.filter((field): field is string => typeof field === "string") : [];
+    if (required.some((field) => !Object.hasOwn(value, field))) return false;
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    for (const [key, childSchema] of Object.entries(properties)) {
+      if (Object.hasOwn(value, key) && !matchesJsonSchema(value[key], childSchema, depth + 1)) return false;
+    }
+    if (schema.additionalProperties === false && Object.keys(value).some((key) => !Object.hasOwn(properties, key))) return false;
+  }
+  return true;
+}
+
+function matchesJsonType(value: unknown, type: string): boolean {
+  switch (type) {
+    case "object": return isRecord(value);
+    case "array": return Array.isArray(value);
+    case "string": return typeof value === "string";
+    case "number": return typeof value === "number" && Number.isFinite(value);
+    case "integer": return typeof value === "number" && Number.isSafeInteger(value);
+    case "boolean": return typeof value === "boolean";
+    case "null": return value === null;
+    default: return false;
+  }
 }
 
 function result(verifierKind: ObjectiveCheck["verifierKind"], passed: boolean, reason: string): ObjectiveCheck {

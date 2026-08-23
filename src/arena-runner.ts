@@ -47,7 +47,35 @@ export type ArenaMetricSummary = {
   objectivePassed: number;
   objectiveChecked: number;
   averageDurationMs: number | null;
+  medianDurationMs: number | null;
+  minimumDurationMs: number | null;
+  maximumDurationMs: number | null;
+  standardDeviationDurationMs: number | null;
+  successRate: number;
   averageTokensPerSecond: number | null;
+};
+
+export type ArenaCompetitorSummary = {
+  competitorId: string;
+  competitorLabel: string;
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  objectivePassed: number;
+  objectiveChecked: number;
+  successRate: number;
+  averageDurationMs: number | null;
+  averageTokensPerSecond: number | null;
+};
+
+export type ArenaRankingEntry = {
+  rank: number;
+  competitorId: string;
+  competitorLabel: string;
+  metric: "human_average_score" | "objective_pass_rate";
+  value: number;
+  sampleSize: number;
 };
 
 export async function executeArena(
@@ -138,6 +166,7 @@ export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMet
     .map((item) => item.execution?.attempt.result?.score)
     .filter((value): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value));
   const objectivePassed = objective.filter((value) => value.passed === true).length;
+  const durationStats = statistics(durations);
   return {
     total: executions.length,
     completed: completed.length,
@@ -145,9 +174,71 @@ export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMet
     cancelled: cancelled.length,
     objectivePassed,
     objectiveChecked: objective.length,
-    averageDurationMs: average(durations),
+    averageDurationMs: durationStats.average,
+    medianDurationMs: durationStats.median,
+    minimumDurationMs: durationStats.minimum,
+    maximumDurationMs: durationStats.maximum,
+    standardDeviationDurationMs: durationStats.standardDeviation,
+    successRate: executions.length === 0 ? 0 : completed.length / executions.length,
     averageTokensPerSecond: average(tokenRates),
   };
+}
+
+export function summarizeArenaCompetitors(executions: ArenaExecution[]): ArenaCompetitorSummary[] {
+  return [...groupArenaExecutions(executions).entries()].map(([competitorId, items]) => {
+    const summary = summarizeArenaExecutions(items);
+    return {
+      competitorId,
+      competitorLabel: items[0]?.competitorLabel ?? competitorId,
+      total: summary.total,
+      completed: summary.completed,
+      failed: summary.failed,
+      cancelled: summary.cancelled,
+      objectivePassed: summary.objectivePassed,
+      objectiveChecked: summary.objectiveChecked,
+      successRate: summary.successRate,
+      averageDurationMs: summary.averageDurationMs,
+      averageTokensPerSecond: summary.averageTokensPerSecond,
+    };
+  });
+}
+
+export function rankArenaCompetitors(
+  executions: ArenaExecution[],
+  humanScores: ReadonlyMap<string, number> = new Map(),
+): ArenaRankingEntry[] {
+  return summarizeArenaCompetitors(executions)
+    .map((summary) => {
+      const items = groupArenaExecutions(executions).get(summary.competitorId) ?? [];
+      const scores = items
+        .map((item) => humanScores.get(executionKey(item)))
+        .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5);
+      if (scores.length > 0) {
+        return {
+          competitorId: summary.competitorId,
+          competitorLabel: summary.competitorLabel,
+          metric: "human_average_score" as const,
+          value: average(scores) ?? 0,
+          sampleSize: scores.length,
+        };
+      }
+      return {
+        competitorId: summary.competitorId,
+        competitorLabel: summary.competitorLabel,
+        metric: "objective_pass_rate" as const,
+        value: summary.objectiveChecked === 0 ? 0 : summary.objectivePassed / summary.objectiveChecked,
+        sampleSize: summary.objectiveChecked,
+      };
+    })
+    .sort((left, right) => right.value - left.value || left.competitorId.localeCompare(right.competitorId))
+    .reduce<ArenaRankingEntry[]>((ranking, entry, index, ordered) => {
+      const previous = ranking[index - 1];
+      ranking.push({
+        ...entry,
+        rank: previous && entry.value === ordered[index - 1].value ? previous.rank : index + 1,
+      });
+      return ranking;
+    }, []);
 }
 
 export function groupArenaExecutions(executions: ArenaExecution[]): Map<string, ArenaExecution[]> {
@@ -175,7 +266,7 @@ export function arenaExportJson(
       profileRevisionId: profile.profileRevisionId,
       model: profile.model,
       runtime: profile.runtime,
-      parameters: profile.parameters,
+      parameters: publicParameters(profile.parameters),
     })),
     executions: executions.map((item) => ({
       competitorId: item.competitorId,
@@ -271,12 +362,53 @@ function average(values: number[]): number | null {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function statistics(values: number[]): {
+  average: number | null;
+  median: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  standardDeviation: number | null;
+} {
+  if (values.length === 0) {
+    return { average: null, median: null, minimum: null, maximum: null, standardDeviation: null };
+  }
+  const ordered = [...values].sort((left, right) => left - right);
+  const mean = average(ordered) as number;
+  const variance = ordered.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / ordered.length;
+  return {
+    average: mean,
+    median: ordered.length % 2 === 1 ? ordered[(ordered.length - 1) / 2] : (ordered[ordered.length / 2 - 1] + ordered[ordered.length / 2]) / 2,
+    minimum: ordered[0],
+    maximum: ordered[ordered.length - 1],
+    standardDeviation: Math.sqrt(variance),
+  };
+}
+
 function formatNumber(value: number): string {
   return Number.isFinite(value) ? value.toFixed(2) : "—";
 }
 
 function csvEscape(value: string): string {
   return /[",\n\r]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+}
+
+const PUBLIC_PARAMETER_KEYS = new Set([
+  "temperature",
+  "topP",
+  "topK",
+  "maxTokens",
+  "repeatPenalty",
+  "presencePenalty",
+  "frequencyPenalty",
+  "seed",
+]);
+
+function publicParameters(parameters: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(parameters).filter(([key]) => PUBLIC_PARAMETER_KEYS.has(key)));
+}
+
+function executionKey(item: ArenaExecution): string {
+  return `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`;
 }
 
 export function attemptForExecution(item: ArenaExecution): AttemptRecord | null {

@@ -5,6 +5,8 @@ import {
   arenaExportMarkdown,
   buildBlindArenaCards,
   executeArena,
+  rankArenaCompetitors,
+  summarizeArenaCompetitors,
   summarizeArenaExecutions,
 } from "./arena-runner";
 import type { BenchmarkVersion, PersistedExecution, ProfileRevision } from "./bridge";
@@ -77,7 +79,11 @@ describe("arena runner", () => {
     expect(results).toHaveLength(6);
     expect(calls).toEqual(["one@1", "one@1", "one@1", "two@1", "two@1", "two@1"]);
     expect(results.filter((item) => item.error)).toHaveLength(3);
-    expect(summarizeArenaExecutions(results)).toMatchObject({ total: 6, completed: 3, failed: 3, objectivePassed: 3 });
+    expect(summarizeArenaExecutions(results)).toMatchObject({ total: 6, completed: 3, failed: 3, objectivePassed: 3, successRate: 0.5 });
+    expect(summarizeArenaCompetitors(results)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ competitorId: "one@1", completed: 3, successRate: 1 }),
+      expect.objectContaining({ competitorId: "two@1", failed: 3, successRate: 0 }),
+    ]));
   });
 
   it("supports cancelling queued work without losing completed evidence", async () => {
@@ -108,7 +114,7 @@ describe("arena runner", () => {
   });
 
   it("exports metadata and keeps blind cards anonymous", () => {
-    const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 };
+    const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [{ ...profile("one"), parameters: { temperature: 0.2, apiKey: "must-not-export" } }, profile("two")], repetitions: 1 };
     const results = [
       { competitorId: "one@1", competitorLabel: "one", repetition: 1, runId: "arena-1-1", plan: {} as never, execution: execution("arena-1-1", "one@1", "completed"), error: null, cancelled: false },
       { competitorId: "two@1", competitorLabel: "two", repetition: 1, runId: "arena-2-1", plan: {} as never, execution: execution("arena-2-1", "two@1", "completed"), error: null, cancelled: false },
@@ -118,7 +124,21 @@ describe("arena runner", () => {
     expect(cards.map((card) => card.label)).toEqual(["Response A", "Response B"]);
     expect(cards[0]).not.toHaveProperty("competitorLabel");
     expect(arenaExportJson(request, results)).not.toContain("runs/");
+    expect(arenaExportJson(request, results)).not.toContain("must-not-export");
     expect(arenaExportMarkdown(request, results)).toContain("Competitor");
     expect(arenaExportCsv(results)).toContain("profileRevisionId");
+  });
+
+  it("ranks by explicit human scores and falls back to objective pass rate", () => {
+    const results = [
+      { competitorId: "one@1", competitorLabel: "one", repetition: 1, runId: "arena-1-1", plan: {} as never, execution: execution("arena-1-1", "one@1", "completed"), error: null, cancelled: false },
+      { competitorId: "two@1", competitorLabel: "two", repetition: 1, runId: "arena-2-1", plan: {} as never, execution: execution("arena-2-1", "two@1", "completed"), error: null, cancelled: false },
+    ];
+    const ranking = rankArenaCompetitors(results, new Map([
+      ["arena-1-1:arena-1-1-attempt", 5],
+      ["arena-2-1:arena-2-1-attempt", 2],
+    ]));
+    expect(ranking[0]).toMatchObject({ rank: 1, competitorId: "one@1", metric: "human_average_score", value: 5, sampleSize: 1 });
+    expect(rankArenaCompetitors(results)[0].metric).toBe("objective_pass_rate");
   });
 });
