@@ -25,6 +25,8 @@ secrets/
 *.db-shm
 *.db-wal
 artifacts/
+output/
+package-artifacts/
 
 # Editor and operating-system noise
 .DS_Store

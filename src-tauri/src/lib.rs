@@ -34,6 +34,7 @@ pub fn run() -> tauri::Result<()> {
             commands::read_hardware_snapshot,
             commands::list_runs,
             commands::list_run_attempts,
+            commands::read_attempt_response,
             commands::prepare_blind_evaluation,
             commands::get_blind_evaluation,
             commands::lock_blind_evaluation,

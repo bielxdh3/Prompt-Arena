@@ -22,7 +22,7 @@ const REQUIRED_IGNORE_RULES = [
   ".npmrc",
   "secrets/",
 ];
-const REQUIRED_PACKAGING_TARGETS = ["appimage", "deb", "nsis"];
+const REQUIRED_PACKAGING_TARGETS = ["appimage", "deb", "msi", "nsis"];
 const REQUIRED_WORKER_SIDECAR = "binaries/prompt-arena-worker";
 const REQUIRED_DEV_COMMAND = "npm run dev";
 const REQUIRED_BUILD_COMMAND = "npm run prepare:worker-sidecar && npm run build";

@@ -28,7 +28,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "deb", "appimage"],
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "targets": ["nsis", "msi", "deb", "appimage"],
     "externalBin": ["binaries/prompt-arena-worker"]
   }
 }

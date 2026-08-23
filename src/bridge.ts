@@ -260,6 +260,14 @@ export type PersistedExecution = {
   saveOutcome: "saved" | "already_present";
 };
 
+export type AttemptResponse = {
+  attemptId: string;
+  runId: string;
+  text: string;
+  byteCount: number;
+  sha256: string;
+};
+
 export type ProfileRevision = {
   profileId: string;
   profileRevisionId: string;
@@ -362,6 +370,15 @@ export async function readRunAttempts(runId: string): Promise<AttemptRecord[]> {
     "list_run_attempts",
     "The selected run attempts could not be reached.",
     { runId },
+  );
+}
+
+export async function readAttemptResponse(runId: string, attemptId: string): Promise<AttemptResponse | null> {
+  if (!isDesktopEnvironment()) throw new Error("Attempt responses are available only in the local desktop workspace.");
+  return invokeDesktop<AttemptResponse | null>(
+    "read_attempt_response",
+    "The selected response artifact could not be read.",
+    { runId, attemptId },
   );
 }
 

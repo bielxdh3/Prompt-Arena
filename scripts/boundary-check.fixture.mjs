@@ -43,7 +43,7 @@ test("accepts the reviewed Windows/Linux workflow and local Tauri boundary", () 
     app: { security: { csp: CSP } },
     bundle: {
       active: true,
-      targets: ["nsis", "deb", "appimage"],
+      targets: ["nsis", "deb", "appimage", "msi"],
       externalBin: ["binaries/prompt-arena-worker"],
     },
   }), []);

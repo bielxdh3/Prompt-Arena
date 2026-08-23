@@ -42,7 +42,7 @@ export type ArenaPreview = {
 };
 
 export function arenaPreviewCopy(): string {
-  return "Browser preview shows the Arena contract only. It does not read desktop records or execute a model; it does not create run state.";
+  return "Browser preview shows the Arena builder only. It does not read desktop records or execute a model; it does not create run state.";
 }
 
 export function arenaEmptyCopy(kind: "versions" | "profiles" | "tasks" | "cases"): string {

@@ -12,7 +12,7 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::{
     domain::{
-        validate_benchmark_document as validate_document,
+        sha256_hex, validate_benchmark_document as validate_document,
         validate_benchmark_document_size as validate_document_size, Attempt,
         BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord,
         ProfileRevision, Run, ValidatedBenchmark, ValidationError,
@@ -465,6 +465,58 @@ pub fn list_run_attempts(app: AppHandle, run_id: String) -> Result<Vec<Attempt>,
     storage_for(&app)?
         .list_attempts(&run_id)
         .map_err(Into::into)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttemptResponse {
+    pub attempt_id: String,
+    pub run_id: String,
+    pub text: String,
+    pub byte_count: usize,
+    pub sha256: String,
+}
+
+const MAX_COMPARISON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Read one verified response artifact for comparison. The command accepts only an
+/// attempt that belongs to the supplied run and never exposes filesystem paths.
+#[tauri::command]
+pub fn read_attempt_response(
+    app: AppHandle,
+    run_id: String,
+    attempt_id: String,
+) -> Result<Option<AttemptResponse>, CommandError> {
+    let storage = storage_for(&app)?;
+    let attempt = storage
+        .list_attempts(&run_id)?
+        .into_iter()
+        .find(|candidate| candidate.attempt_id == attempt_id);
+    let Some(attempt) = attempt else {
+        return Ok(None);
+    };
+    if attempt.status != "completed" {
+        return Ok(None);
+    }
+    let Some(artifact) = attempt
+        .result
+        .as_ref()
+        .map(|result| result.artifact.clone())
+    else {
+        return Ok(None);
+    };
+    let response = storage.read_generation_response(&artifact, MAX_COMPARISON_RESPONSE_BYTES)?;
+    let text = response.text;
+    let bytes = text.as_bytes();
+    let byte_count = bytes.len();
+    let sha256 = sha256_hex(bytes);
+    Ok(Some(AttemptResponse {
+        attempt_id,
+        run_id,
+        text,
+        byte_count,
+        sha256,
+    }))
 }
 
 #[tauri::command]
