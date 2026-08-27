@@ -236,7 +236,7 @@ impl OllamaProvider {
         read_http_response(stream, cancellation, read_deadline)
     }
 
-    fn json_request(
+    pub(crate) fn json_request(
         &self,
         method: &str,
         suffix: &str,
@@ -253,6 +253,46 @@ impl OllamaProvider {
         serde_json::from_str(&body).map_err(|error| RuntimeError::Protocol {
             message: format!("runtime returned malformed JSON: {error}"),
         })
+    }
+
+    pub(crate) fn pull_model<F>(
+        &self,
+        model: &str,
+        cancellation: &CancellationToken,
+        mut on_event: F,
+    ) -> Result<(), RuntimeError>
+    where
+        F: FnMut(&Value) -> Result<(), RuntimeError>,
+    {
+        validate_model_text(model, "name", MAX_LOCAL_MODEL_NAME_BYTES)?;
+        let payload = json!({"name": model, "stream": true});
+        let response = self.request("POST", "/api/pull", Some(&payload), cancellation)?;
+        let status = response.status;
+        let read_deadline = response.read_deadline;
+        if !(200..300).contains(&status) {
+            let body = read_body_string(response.body, cancellation, read_deadline)?;
+            return Err(normalize_remote_error(status, &body, Some(model)));
+        }
+
+        let mut body = response.body;
+        let mut streamed_bytes = 0_usize;
+        while let Some(line) = read_line_with_cancel(&mut body, cancellation, read_deadline)? {
+            if line.trim().is_empty() {
+                continue;
+            }
+            streamed_bytes = streamed_bytes.saturating_add(line.len());
+            if streamed_bytes > MAX_STREAMED_RESPONSE_BYTES {
+                return Err(RuntimeError::Protocol {
+                    message: "runtime pull stream exceeded the local size limit".to_owned(),
+                });
+            }
+            let event: Value =
+                serde_json::from_str(&line).map_err(|error| RuntimeError::Protocol {
+                    message: format!("runtime returned malformed pull JSON: {error}"),
+                })?;
+            on_event(&event)?;
+        }
+        Ok(())
     }
 
     fn generation_payload(
