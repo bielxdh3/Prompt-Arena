@@ -2,6 +2,7 @@ import type {
   HardwareSnapshot,
   ModelBackend,
   ModelCatalog,
+  ModelDuplicateGroup,
   ModelInfo,
   ModelOperation,
   ModelOperationRequest,
@@ -163,6 +164,29 @@ export function modelRecordQuantizationLabel(model: ModelRecord): string {
   return model.quantizationLevel ?? "Quantization not reported";
 }
 
+export type ModelRecordMetadataField = "format" | "license" | "source" | "location";
+
+export function modelRecordMetadataValue(model: ModelRecord, field: ModelRecordMetadataField): string {
+  const value = model.metadata[field];
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "Not reported";
+}
+
+export function modelDuplicateGroupLabel(group: ModelDuplicateGroup, models: ModelRecord[]): string {
+  const labels = group.modelIds.map((modelId) => {
+    const model = models.find((candidate) => candidate.modelId === modelId);
+    return model ? `${model.name} · ${modelRecordQuantizationLabel(model)}` : modelId;
+  });
+  return labels.length > 0 ? labels.join(" · ") : "No model records";
+}
+
+export function modelDuplicateEvidenceLabel(group: ModelDuplicateGroup): string {
+  if (group.contentHash) return `SHA-256 ${group.contentHash.slice(0, 12)}…`;
+  if (group.digest) return `Digest ${group.digest.slice(0, 12)}…`;
+  return "Metadata match only";
+}
+
 export function filterModelCatalog(catalog: ModelCatalog, query: string): ModelRecord[] {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return catalog.models;
@@ -287,6 +311,7 @@ export function buildRemoveModelOperationRequest(
   if (model.backend !== "llama_cpp" || !model.managed || !model.managedPath) {
     throw new Error("Only managed llama.cpp models can be removed.");
   }
+  validateManagedGgufPath(model.managedPath);
   return {
     kind: "remove",
     operationId: normalizedOperationId,
