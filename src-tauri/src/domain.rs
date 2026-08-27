@@ -132,6 +132,140 @@ pub struct ProfileRevision {
     pub extra: ExtraFields,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelBackend {
+    Ollama,
+    LmStudio,
+    LlamaCpp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSourceStatus {
+    Available,
+    Unavailable,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelAvailability {
+    Available,
+    Unavailable,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRecord {
+    pub model_id: String,
+    pub source_id: String,
+    pub backend: ModelBackend,
+    pub name: String,
+    pub endpoint: Option<String>,
+    pub path: Option<String>,
+    pub availability: ModelAvailability,
+    pub digest: Option<String>,
+    pub content_hash: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub family: Option<String>,
+    pub parameter_size: Option<String>,
+    pub quantization_level: Option<String>,
+    pub context_length: Option<u64>,
+    pub modified_at: Option<String>,
+    pub managed: bool,
+    pub managed_path: Option<String>,
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSource {
+    pub source_id: String,
+    pub backend: ModelBackend,
+    pub label: String,
+    pub endpoint: Option<String>,
+    pub path: Option<String>,
+    pub status: ModelSourceStatus,
+    pub message: Option<String>,
+    pub models: Vec<ModelRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDuplicateGroup {
+    pub group_id: String,
+    pub digest: Option<String>,
+    pub content_hash: Option<String>,
+    pub model_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalog {
+    pub generated_at: String,
+    pub sources: Vec<ModelSource>,
+    pub models: Vec<ModelRecord>,
+    pub duplicate_groups: Vec<ModelDuplicateGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationKind {
+    Download,
+    Import,
+    Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationStatus {
+    Queued,
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOperation {
+    pub operation_id: String,
+    pub kind: ModelOperationKind,
+    pub backend: ModelBackend,
+    pub source_id: Option<String>,
+    pub model_name: Option<String>,
+    pub model_id: Option<String>,
+    pub managed_path: Option<String>,
+    pub status: ModelOperationStatus,
+    pub bytes_total: Option<u64>,
+    pub bytes_completed: u64,
+    pub progress_percent: Option<u8>,
+    pub content_hash: Option<String>,
+    pub message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelImportRequest {
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRemovalEvidence {
+    pub removal_id: String,
+    pub model_id: String,
+    pub backend: ModelBackend,
+    pub managed_path: String,
+    pub content_hash: String,
+    pub removed_at: String,
+    pub outcome: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
