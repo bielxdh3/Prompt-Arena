@@ -194,6 +194,27 @@ pub struct ModelSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelSourceConfig {
+    pub backend: ModelBackend,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDiscoveryRequest {
+    #[serde(default)]
+    pub sources: Vec<ModelSourceConfig>,
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelDuplicateGroup {
     pub group_id: String,
     pub digest: Option<String>,
@@ -252,6 +273,15 @@ pub struct ModelOperation {
 #[serde(rename_all = "camelCase")]
 pub struct ModelImportRequest {
     pub source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProfileRegistrationRequest {
+    pub revision: ProfileRevision,
+    pub model_id: String,
+    pub source_id: String,
+    pub backend: ModelBackend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

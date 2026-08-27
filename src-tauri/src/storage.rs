@@ -1,6 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -907,6 +907,39 @@ impl StorageService {
 
     pub fn list_model_records(&self) -> Result<Vec<ModelRecord>, StorageError> {
         list_json_records(&self.connection()?, JsonTable::ModelRecords)
+    }
+
+    pub fn read_managed_model_prefix(
+        &self,
+        relative_path: &str,
+        max_bytes: usize,
+    ) -> Result<(u64, Vec<u8>), StorageError> {
+        validate_managed_model_path(relative_path)?;
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(StorageError::InvalidRecordId);
+        }
+        let size = metadata.len();
+        if size > MAX_MANAGED_MODEL_BYTES {
+            return Err(StorageError::MetadataTooLarge);
+        }
+        let read_limit = max_bytes
+            .min(MAX_MODEL_METADATA_BYTES)
+            .min(size.min(usize::MAX as u64) as usize);
+        let mut file = fs::File::open(&target).map_err(StorageError::from_io)?;
+        let mut bytes = Vec::with_capacity(read_limit);
+        file.take(read_limit as u64)
+            .read_to_end(&mut bytes)
+            .map_err(StorageError::from_io)?;
+        Ok((size, bytes))
     }
 
     pub fn save_model_operation(
@@ -1826,6 +1859,32 @@ fn validate_managed_model_path(path: &str) -> Result<(), StorageError> {
         return Err(StorageError::InvalidRecordId);
     }
     Ok(())
+}
+
+fn safe_existing_managed_model_path(
+    model_root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, StorageError> {
+    let root_metadata = fs::symlink_metadata(model_root).map_err(StorageError::from_io)?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(StorageError::InvalidRecordId);
+    }
+    let mut current = model_root.to_path_buf();
+    let segments: Vec<&str> = relative_path.split('/').collect();
+    for (index, segment) in segments.iter().enumerate() {
+        current.push(segment);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || (index + 1 < segments.len() && !metadata.is_dir()) {
+            return Err(StorageError::InvalidRecordId);
+        }
+    }
+    Ok(current)
 }
 
 fn validate_model_metadata(
