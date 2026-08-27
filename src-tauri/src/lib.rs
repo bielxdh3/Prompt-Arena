@@ -20,6 +20,7 @@ pub fn run() -> tauri::Result<()> {
             commands::validate_benchmark_document,
             commands::list_official_packs,
             commands::get_official_pack,
+            commands::materialize_official_pack,
             commands::list_benchmark_versions,
             commands::get_benchmark_version,
             commands::save_benchmark_version,

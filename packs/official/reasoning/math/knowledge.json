@@ -49,6 +49,11 @@
             "caseId": "three-scores",
             "prompt": "A result has scores 10, 20, and 30 with weights 1, 2, and 1. What is the weighted average? Return only the number.",
             "expected": "20",
+            "verifierPolicy": {
+              "kind": "numeric_tolerance",
+              "expected": 20,
+              "tolerance": 0
+            },
             "artifacts": []
           }
         ],
@@ -64,6 +69,10 @@
             "caseId": "planet-count",
             "prompt": "Is the statement `Earth is the only planet in the Solar System with a natural satellite` correct? Return `False: several planets have natural satellites.` if it is not.",
             "expected": "False: several planets have natural satellites.",
+            "verifierPolicy": {
+              "kind": "exact_text",
+              "expected": "False: several planets have natural satellites."
+            },
             "artifacts": []
           }
         ],
@@ -115,8 +124,13 @@
     "status": "available",
     "requiresSandbox": false,
     "sandboxStatus": "not_required",
+    "executionBoundary": "text_generation",
     "evaluationMode": "objective",
     "requirement": "Text generation only; string expectations use deterministic line-ending and surrounding-whitespace normalization.",
     "notes": null
+  },
+  "materialization": {
+    "kind": "deterministic_seeded",
+    "algorithm": "sha256-v1"
   }
 }

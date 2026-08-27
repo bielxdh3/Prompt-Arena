@@ -4,7 +4,7 @@
   "pack": {
     "packId": "official-programming-software-engineering",
     "name": "Official Programming / Software Engineering",
-    "description": "Small, text-only engineering tasks for code review and API design. This source pack never executes submitted code.",
+    "description": "Docker-required engineering tasks for code review, API design, and bounded executable checks. Host execution is never used as a fallback.",
     "categories": [
       {
         "categoryId": "programming",
@@ -43,34 +43,46 @@
       {
         "taskId": "review-null-contract",
         "name": "Review a null-handling contract",
-        "prompt": "Review the stated behavior as a senior engineer. Identify the main correctness risk and propose the smallest safe contract-level fix. Do not execute code.",
+            "prompt": "Review the stated behavior as a senior engineer, then use the Docker-required sandbox only for the declared bounded check. Identify the main correctness risk and propose the smallest safe contract-level fix.",
         "cases": [
           {
             "caseId": "missing-user",
-            "prompt": "A function is documented as `find_user(id) -> User`, but it returns null when the ID is absent and callers immediately read `user.email`. State the minimal safe API correction.",
+            "prompt": "A function is documented as `find_user(id) -> User`, but it returns null when the ID is absent and callers immediately read `user.email`. In the Docker-required case, state the minimal safe API correction and include the term `not-found`.",
             "expected": "Return an explicit not-found result or raise a documented not-found error; callers must not dereference a missing user.",
+            "verifierPolicy": {
+              "kind": "safe_pattern",
+              "pattern": "not-found",
+              "mode": "literal"
+            },
+            "executionBoundary": "docker_required",
             "artifacts": []
           }
         ],
         "rubricId": "static-engineering-review",
         "difficulty": 2,
-        "context": "Text-only static review. No code execution, filesystem access, or network access is provided."
+        "context": "Docker-required bounded check. If Docker is unavailable, this case is blocked; the host is never used as a fallback."
       },
       {
         "taskId": "design-error-contract",
         "name": "Design a stable error contract",
-        "prompt": "Give a concise API design answer that is explicit about caller behavior, machine-readable fields, and compatibility. Do not invent an executable environment.",
+            "prompt": "Give a concise API design answer that is explicit about caller behavior, machine-readable fields, and compatibility. The declared executable check, when available, runs only in Docker.",
         "cases": [
           {
             "caseId": "missing-resource",
             "prompt": "A JSON HTTP API currently returns either `{\"error\":\"missing\"}` or an HTML error page for an absent resource. State the smallest stable contract that clients should receive.",
             "expected": "Return a documented JSON error shape with a stable code such as `not_found`, a human message, and the appropriate 404 status for every missing resource.",
+            "verifierPolicy": {
+              "kind": "safe_pattern",
+              "pattern": "not_found",
+              "mode": "literal"
+            },
+            "executionBoundary": "docker_required",
             "artifacts": []
           }
         ],
         "rubricId": "static-engineering-review",
         "difficulty": 3,
-        "context": "Text-only API reasoning. Docker-backed coding sandbox support is unavailable in this slice."
+        "context": "Docker-required API check. Docker-backed execution is unavailable in this slice and must not fall back to host execution."
       }
     ],
     "rubrics": [
@@ -102,11 +114,16 @@
   },
   "execution": {
     "capability": "text_generation",
-    "status": "available",
-    "requiresSandbox": false,
+    "status": "unavailable",
+    "requiresSandbox": true,
     "sandboxStatus": "unavailable",
+    "executionBoundary": "docker_required",
     "evaluationMode": "mixed",
-    "requirement": "Text-only static reasoning; no code execution, filesystem access, or network access is provided.",
-    "notes": "Docker-backed coding sandbox is not implemented in this slice. Execution-required coding tests remain unavailable and must not be run as ordinary text prompts."
+    "requirement": "Docker-backed bounded execution is required; host execution is prohibited.",
+    "notes": "Docker-backed coding sandbox is not implemented in this slice. The declared cases remain unavailable and are blocked rather than run as ordinary host prompts."
+  },
+  "materialization": {
+    "kind": "deterministic_seeded",
+    "algorithm": "sha256-v1"
   }
 }

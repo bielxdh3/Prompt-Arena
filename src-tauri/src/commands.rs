@@ -25,8 +25,9 @@ use crate::{
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
     official_packs::{
         get_official_pack as get_official_pack_record,
-        list_official_packs as list_official_pack_records, OfficialPackDocument, OfficialPackError,
-        OfficialPackSummary,
+        list_official_packs as list_official_pack_records,
+        materialize_official_pack as materialize_official_pack_record, OfficialPackDocument,
+        OfficialPackError, OfficialPackMaterialization, OfficialPackSummary,
     },
     ollama::{OllamaConfig, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     orchestration::{
@@ -196,6 +197,9 @@ impl From<BlindEvaluationError> for CommandError {
 
 impl From<OfficialPackError> for CommandError {
     fn from(error: OfficialPackError) -> Self {
+        if let OfficialPackError::Storage(storage_error) = &error {
+            return storage_error.clone().into();
+        }
         Self {
             code: if matches!(
                 error,
@@ -229,6 +233,15 @@ pub fn list_official_packs() -> Result<Vec<OfficialPackSummary>, CommandError> {
 #[tauri::command]
 pub fn get_official_pack(pack_id: String) -> Result<Option<OfficialPackDocument>, CommandError> {
     get_official_pack_record(&pack_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn materialize_official_pack(
+    app: AppHandle,
+    pack_id: String,
+    seed: u64,
+) -> Result<OfficialPackMaterialization, CommandError> {
+    materialize_official_pack_record(&storage_for(&app)?, &pack_id, seed).map_err(Into::into)
 }
 
 #[tauri::command]
