@@ -1,190 +1,258 @@
+<div align="center">
+
 # Prompt Arena
 
-Prompt Arena is a standalone, local-first desktop workspace for reproducible AI model benchmarking and comparison.
-It targets Windows and Linux through Tauri 2, React, TypeScript, and Rust.
+**A local-first desktop workspace for reproducible AI benchmarking and model comparison.**
 
-Phase 01 established the accessible shell, semantic design tokens, typed desktop boundary, one-shot worker protocol,
-and storage contracts. Phase 02 adds the benchmark-v1 domain validator, local SQLite metadata migrations, immutable
-artifact writes, and narrow commands for validating, saving, and listing benchmark versions. Phase 03 adds a generic
-normalized runtime contract and a backend-only Ollama adapter for loopback health, model listing/metadata, generation,
-and NDJSON streaming. Phase 04 adds bounded one-shot orchestration through the app-owned worker, immutable terminal
-evidence persistence/replay, and a local Runs read surface. It does not add run authoring controls, downloads, cloud
-services, accounts, or telemetry.
-Phase 05 — DONE (bounded) — adds a structured benchmark-draft editor, migration `0003_benchmark_drafts.sql`, and typed desktop
-commands to list, read, save, validate, and publish local drafts. Drafts are editable records with revision checks;
-publishing validates benchmark-v1 and creates an immutable benchmark version. The browser preview shows only unsaved
-editor state and performs no draft/version reads or writes. This slice does not add raw JSON editing, importing,
-cloning, run controls, evaluation, official benchmark packs, model-library management, or external/cloud providers.
-Phase 06 — DONE (bounded) — adds a Models surface for immutable local profile-revision listing/registration and installed-model
-discovery through the existing Ollama adapter. Discovery uses only the fixed `http://127.0.0.1:11434` loopback
-endpoint and returns bounded, sorted metadata with typed unavailable/protocol errors. There are no endpoint or
-credential fields, downloads, deletion, cloud providers, or browser-side profile/model records; full model-library
-management remains planned.
-Phase 07 — DONE (bounded) — adds a typed read for one published benchmark version, returning its summary and canonical
-document JSON without mutation. A pure helper builds one bounded `RunPlan` from that real document, one real immutable
-profile revision, and selected task/case identities; it derives the model from the profile, combines prompts
-deterministically, uses exactly one repetition, and supplies the fixed/default Ollama runtime configuration. The typed
-bridge can execute the existing one-shot command, but there is no run-authoring UI, fake record, cancellation control,
-arbitrary endpoint, credential, cloud, or process-lifecycle surface.
-Phase 08 — DONE (bounded) — adds the Core Arena view. Desktop mode reads real immutable version summaries, profile
-revisions, and the selected stored canonical document, then lets the user choose one existing task and case for a
-deterministic preview and the existing one-shot command. It reports honest loading, malformed, bridge, busy, terminal,
-progress, and history-navigation states. Browser preview remains no-write, and broader run authoring, cancellation,
-process lifecycle, downloads, cloud providers, and arbitrary runtime configuration remain out of scope.
-Phase 09 — DONE (bounded) — adds read-only attempt evidence to Runs. Completed attempts persist a bounded
-`responseSummary` in flattened metadata (model, finish reason, response byte count, tool-call count, and optional usage/
-timing counters); response text remains only in the immutable result artifact. Runs can list real attempts and show their
-status, immutable IDs, effective-configuration boundary, summary metrics, and artifact/hash presence without reading or
-rendering artifact payloads. No scoring, evaluation, ranking, mutation, or browser-side attempt records are added.
-Phase 10 — DONE (bounded) — adds objective exact-text verification for string expectations. The bounded expected text
-travels only as explicit RunPlan policy, never in GenerationRequest metadata; after generation, deterministic line-ending
-and surrounding-whitespace normalization produces only pass/fail, normalized byte counts, and SHA-256 evidence in the
-immutable result reference. Runs shows that evidence without rendering expected/actual response text; human/AI evaluation,
-rankings, and broader scoring remain outside this slice.
-Phase 11 — DONE (bounded) — adds a single-user local blind human-evaluation lock for one completed run. Desktop mode
-reads only registered, hash-verified generation-response artifacts, presents a deterministic anonymous order with stable
-labels/tokens, and removes AttemptDetail and all identifying attempt evidence from the review surface while evaluation is
-preparing or prepared. The user can submit bounded overall scores and an optional complete token ranking; the separate
-immutable evaluation record stores anonymous presentation/audit mapping, scores, ranking, and timestamps, never response
-text. Browser preview remains no-write. This slice has no AI judging, multi-rater workflow, cross-run ranking, rubric
-authoring, or broader scoring/analysis.
-Phase 12 — DONE (bounded) — bundles three versioned official benchmark-v1 source documents under `packs/official`:
-programming/software-engineering, reasoning/math/knowledge, and writing/analysis/instruction-following. A read-only
-Rust catalog validates each included document, derives stable canonical content hashes, exposes typed list/get commands,
-and never writes SQLite or user records. The Benchmarks view lists and inspects pack metadata and canonical JSON only in
-desktop mode; browser preview performs no catalog reads or writes. Programming tasks are deliberately text-only because
-Docker-backed coding sandbox execution is not implemented; the pack metadata exposes that unavailable capability.
-Phase 13 — DONE (bounded) — adds a read-only cross-platform hardware baseline to the Models view. Logical CPU count uses
-the standard library, Linux RAM uses the fixed `/proc/meminfo` source, and Windows RAM uses a narrow kernel API binding;
-GPU and VRAM remain explicit unavailable fields when no safe feature detection is present. Model rows receive pure,
-session-only Ideal/Acceptable/Heavy/Unavailable explanations from bounded RAM-share thresholds; no thresholds are
-persisted and no empirical performance history is claimed.
-Phase 14 — DONE (bounded) — adds a read-only single-run comparability diagnostic in Runs after the existing
-blind-evaluation gate permits attempt evidence. It checks benchmark identity, terminal state, profile/runtime/model
-consistency, completed-attempt coverage, and exact-text evidence, then shows only a diagnostic pass/fail ordering or tie
-representation. It is not an official ranking, cross-run comparison, regression, tournament, human score, or AI judge.
-Phase 15 — DONE (bounded) — replaces the font-only Settings control with a local appearance editor. Seven existing
-system-font stacks, bounded font scale, allowlisted accents, compact/rounded corners, dark-neutral/warm/paper surfaces,
-reduced motion, restore defaults, and a truthful live preview are available. Only sanitized preferences persist in the
-Tauri desktop webview; browser preview changes are temporary and never write localStorage or desktop records.
-Phase 16 — DONE (bounded foundation) — adds a read-only catalog for generic OpenAI-compatible, OpenAI, Anthropic, and
-Gemini provider identities plus pure dated-price cost and budget helpers. Every external provider remains unconfigured,
-network-not-wired, identity-unverified, and non-executable; no API keys, environment reads, network calls, telemetry, or
-provider persistence are added. Local Ollama remains the only executable runtime.
-Phase 17 — DONE (bounded hardening) — adds a dependency-free boundary checker and deterministic fixtures for the reviewed
-Windows/Linux CI matrix, deterministic worker sidecar packaging, exact Tauri CSP/capability/local-font/loopback invariants,
-secret ignores, lockfiles, and tracked key-material screening. Pull-request CI runs the checker and high-severity
-production dependency audit after install; no release, signing, deployment, publication, or merge behavior is enabled.
+[![Status](https://img.shields.io/badge/status-active%20development-orange)](#project-status)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue)](#project-status)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#requirements)
+[![Desktop](https://img.shields.io/badge/desktop-Tauri%202-FFC131)](#technology)
+[![Runtime](https://img.shields.io/badge/local%20runtime-Ollama-111111)](#local-first-boundary)
 
-## Run locally
+Prompt Arena lets you define benchmarks, run local models, preserve immutable execution evidence, and review results without requiring an account, telemetry, or a hosted Prompt Arena service.
+
+</div>
+
+> [!IMPORTANT]
+> Prompt Arena is a standalone, single-user, local-first application for Windows and Linux. Local model execution is the primary product path. External APIs are a secondary future BYOK compatibility path and are not currently executable. macOS is intentionally out of scope.
+
+## The idea at a glance
 
 ```text
-npm install
-npm run dev          # browser preview
-npm run tauri:dev    # desktop development window
+                         ┌──────────────────────┐
+                         │        You           │
+                         │ benchmarks · models  │
+                         │ runs · evaluations   │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────▼───────────┐
+                         │   Prompt Arena UI    │
+                         │ Arena · Benchmarks   │
+                         │ Models · Runs        │
+                         └──────────┬───────────┘
+                                    │ typed Tauri commands
+                    ┌───────────────▼────────────────┐
+                    │       Rust desktop core         │
+                    │ validation · storage · evidence │
+                    │ orchestration · trust boundary  │
+                    └───────────┬───────────┬─────────┘
+                                │           │
+                     persistent │           │ one-shot process
+                                │           │
+                    ┌───────────▼──────┐ ┌──▼─────────────────┐
+                    │ SQLite metadata  │ │ Prompt Arena worker │
+                    │ + artifacts      │ │ bounded execution   │
+                    └──────────────────┘ └──┬─────────────────┘
+                                           │ loopback only
+                                           ▼
+                                  ┌───────────────────┐
+                                  │ Local model host  │
+                                  │      Ollama       │
+                                  └───────────────────┘
 ```
 
-Useful checks:
+The desktop core owns persistence and the execution boundary. The worker handles one bounded job and exits; it is not a background daemon or a hosted service.
+
+## What Prompt Arena is
+
+Prompt Arena is built for comparing AI models in a way that stays inspectable and reproducible instead of turning benchmark runs into disposable chat sessions.
+
+The workspace is designed around:
+
+- versioned benchmark definitions and structured local drafts;
+- immutable model profile revisions;
+- installed local model discovery through Ollama;
+- bounded benchmark execution with explicit configuration;
+- immutable run, attempt, result, artifact, and hash evidence;
+- objective exact-text verification where a deterministic answer exists;
+- blind local human review for completed runs;
+- bundled official benchmark packs;
+- transparent local hardware heuristics;
+- explicit separation between real desktop state and browser-only preview state.
+
+## Project status
+
+The current `0.1.0` development baseline includes:
+
+- [x] Tauri 2 + React + TypeScript + Rust desktop foundation;
+- [x] Windows and Linux CI boundaries;
+- [x] local SQLite metadata and immutable filesystem artifacts;
+- [x] benchmark-v1 validation, drafts, publication, and immutable versions;
+- [x] immutable model profiles and fixed-loopback Ollama discovery;
+- [x] one-shot local model execution from the Arena;
+- [x] local run history and read-only attempt evidence;
+- [x] deterministic exact-text verification evidence;
+- [x] single-user blind human evaluation lock;
+- [x] three bundled official benchmark packs;
+- [x] read-only hardware baseline and transparent model-size heuristics;
+- [x] bounded within-run comparability diagnostics;
+- [x] sanitized local appearance preferences;
+- [x] external-provider and cost-safety architecture without network execution;
+- [x] repository boundary checks, secret screening, and review-readiness CI.
+
+> [!NOTE]
+> Prompt Arena is functional software under active development, not a finished benchmark suite or a production release. Broader model management, cross-run ranking, AI judging, external provider execution, packaging, and release hardening are still evolving.
+
+## Technology
+
+| Layer | Responsibility | Technology |
+|---|---|---|
+| Desktop shell | Native application boundary and command registration | Tauri 2 + Rust |
+| Interface | Arena, benchmarks, models, runs, settings | React 19 + TypeScript |
+| Frontend tooling | Development and production webview build | Vite 6 |
+| Persistence | Metadata, revisions, runs, evaluations | SQLite |
+| Artifact evidence | Immutable result payloads and hashes | App-owned filesystem storage |
+| Execution boundary | One bounded job per process | Rust worker sidecar |
+| Local model runtime | Discovery and generation | Ollama over loopback HTTP |
+| Benchmark contract | Versioned schema and deterministic validation | JSON + Rust validation |
+| Validation | UI tests, Rust tests, boundary checks, audit | Vitest + Cargo + Node tooling |
+
+## Requirements
+
+- Windows or Linux;
+- Node.js with npm;
+- Rust stable and Cargo;
+- Ollama for the current local-model execution workflow.
+
+No Prompt Arena account, cloud service, API key, or telemetry service is required for the local workflow.
+
+## Quick start
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/bielxdh3/Prompt-Arena.git
+cd Prompt-Arena
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+```
+
+### 3. Start desktop development
+
+Start Ollama if you want to discover or execute local models, then run:
+
+```bash
+npm run tauri:dev
+```
+
+### 4. Browser preview
+
+```bash
+npm run dev
+```
+
+> [!NOTE]
+> Browser preview is intentionally not equivalent to the desktop app. It does not read or write Prompt Arena desktop records and does not execute models.
+
+For development details and validation commands, read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+## Repository map
 
 ```text
+Prompt-Arena/
+├── src/                     React/TypeScript application interface
+├── src-tauri/               Tauri/Rust desktop core and worker
+├── packs/
+│   └── official/            Bundled benchmark-v1 source packs
+├── schemas/                 Versioned benchmark contracts
+├── scripts/                 Boundary checks and packaging helpers
+├── docs/                    Architecture, privacy, security, testing, design
+├── .github/                 Windows/Linux CI configuration
+├── ROADMAP.md               Implementation roadmap and phase status
+└── README.md
+```
+
+## Validation
+
+Useful frontend and repository checks:
+
+```bash
 npm run typecheck
 npm run test
+npm run test:boundaries
+npm run check:boundaries
+npm audit --omit=dev --audit-level=high
 npm run build
+```
+
+Rust checks:
+
+```bash
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
-The worker is deliberately one-shot. After a Rust build, a contract smoke can be run with a single JSON request:
+The boundary checker validates reviewed repository invariants such as the Windows/Linux CI matrix, deterministic worker packaging, CSP and loopback rules, secret ignores, lockfiles, and tracked key-material screening. It does not publish, sign, deploy, or merge anything.
 
-```text
-'{"type":"run_once","protocol_version":1,"job_id":"smoke-1","task":"foundation_check"}' | cargo run --manifest-path src-tauri/Cargo.toml --bin prompt-arena-worker
-```
+## Local-first boundary
 
-## Boundaries
+Prompt Arena treats local execution and reproducibility as product boundaries, not marketing labels.
 
-- Local data belongs to the app-owned storage root. Migrations `0001_foundation.sql`, `0002_core_arena.sql`, and
-  `0003_benchmark_drafts.sql`, and `0004_blind_evaluations.sql` create SQLite metadata tables; large payloads remain
-  immutable filesystem artifacts.
-- The registered Tauri commands remain typed, including published benchmark-version read, profile-revision
-  listing/registration, fixed-loopback Ollama model discovery, read-only hardware/official-pack list/read, one-shot run
-  execution, and Runs read commands.
-  `execute_run_once` checks the fixed app-sibling worker in development and the target-triple-suffixed packaged Tauri
-  resource, passes one bounded JSON request without a shell, PATH lookup, user path, download, or arbitrary arguments,
-  and persists the returned terminal outcome in the app-owned store. Benchmark draft
-  list/read/save/publish commands accept only typed local requests and use optimistic revision checks. Browser preview
-  never reads or writes desktop records, executes a model, or invents run records. No account, cloud, or telemetry
-  capability is enabled.
-- Bundled official packs are repository-owned source records under `packs/official`, loaded with Rust `include_str!`,
-  validated by the canonical benchmark-v1 validator, canonicalized for stable content hashes, and exposed through
-  read-only catalog commands. They are never copied into drafts, SQLite, Attempts, Results, or installed historical
-  records. The Benchmarks view renders validated canonical JSON as plain text; browser preview does not invoke catalog
-  commands.
-- The hardware baseline is a read-only local snapshot. It does not spawn a shell, inspect model paths, download anything,
-  report telemetry, or guess unavailable GPU/VRAM data. Recommendation thresholds are bounded UI state only and compare
-  reported Ollama model size with detected RAM as a transparent heuristic.
-- Appearance is presentation-only state. Font, scale, accent, radius, surface, and reduced-motion values are normalized
-  against fixed allowlists/bounds before CSS data attributes or local Tauri webview storage receive them. Browser preview
-  has no appearance persistence and creates no desktop record; there is no theme import, export, account, cloud sync, or
-  external font loading.
-- The Phase 16 provider layer is architecture-only: its fixed catalog records capability/transport status, credential
-  source state, identity confidence, and dated price-table shape. Pure cost estimates fail closed on missing/invalid
-  prices, budget decisions can allow/confirm/deny, and sanitization discards unknown credential-like fields. No provider
-  adapter, API-key input, secure storage, outbound request, cost history, or external execution exists.
-- The Phase 17 boundary checker reads only reviewed repository configuration and Git-tracked paths, reports no file contents,
-  and validates Windows/Linux CI, deterministic worker sidecar packaging, exact reviewed Tauri CSP source lists, every tracked
-  capability JSON's empty/allowlisted permissions, local fonts/loopback, secret ignores, lockfiles, and obvious key-material
-  absence. Pull-request CI also runs `npm audit --omit=dev --audit-level=high`; no release or deployment workflow is present.
-- Published version reads validate a bounded portable `benchmark-id@version` identity and return the stored canonical
-  document JSON. The reusable run-plan helper accepts a published version, selected real task/case IDs, and a real
-  immutable profile; it rejects malformed identity, empty prompt, profile identity/model, unsupported parameter, and
-  size violations before producing a plan. The helper has no endpoint or credential input and always uses the fixed
-  `http://127.0.0.1:11434` default configuration with one repetition.
-- The Arena view reads only those typed immutable records, presents the composed prompt/system/model and fixed runtime
-  boundary, and creates no run record until the user invokes the existing one-shot command. Browser preview invokes no
-  bridge command and creates no sample state; the view exposes no raw JSON, endpoint, credential, cancellation, or
-  process-lifecycle control.
-- Completed attempts add only a bounded flattened `responseSummary` metadata object; it never contains response text,
-  and the effective-configuration snapshot keeps only approved runtime/provider/model/profile/capability fields, never
-  the GenerationRequest prompt, messages, system prompt, metadata, or tools. The Runs detail reads typed attempt metadata
-  and artifact/hash references without opening artifact files. Failed and cancelled attempts retain their existing semantics
-  and do not receive a completed-response summary. String expected values add only a bounded top-level RunPlan policy input
-  and immutable result score/evidence; the gold answer is not sent through generation metadata or to Ollama, and response
-  text remains only in the artifact. Phase 11 adds one
-  bounded blind human-evaluation lock over verified response artifacts; AI judging, cross-run rankings, and broader
-  scoring remain outside this slice.
-- Blind human evaluation is local and single-user for one run: preparation derives only anonymous cards from completed
-  generation-response artifacts after app-owned path, kind, size, and SHA-256 verification. The parent Runs surface
-  suppresses AttemptDetail and identifying evidence for loading/preparing/prepared/error/empty states; within that blind
-  review surface, identity becomes available only in the immutable post-lock audit record. Scores are overall 1–5 with bounded optional criterion maps,
-  and ranking is token-based and must cover the prepared response set. Evaluation records never persist response text.
-- The Runs comparability foundation is a pure, read-only diagnostic for one local run. It mounts only after the existing
-  blind-evaluation gate permits attempt evidence, keeps browser preview no-read/no-write, and never claims official
-  ranking, cross-run comparability, regression, tournament, AI judging, calibration, or cost analysis.
-- Benchmark v1 is enforced by serde plus deterministic manual checks, including identity, range, artifact path, and
-  hash invariants. Raw benchmark-document input is capped at 256 KiB before parsing/canonicalization and oversized input
-  returns a typed `benchmark_too_large` boundary error. The checked-in JSON Schema is the versioned contract/reference;
-  Phase 02 does not run a JSON Schema engine.
-- Metadata is capped at 1 MiB; persisted response summaries are additionally capped at 8 KiB, and objective expected text
-  is capped at 64 KiB. Draft IDs and benchmark IDs are portable and bounded, draft titles are capped at 256
-  UTF-8 bytes, canonical draft documents at 256 KiB, and draft requests at 512 KiB. Profile IDs are bounded and
-  deterministic revision IDs are immutable; the complete serialized profile request, including `parameters` and
-  flattened `extra`, is capped at 256 KiB. Ollama discovery caps the list at 512 records and each returned model
-  metadata map at 256 KiB. Artifact paths are portable relative paths, and existing artifact names/history are never
-  replaced or rewritten.
-- Runtime requests use typed capability/parameter negotiation and typed errors. The Ollama adapter uses only the
-  standard-library HTTP client against an explicit `http://` loopback endpoint; it rejects credentials, query strings,
-  fragments, and non-loopback hosts. It has 64 KiB line, aggregate header byte/count and chunk-trailer byte/count,
-  16 MiB non-stream body, and 16 MiB cumulative stream limits.
-- Cancellation is cooperative between socket reads and streamed chunks; it does not forcibly kill a remote runtime
-  process. The narrow authoring editor writes only optional text expected answers; arbitrary JSON expectations remain
-  outside this UI. External/cloud providers, credentials, downloads, run authoring, AI judging, multi-rater evaluation,
-  cross-run ranking, unified model search/downloads, duplicate management, empirical recommendation history, broader
-  model-library management, broader runtime UI, and Docker-backed coding sandbox execution remain future work. The
-  official programming pack records the sandbox as unavailable and must not be used to run unsafe code.
-- Times New Roman is the default typography intent. Linux uses honest system fallbacks and the UI exposes seven
-  selectable local font stacks; proprietary fonts are not bundled. Appearance presets remain local and sanitized.
+- Prompt Arena has no hosted inference service, user accounts, or telemetry path;
+- application data belongs to the app-owned local storage root;
+- benchmark versions, profile revisions, run evidence, evaluations, and artifacts preserve explicit history rather than silently rewriting old records;
+- the current executable runtime path is Ollama on fixed loopback networking;
+- model discovery and execution do not accept arbitrary remote endpoints or credentials;
+- the one-shot worker receives one bounded request, returns one terminal outcome, and exits;
+- browser preview does not access the desktop database, artifacts, model runtime, or run commands;
+- official packs are repository-owned read-only source documents and are not silently installed into user history;
+- external providers remain architecture-only until explicit network consent, credential storage, identity, cost, and transport boundaries are implemented;
+- Prompt Arena is standalone and is not coupled to BielOS or another hub or service.
 
-See [ROADMAP.md](ROADMAP.md) and the concise [architecture](docs/ARCHITECTURE.md), [development](docs/DEVELOPMENT.md),
-[security](docs/SECURITY.md), [privacy](docs/PRIVACY.md), [data model](docs/DATA_MODEL.md), [testing](docs/TESTING.md),
-[release checklist](docs/RELEASE_CHECKLIST.md), and [design system](docs/DESIGN_SYSTEM.md) notes.
+See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md) for the detailed trust model.
+
+## Current limitations
+
+- Ollama is the only executable model runtime today;
+- broader run authoring, cancellation, interruption recovery, and runtime lifecycle controls are not complete;
+- full model search, download, deletion, duplicate management, and empirical performance history are not implemented;
+- cross-run rankings, tournaments, regression mode, calibration, and AI judging remain future work;
+- external OpenAI-compatible, OpenAI, Anthropic, and Gemini execution is not wired;
+- secure API credential storage and real provider cost capture are not implemented;
+- GPU and VRAM hardware detection remain explicitly unavailable where no safe feature detection exists;
+- the programming benchmark pack is text-only because Docker-backed coding sandbox execution is not implemented;
+- release signing, publication, and clean-install production validation remain human-gated future work;
+- macOS is not supported and is not on the official roadmap.
+
+## Roadmap
+
+Prompt Arena is being developed across a few clear product tracks:
+
+- [ ] expand Core Arena run authoring and recovery controls;
+- [ ] grow the official benchmark packs and evaluation coverage;
+- [ ] build a fuller local model library and hardware-aware workflow;
+- [ ] add cross-run analysis, rankings, regression, and advanced evaluation;
+- [ ] add optional external providers without making them the center of the product;
+- [ ] continue interface polish, accessibility, diagnostics, and storage controls;
+- [ ] complete Windows/Linux packaging, security closeout, and release readiness.
+
+The detailed implementation state, including completed bounded slices and future work, lives in [ROADMAP.md](ROADMAP.md).
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Development](docs/DEVELOPMENT.md)
+- [Security](docs/SECURITY.md)
+- [Privacy](docs/PRIVACY.md)
+- [Data model](docs/DATA_MODEL.md)
+- [Testing](docs/TESTING.md)
+- [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [Design system](docs/DESIGN_SYSTEM.md)
+- [Roadmap](ROADMAP.md)
+
+## Project principles
+
+Prompt Arena should remain:
+
+- local-first;
+- reproducible and evidence-driven;
+- explicit about what is implemented versus planned;
+- standalone from unrelated projects and services;
+- Windows/Linux focused;
+- useful with local models first, with external APIs only as optional compatibility paths.
