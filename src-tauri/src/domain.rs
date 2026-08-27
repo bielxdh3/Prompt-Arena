@@ -225,6 +225,38 @@ pub enum ObjectiveVerifierPolicy {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObjectiveVerifierEvidencePolicy {
+    ExactText {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+    },
+    NumericTolerance {
+        expected: f64,
+        tolerance: f64,
+    },
+    JsonSchema {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+        required_field_count: u32,
+    },
+    RequiredFields {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+        field_count: u32,
+    },
+    Classification {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+    },
+    SafePattern {
+        pattern_sha256: String,
+        pattern_normalized_byte_count: u64,
+        mode: SafePatternMode,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionBoundaryKind {
@@ -270,6 +302,8 @@ pub struct ObjectiveVerificationEvidence {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ObjectiveVerifierEvidencePolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

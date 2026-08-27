@@ -7,8 +7,8 @@ use crate::{
     domain::{
         sha256_hex, stable_profile_revision_id, stable_version_id, ArtifactRef, Attempt,
         ExecutionBoundary, ExecutionBoundaryKind, ExecutionBoundaryStatus,
-        ImmutableResultReference, ObjectiveVerificationEvidence, ObjectiveVerifierKind,
-        ObjectiveVerifierPolicy, ProfileRevision, Run,
+        ImmutableResultReference, ObjectiveVerificationEvidence, ObjectiveVerifierEvidencePolicy,
+        ObjectiveVerifierKind, ObjectiveVerifierPolicy, ProfileRevision, Run,
     },
     ollama::{OllamaConfig, OllamaProvider},
     runtime::{
@@ -1188,7 +1188,56 @@ fn objective_verification_with_policy(
         actual_sha256: sha256_hex(actual.as_bytes()),
         reason: Some(reason),
         details,
+        policy: Some(objective_policy_evidence(&policy, &expected_text)),
     })
+}
+
+fn objective_policy_evidence(
+    policy: &ObjectiveVerifierPolicy,
+    expected_text: &str,
+) -> ObjectiveVerifierEvidencePolicy {
+    let expected_sha256 = sha256_hex(expected_text.as_bytes());
+    let expected_normalized_byte_count = expected_text.len() as u64;
+    match policy {
+        ObjectiveVerifierPolicy::ExactText { .. } => ObjectiveVerifierEvidencePolicy::ExactText {
+            expected_sha256,
+            expected_normalized_byte_count,
+        },
+        ObjectiveVerifierPolicy::NumericTolerance {
+            expected,
+            tolerance,
+        } => ObjectiveVerifierEvidencePolicy::NumericTolerance {
+            expected: *expected,
+            tolerance: *tolerance,
+        },
+        ObjectiveVerifierPolicy::JsonSchema { required, .. } => {
+            ObjectiveVerifierEvidencePolicy::JsonSchema {
+                expected_sha256,
+                expected_normalized_byte_count,
+                required_field_count: required.len() as u32,
+            }
+        }
+        ObjectiveVerifierPolicy::RequiredFields { fields } => {
+            ObjectiveVerifierEvidencePolicy::RequiredFields {
+                expected_sha256,
+                expected_normalized_byte_count,
+                field_count: fields.len() as u32,
+            }
+        }
+        ObjectiveVerifierPolicy::Classification { .. } => {
+            ObjectiveVerifierEvidencePolicy::Classification {
+                expected_sha256,
+                expected_normalized_byte_count,
+            }
+        }
+        ObjectiveVerifierPolicy::SafePattern { mode, .. } => {
+            ObjectiveVerifierEvidencePolicy::SafePattern {
+                pattern_sha256: expected_sha256,
+                pattern_normalized_byte_count: expected_normalized_byte_count,
+                mode: mode.clone(),
+            }
+        }
+    }
 }
 
 fn normalize_objective_text(value: &str) -> String {
