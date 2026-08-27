@@ -154,11 +154,14 @@ import {
   hardwarePreviewCopy,
   isActiveModelOperation,
   modelBackendLabel,
+  modelDuplicateEvidenceLabel,
+  modelDuplicateGroupLabel,
   modelEmptyCopy,
   modelOperationProgressLabel,
   modelOperationStatusLabel,
   modelPreviewCopy,
   modelRecordMetadataLabel,
+  modelRecordMetadataValue,
   modelRecordQuantizationLabel,
   modelSourceStatusLabel,
   profileEmptyCopy,
@@ -1479,6 +1482,32 @@ function ModelsView() {
               </div>
             </div>
           )}
+          {modelState.status === "ready" && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Catalog relationships</p>
+                  <h3>Duplicate groups</h3>
+                </div>
+                <span className="run-status run-status-neutral">{modelState.catalog.duplicateGroups.length} groups</span>
+              </div>
+              {modelState.catalog.duplicateGroups.length === 0 ? (
+                <p className="field-help">No duplicate groups reported. Quantization-distinct records remain separate rows.</p>
+              ) : (
+                <div className="profile-record-list">
+                  {modelState.catalog.duplicateGroups.map((group) => (
+                    <article className="profile-record-row" key={group.groupId}>
+                      <span>
+                        <strong>{modelDuplicateGroupLabel(group, modelState.catalog.models)}</strong>
+                        <small>{modelDuplicateEvidenceLabel(group)} · {group.modelIds.length} records</small>
+                      </span>
+                      <span className="run-status run-status-neutral">duplicate</span>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {modelState.status === "ready" && visibleModels.length === 0 && (
             <EmptyState
               title={query.trim() ? "No matching models" : "No local models"}
@@ -1512,6 +1541,9 @@ function ModelsView() {
                         : model.digest ? `Digest ${model.digest.slice(0, 12)}…` : "Digest unavailable"}
                       {model.managedPath ? ` · managed/${model.managedPath}` : ""}
                       {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
+                    </p>
+                    <p className="model-meta">
+                      Format: {modelRecordMetadataValue(model, "format")} · License: {modelRecordMetadataValue(model, "license")} · Source: {modelRecordMetadataValue(model, "source")} · Location: {modelRecordMetadataValue(model, "location")}
                     </p>
                     <div className="model-recommendation">
                       <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
