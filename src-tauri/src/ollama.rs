@@ -904,7 +904,7 @@ fn parse_model_info_with_fallback(
     Ok(model)
 }
 
-fn validate_model_info(model: &ModelInfo) -> Result<(), RuntimeError> {
+pub(crate) fn validate_model_info(model: &ModelInfo) -> Result<(), RuntimeError> {
     validate_model_text(&model.name, "name", MAX_LOCAL_MODEL_NAME_BYTES)?;
     for (field, value) in [
         ("digest", model.digest.as_deref()),

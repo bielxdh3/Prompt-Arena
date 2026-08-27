@@ -2,6 +2,7 @@ pub mod commands;
 pub mod domain;
 pub mod evaluation;
 pub mod hardware;
+pub mod model_library;
 pub mod official_packs;
 pub mod ollama;
 pub mod orchestration;
