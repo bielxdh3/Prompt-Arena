@@ -157,14 +157,52 @@ export type OfficialPackDocument = {
   documentJson: string;
 };
 
+export type SaveOutcome = "saved" | "already_present";
+
 export type OfficialPackMaterialization = {
   materializationId: string;
+  materializedContentHash: string;
   summary: OfficialPackSummary;
   seed: number;
   caseCount: number;
   taskCount: number;
   documentJson: string;
-  savedOutcome: "saved" | "already_present";
+  savedOutcome: SaveOutcome;
+};
+
+export type ArenaExecutionEvidence = {
+  competitorId: string;
+  competitorLabel: string;
+  repetition: number;
+  runId: string;
+  attemptId: string | null;
+  status: string;
+  durationMs: number | null;
+  completionTokens: number | null;
+  objectivePassed: boolean | null;
+};
+
+export type ArenaSummaryPayload = {
+  arenaId: string;
+  benchmarkVersionId: string;
+  taskId: string;
+  caseId: string;
+  repetitions: number;
+  packId: string | null;
+  materializationSeed: number | null;
+  summary: Record<string, unknown>;
+  competitors: Array<Record<string, unknown>>;
+  evidence: ArenaExecutionEvidence[];
+};
+
+export type ArenaSummaryRecord = ArenaSummaryPayload & {
+  contentHash: string;
+  createdAt: string;
+};
+
+export type SavedArenaSummary = {
+  record: ArenaSummaryRecord;
+  saveOutcome: SaveOutcome;
 };
 
 export type BenchmarkDraftSummary = {
@@ -280,7 +318,7 @@ export type PersistedExecution = {
   run: RunRecord;
   attempt: AttemptRecord;
   progress: ProgressEvent[];
-  saveOutcome: "saved" | "already_present";
+  saveOutcome: SaveOutcome;
 };
 
 export type AttemptResponse = {
@@ -304,7 +342,7 @@ export type ProfileRevision = {
 
 export type ProfileRevisionRegistration = {
   profileRevisionId: string;
-  saveOutcome: "saved" | "already_present";
+  saveOutcome: SaveOutcome;
 };
 
 export type ModelInfo = {
@@ -461,6 +499,29 @@ export async function materializeOfficialPack(packId: string, seed: number): Pro
     "materialize_official_pack",
     "The selected official benchmark pack could not be materialized.",
     { packId, seed },
+  );
+}
+
+export async function saveArenaSummary(summary: ArenaSummaryPayload): Promise<SavedArenaSummary> {
+  return invokeDesktop<SavedArenaSummary>(
+    "save_arena_summary",
+    "The Arena summary could not be saved.",
+    { summary },
+  );
+}
+
+export async function readArenaSummaries(): Promise<ArenaSummaryRecord[]> {
+  return invokeDesktop<ArenaSummaryRecord[]>(
+    "list_arena_summaries",
+    "The Arena summaries could not be reached.",
+  );
+}
+
+export async function readArenaSummary(arenaId: string): Promise<ArenaSummaryRecord | null> {
+  return invokeDesktop<ArenaSummaryRecord | null>(
+    "get_arena_summary",
+    "The selected Arena summary could not be reached.",
+    { arenaId },
   );
 }
 

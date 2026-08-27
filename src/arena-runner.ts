@@ -1,5 +1,7 @@
 import type {
   AttemptRecord,
+  ArenaExecutionEvidence,
+  ArenaSummaryPayload,
   BenchmarkVersion,
   PersistedExecution,
   ProfileRevision,
@@ -245,6 +247,53 @@ export function summarizeArenaCompetitors(executions: ArenaExecution[]): ArenaCo
   });
 }
 
+export function buildArenaSummaryPayload(
+  request: ArenaExecutionRequest,
+  executions: ArenaExecution[],
+): ArenaSummaryPayload {
+  const summary = summarizeArenaExecutions(executions);
+  return {
+    arenaId: request.arenaId,
+    benchmarkVersionId: request.version.summary.versionId,
+    taskId: request.taskId,
+    caseId: request.caseId,
+    repetitions: request.repetitions,
+    packId: request.packId ?? null,
+    materializationSeed: request.materializationSeed ?? null,
+    summary,
+    competitors: summarizeArenaCompetitors(executions),
+    evidence: executions.map(arenaExecutionEvidence),
+  };
+}
+
+function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
+  const attempt = item.execution?.attempt;
+  const responseSummary = attempt?.responseSummary;
+  const durationNs = responseSummary?.timing?.totalDurationNs;
+  const completionTokens = responseSummary?.usage?.completionTokens;
+  const score = attempt?.result?.score;
+  const status = item.cancelled
+    ? "cancelled"
+    : attempt?.status ?? (item.error ? "failed_before_persistence" : "unknown");
+  return {
+    competitorId: item.competitorId,
+    competitorLabel: item.competitorLabel,
+    repetition: item.repetition,
+    runId: item.runId,
+    attemptId: attempt?.attemptId ?? null,
+    status,
+    durationMs: typeof durationNs === "number" && Number.isFinite(durationNs) && durationNs >= 0
+      ? durationNs / 1_000_000
+      : null,
+    completionTokens: typeof completionTokens === "number"
+      && Number.isSafeInteger(completionTokens)
+      && completionTokens >= 0
+      ? completionTokens
+      : null,
+    objectivePassed: isRecord(score) && typeof score.passed === "boolean" ? score.passed : null,
+  };
+}
+
 export function rankArenaCompetitors(
   executions: ArenaExecution[],
   humanScores: ReadonlyMap<string, number> = new Map(),
@@ -478,6 +527,10 @@ function publicParameters(parameters: Record<string, unknown>): Record<string, u
 
 function executionKey(item: ArenaExecution): string {
   return `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function attemptForExecution(item: ArenaExecution): AttemptRecord | null {
