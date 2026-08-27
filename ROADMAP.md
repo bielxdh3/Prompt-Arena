@@ -28,21 +28,37 @@ Implemented in the current completion stack:
   revisions.
 - Sequential fair execution through the existing app-owned worker, isolated competitor failures, queued-work cancellation,
   per-sample persistence, progress counts, verified response-artifact reads, side-by-side comparison, blind scoring/lock,
-  explicit post-lock human/objective ranking, repetition summary statistics, and JSON/Markdown/CSV export.
+  explicit post-lock human/objective ranking, repetition summary statistics, persisted aggregate Arena summaries with
+  uncertainty/tie margins, and JSON/Markdown/CSV export.
 - Objective policy helpers for exact text, numeric tolerance, bounded JSON schema/fields, classification, and literal-safe patterns.
 
 Remaining before completion: native Tauri smoke of two and three competitors, live streaming events during execution,
-close/tray recovery semantics, and a single aggregate immutable Arena record instead of one immutable run per sample.
+close/tray recovery semantics, and native reopen/export smoke for the persisted aggregate Arena summary and per-sample
+history.
 
 Acceptance: a normal user completes one Arena with at least two models, sees every status/result, survives one failure,
 locks a blind review, reopens history, and exports evidence without editing JSON or using a terminal.
 
 ### P2 — Verification, packs, and statistics — IN PROGRESS
 
-The three official packs and exact-text verifier remain usable. Objective helper coverage, bounded JSON schema checks, and
-Arena repetition summary statistics are present in TypeScript. Docker-backed programming execution, materialized
-procedural cases/seeds, formal verifier persistence, and uncertainty/tie margins remain to be wired to benchmark versions
-and the Rust evidence store.
+The three official packs and their declared execution/evaluation metadata are usable through the Benchmarks UI. Objective
+verifier policies now cover exact text, numeric tolerance, bounded JSON schema/required fields, classification, and
+literal-safe or bounded regex patterns; normalized policy inputs and objective result evidence are carried through run
+plans and persisted with immutable terminal results. The programming pack declares a Docker-required boundary: when
+Docker is unavailable, execution is blocked and host execution is prohibited, with no fallback runtime.
+
+Deterministic official-pack materialization derives bounded SHA-256 case seeds from a selected seed and persists an
+immutable, replayable canonical materialization record. Arena repetitions now compute statistics, uncertainty, and tie
+margins; `ArenaSummary` records persist aggregate metadata and per-sample evidence and are listed/reloaded through the
+Tauri bridge. The usable UI paths are Benchmarks pack inspection/materialization, Arena execution/results/exports, and
+Runs summary history/reopen.
+
+Implementation and automated evidence is present in commits `6c1eef9`, `b9ac2b4`, and `952293a`, including TypeScript
+verifier/Arena tests, Rust orchestration, official-pack, and immutable-storage tests, plus typecheck, build, boundary,
+format, compile, and all-target native test checks. These automated checks do not replace native acceptance.
+
+P2 remains IN PROGRESS: native Tauri/WebView execution, reopen, and export smoke, plus Docker-boundary smoke, are still
+pending.
 
 Acceptance: each headline pack has at least one executable/evaluable task with its declared verifier and saved repetition
 evidence; programming tasks block clearly when Docker is unavailable.

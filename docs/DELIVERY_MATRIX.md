@@ -3,18 +3,22 @@
 This matrix is the closeout checkpoint for the product-completion mission. `Automated` means a local test or contract
 check; `Native QA` requires the real Tauri/WebView or installed package. No row is complete from a type or schema alone.
 
+The P2 implementation evidence below is present in commits `6c1eef9`, `b9ac2b4`, and `952293a`. P2 remains `IN PROGRESS`
+until the listed native Tauri/WebView and Docker-boundary checks pass.
+
 | Roadmap requirement | Implementation | User-facing surface | Automated evidence | Native QA evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | Two or more competitors in one Arena | `src/arena-runner.ts`, `src/App.tsx` | Arena builder and comparison | `arena-runner.test.ts` | Required on installed app | IN PROGRESS |
 | Failure isolation and queued cancellation | `src/arena-runner.ts` | Arena progress/results | `arena-runner.test.ts` | Required with one deliberate failure | IN PROGRESS |
 | Live streaming/progress | existing worker progress plus Arena progress counts | Live Arena | Rust orchestration tests | Live event timing not yet tested | IN PROGRESS |
 | Blind evaluation and reveal | `src/App.tsx`, existing blind commands | Blind Evaluation panel | existing Rust evaluation tests + Arena tests | Required in Tauri | IN PROGRESS |
-| Objective verifiers | `src/objective-verifiers.ts` | Objective evidence boundary | `objective-verifiers.test.ts` | Needs persisted benchmark policy | IN PROGRESS |
-| Repetition statistics | `src/arena-runner.ts` | Arena summary | Arena tests cover mean/median/min/max/stddev/success rate | Native repetition run required | IN PROGRESS |
-| History and verified response reopen | `src/bridge.ts`, `commands.rs` | Runs and comparison | Rust storage tests, Rust command build | Installed restart/reopen required | IN PROGRESS |
+| Objective verifiers | `src/objective-verifiers.ts`, `src/run-plan.ts`, `src-tauri/src/orchestration.rs`, `src-tauri/src/storage.rs` | Benchmark case policy and Arena objective evidence | `objective-verifiers.test.ts`, Rust objective-verification/persistence tests | Tauri persistence/reopen required | IN PROGRESS |
+| Repetition statistics | `src/arena-runner.ts`, `src/App.tsx` | Arena results and summary metrics | `arena-runner.test.ts` covers summary statistics; Rust summary replay covers persisted uncertainty/tie-margin fields | Native repetition run required | IN PROGRESS |
+| Persisted Arena summaries | `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src/App.tsx` | Arena results and Runs summary history | Rust `arena_summaries_are_immutable_replayable_and_listed` plus Arena tests | Tauri run/reopen/export smoke required | IN PROGRESS |
+| History and verified response reopen | `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src/App.tsx` | Runs, comparison, and Arena summary reload | Rust storage tests and command build | Installed restart/reopen required | IN PROGRESS |
 | JSON/Markdown/CSV exports | `src/arena-runner.ts`, `src/App.tsx` | Arena results | Arena export test | Installed save/open smoke required | IN PROGRESS |
-| Official packs | `packs/official`, `official_packs.rs` | Benchmarks | Rust pack validation | Execute each pack in Tauri | IN PROGRESS |
-| Docker coding sandbox | not yet wired | Programming pack | No host fallback contract only | Required | NOT IMPLEMENTED |
+| Official packs | `packs/official`, `src-tauri/src/official_packs.rs`, `src-tauri/src/commands.rs`, `src/bridge.ts`, `src/App.tsx` | Benchmarks catalog, document inspection, and deterministic materialization | Rust catalog/materialization tests, TypeScript typecheck/build | Inspect/materialize each pack in Tauri | IN PROGRESS |
+| Docker-required execution boundary | `src-tauri/src/official_packs.rs`, `src/run-plan.ts`, `src/arena-ui.ts`, `src/App.tsx` | Programming-pack metadata and Arena preflight | Rust official-pack/orchestration boundary tests and boundary checks | Docker-boundary smoke required; Docker runtime remains unavailable | IN PROGRESS |
 | Ollama discovery/start | `ollama.rs`, `commands.rs`, `ModelsView` | Models | Rust adapter tests | Real Ollama smoke required | IN PROGRESS |
 | LM Studio | not yet wired | Models | None | Required | NOT IMPLEMENTED |
 | llama.cpp/GGUF | not yet wired | Models | None | Required | NOT IMPLEMENTED |
