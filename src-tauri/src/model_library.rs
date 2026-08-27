@@ -1,14 +1,18 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use serde_json::{json, Map, Value};
 
 use crate::{
     domain::{
         ModelBackend, ModelCatalog, ModelDiscoveryRequest, ModelDuplicateGroup, ModelImportRequest,
-        ModelRecord, ModelSource, ModelSourceConfig, ModelSourceStatus,
+        ModelOperation, ModelOperationKind, ModelOperationStatus, ModelRecord,
+        ModelRemovalEvidence, ModelSource, ModelSourceConfig, ModelSourceStatus,
     },
     ollama::{OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
-    runtime::{ModelInfo, RuntimeError, RuntimeProvider},
+    runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
         now_marker, StorageError, StorageService, MAX_MANAGED_MODEL_BYTES, MAX_MODEL_NAME_BYTES,
         MAX_MODEL_PATH_BYTES, MAX_MODEL_RECORD_COUNT,
@@ -20,9 +24,12 @@ pub const DEFAULT_LLAMA_CPP_ENDPOINT: &str = "http://127.0.0.1:8080";
 pub const MAX_MODEL_SOURCE_COUNT: usize = 8;
 pub const MAX_MODEL_QUERY_BYTES: usize = 256;
 pub const MAX_GGUF_HEADER_BYTES: usize = 256 * 1024;
+pub const MAX_MODEL_OPERATION_COUNT: usize = 512;
+pub const MAX_MODEL_OPERATION_EVENTS: usize = 512;
 const MAX_GGUF_STRING_BYTES: usize = 64 * 1024;
 const MAX_GGUF_METADATA_ENTRIES: usize = 4_096;
 const MAX_GGUF_VALUE_DEPTH: usize = 8;
+const MAX_MODEL_OPERATION_REQUEST_BYTES: usize = 16 * 1024;
 
 #[derive(Debug)]
 pub enum ModelLibraryError {
@@ -57,6 +64,92 @@ impl From<StorageError> for ModelLibraryError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ModelOperationRequest {
+    Download {
+        operation_id: String,
+        endpoint: String,
+        model_name: String,
+    },
+    Import {
+        operation_id: String,
+        source_path: String,
+    },
+    Remove {
+        operation_id: String,
+        model_id: String,
+    },
+}
+
+impl ModelOperationRequest {
+    pub fn operation_id(&self) -> &str {
+        match self {
+            Self::Download { operation_id, .. }
+            | Self::Import { operation_id, .. }
+            | Self::Remove { operation_id, .. } => operation_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModelOperationController {
+    active: Arc<Mutex<BTreeMap<String, CancellationToken>>>,
+}
+
+impl ModelOperationController {
+    pub fn execute(
+        &self,
+        storage: &StorageService,
+        request: &ModelOperationRequest,
+    ) -> Result<ModelOperation, ModelLibraryError> {
+        let operation_id = request.operation_id().to_owned();
+        let cancellation = CancellationToken::new();
+        {
+            let mut active = self.active.lock().map_err(|_| {
+                ModelLibraryError::InvalidRequest(
+                    "model operation cancellation is unavailable".to_owned(),
+                )
+            })?;
+            if active.contains_key(&operation_id) {
+                return Err(ModelLibraryError::InvalidRequest(
+                    "model operation is already running".to_owned(),
+                ));
+            }
+            if active.len() >= MAX_MODEL_OPERATION_COUNT {
+                return Err(ModelLibraryError::InvalidRequest(
+                    "active model operation count exceeds the local item limit".to_owned(),
+                ));
+            }
+            active.insert(operation_id.clone(), cancellation.clone());
+        }
+
+        let result = run_model_operation(storage, request, &cancellation);
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&operation_id);
+        }
+        result
+    }
+
+    pub fn cancel(&self, operation_id: &str) -> Result<(), ModelLibraryError> {
+        let cancellation = self
+            .active
+            .lock()
+            .map_err(|_| {
+                ModelLibraryError::InvalidRequest(
+                    "model operation cancellation is unavailable".to_owned(),
+                )
+            })?
+            .get(operation_id)
+            .cloned()
+            .ok_or_else(|| {
+                ModelLibraryError::InvalidRequest("model operation is not active".to_owned())
+            })?;
+        cancellation.cancel();
+        Ok(())
+    }
+}
+
 pub fn default_source_configs() -> Vec<ModelSourceConfig> {
     vec![
         ModelSourceConfig {
@@ -81,6 +174,7 @@ pub fn default_source_configs() -> Vec<ModelSourceConfig> {
 }
 
 pub fn validate_loopback_endpoint(endpoint: &str) -> Result<String, ModelLibraryError> {
+    validate_bounded_text(endpoint, MAX_MODEL_PATH_BYTES, "model endpoint")?;
     OllamaEndpoint::parse(endpoint)
         .map(|parsed| parsed.as_str().to_owned())
         .map_err(|error| ModelLibraryError::InvalidRequest(error.to_string()))
@@ -149,6 +243,474 @@ pub fn import_managed_gguf_model(
     let record = parse_managed_gguf_record(storage, &source_id, &request.source_path)?;
     storage.save_model_record(&record, &now_marker())?;
     Ok(record)
+}
+
+pub fn run_model_operation(
+    storage: &StorageService,
+    request: &ModelOperationRequest,
+    cancellation: &CancellationToken,
+) -> Result<ModelOperation, ModelLibraryError> {
+    let PreparedOperation {
+        mut operation,
+        action,
+    } = prepare_operation(storage, request)?;
+    reserve_operation(storage, &operation.operation_id)?;
+    persist_operation(storage, &operation)?;
+
+    if cancellation.is_cancelled() {
+        return finish_cancelled(storage, operation);
+    }
+
+    operation.status = ModelOperationStatus::Running;
+    operation.updated_at = now_marker();
+    persist_operation(storage, &operation)?;
+
+    match execute_prepared_operation(storage, &mut operation, action, cancellation) {
+        Ok(completed) => finish_completed(storage, operation, completed),
+        Err(ModelLibraryError::Runtime(RuntimeError::Cancelled)) => {
+            finish_cancelled(storage, operation)
+        }
+        Err(error) => finish_failed(storage, operation, &error),
+    }
+}
+
+#[derive(Debug)]
+struct PreparedOperation {
+    operation: ModelOperation,
+    action: OperationAction,
+}
+
+#[derive(Debug)]
+enum OperationAction {
+    Download {
+        endpoint: String,
+        model_name: String,
+    },
+    Import {
+        source_path: String,
+    },
+    Remove {
+        record: ModelRecord,
+    },
+}
+
+#[derive(Debug)]
+enum CompletedOperation {
+    Download,
+    Import { model_id: String, size: u64 },
+    Remove { size: u64, content_hash: String },
+}
+
+fn prepare_operation(
+    storage: &StorageService,
+    request: &ModelOperationRequest,
+) -> Result<PreparedOperation, ModelLibraryError> {
+    let request_bytes = serde_json::to_vec(request).map_err(|_| {
+        ModelLibraryError::InvalidRequest("model operation request cannot be encoded".to_owned())
+    })?;
+    if request_bytes.len() > MAX_MODEL_OPERATION_REQUEST_BYTES {
+        return Err(ModelLibraryError::InvalidRequest(
+            "model operation request exceeds the local size limit".to_owned(),
+        ));
+    }
+
+    let now = now_marker();
+    match request {
+        ModelOperationRequest::Download {
+            operation_id,
+            endpoint,
+            model_name,
+        } => {
+            validate_bounded_text(endpoint, MAX_MODEL_PATH_BYTES, "model endpoint")?;
+            let endpoint = validate_loopback_endpoint(endpoint)?;
+            validate_bounded_text(model_name, MAX_MODEL_NAME_BYTES, "model name")?;
+            let source_id = stable_model_source_id(&ModelSourceConfig {
+                backend: ModelBackend::Ollama,
+                label: None,
+                endpoint: Some(endpoint.clone()),
+                path: None,
+            })?;
+            Ok(PreparedOperation {
+                operation: queued_operation(
+                    operation_id,
+                    ModelOperationKind::Download,
+                    ModelBackend::Ollama,
+                    Some(source_id),
+                    Some(model_name.clone()),
+                    None,
+                    None,
+                    now,
+                ),
+                action: OperationAction::Download {
+                    endpoint,
+                    model_name: model_name.clone(),
+                },
+            })
+        }
+        ModelOperationRequest::Import {
+            operation_id,
+            source_path,
+        } => {
+            validate_gguf_path(source_path)?;
+            let source_id = stable_model_source_id(&ModelSourceConfig {
+                backend: ModelBackend::LlamaCpp,
+                label: Some("Managed GGUF".to_owned()),
+                endpoint: None,
+                path: Some(source_path.clone()),
+            })?;
+            Ok(PreparedOperation {
+                operation: queued_operation(
+                    operation_id,
+                    ModelOperationKind::Import,
+                    ModelBackend::LlamaCpp,
+                    Some(source_id),
+                    None,
+                    None,
+                    Some(source_path.clone()),
+                    now,
+                ),
+                action: OperationAction::Import {
+                    source_path: source_path.clone(),
+                },
+            })
+        }
+        ModelOperationRequest::Remove {
+            operation_id,
+            model_id,
+        } => {
+            let record = storage.get_model_record(model_id)?.ok_or_else(|| {
+                ModelLibraryError::InvalidRequest("model record was not found".to_owned())
+            })?;
+            if record.model_id != *model_id {
+                return Err(ModelLibraryError::InvalidRequest(
+                    "model record identity does not match the request".to_owned(),
+                ));
+            }
+            Ok(PreparedOperation {
+                operation: queued_operation(
+                    operation_id,
+                    ModelOperationKind::Remove,
+                    record.backend.clone(),
+                    Some(record.source_id.clone()),
+                    Some(record.name.clone()),
+                    Some(record.model_id.clone()),
+                    record.managed_path.clone(),
+                    now,
+                ),
+                action: OperationAction::Remove { record },
+            })
+        }
+    }
+}
+
+fn queued_operation(
+    operation_id: &str,
+    kind: ModelOperationKind,
+    backend: ModelBackend,
+    source_id: Option<String>,
+    model_name: Option<String>,
+    model_id: Option<String>,
+    managed_path: Option<String>,
+    created_at: String,
+) -> ModelOperation {
+    ModelOperation {
+        operation_id: operation_id.to_owned(),
+        kind,
+        backend,
+        source_id,
+        model_name,
+        model_id,
+        managed_path,
+        status: ModelOperationStatus::Queued,
+        bytes_total: None,
+        bytes_completed: 0,
+        progress_percent: Some(0),
+        content_hash: None,
+        message: None,
+        updated_at: created_at.clone(),
+        created_at,
+    }
+}
+
+fn reserve_operation(
+    storage: &StorageService,
+    operation_id: &str,
+) -> Result<(), ModelLibraryError> {
+    if storage.get_model_operation(operation_id)?.is_some() {
+        return Err(ModelLibraryError::InvalidRequest(
+            "model operation id already exists".to_owned(),
+        ));
+    }
+    if storage.list_model_operations()?.len() >= MAX_MODEL_OPERATION_COUNT {
+        return Err(ModelLibraryError::InvalidRequest(
+            "model operation count exceeds the local item limit".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn execute_prepared_operation(
+    storage: &StorageService,
+    operation: &mut ModelOperation,
+    action: OperationAction,
+    cancellation: &CancellationToken,
+) -> Result<CompletedOperation, ModelLibraryError> {
+    match action {
+        OperationAction::Download {
+            endpoint,
+            model_name,
+        } => execute_download(storage, operation, &endpoint, &model_name, cancellation),
+        OperationAction::Import { source_path } => {
+            execute_import(storage, operation, &source_path, cancellation)
+        }
+        OperationAction::Remove { record } => {
+            execute_remove(storage, operation, &record, cancellation)
+        }
+    }
+}
+
+fn execute_download(
+    storage: &StorageService,
+    operation: &mut ModelOperation,
+    endpoint: &str,
+    model_name: &str,
+    cancellation: &CancellationToken,
+) -> Result<CompletedOperation, ModelLibraryError> {
+    let provider = download_provider(endpoint)?;
+    let mut progress_events = 0_usize;
+    provider.pull_model(model_name, cancellation, |event| {
+        if progress_events >= MAX_MODEL_OPERATION_EVENTS {
+            return Err(RuntimeError::Protocol {
+                message: "model operation progress exceeded the local item limit".to_owned(),
+            });
+        }
+        progress_events += 1;
+        apply_download_event(operation, event)?;
+        operation.updated_at = now_marker();
+        persist_operation(storage, operation).map_err(operation_runtime_error)?;
+        Ok(())
+    })?;
+    if cancellation.is_cancelled() {
+        return Err(RuntimeError::Cancelled.into());
+    }
+    Ok(CompletedOperation::Download)
+}
+
+fn download_provider(endpoint: &str) -> Result<OllamaProvider, ModelLibraryError> {
+    let normalized = validate_loopback_endpoint(endpoint)?;
+    let defaults = OllamaConfig::default();
+    OllamaProvider::new(OllamaConfig {
+        endpoint: normalized,
+        connect_timeout_ms: 250,
+        read_timeout_ms: 500,
+        read_deadline_ms: defaults.read_deadline_ms,
+    })
+    .map_err(Into::into)
+}
+
+fn apply_download_event(operation: &mut ModelOperation, event: &Value) -> Result<(), RuntimeError> {
+    let object = event.as_object().ok_or_else(|| RuntimeError::Protocol {
+        message: "runtime returned a non-object pull event".to_owned(),
+    })?;
+    if let Some(error) = object.get("error") {
+        let message = error.as_str().unwrap_or("runtime pull failed");
+        return Err(RuntimeError::Protocol {
+            message: bound_operation_text(message),
+        });
+    }
+
+    let total = object.get("total").and_then(Value::as_u64);
+    let completed = object.get("completed").and_then(Value::as_u64);
+    if total.is_some_and(|value| value > MAX_MANAGED_MODEL_BYTES)
+        || completed.is_some_and(|value| value > MAX_MANAGED_MODEL_BYTES)
+    {
+        return Err(RuntimeError::Protocol {
+            message: "runtime pull size exceeded the local limit".to_owned(),
+        });
+    }
+    let effective_total = total.or(operation.bytes_total);
+    if effective_total
+        .zip(completed)
+        .is_some_and(|(total, completed)| completed > total)
+    {
+        return Err(RuntimeError::Protocol {
+            message: "runtime pull progress is invalid".to_owned(),
+        });
+    }
+    if let Some(total) = total {
+        operation.bytes_total = Some(total);
+    }
+    if let Some(completed) = completed {
+        operation.bytes_completed = completed;
+    }
+    if let Some(total) = effective_total.filter(|total| *total > 0) {
+        operation.progress_percent = Some(
+            operation
+                .bytes_completed
+                .saturating_mul(100)
+                .checked_div(total)
+                .unwrap_or(0)
+                .min(100) as u8,
+        );
+    }
+    if let Some(status) = object.get("status").and_then(Value::as_str) {
+        operation.message = Some(bound_operation_text(status));
+    }
+    Ok(())
+}
+
+fn execute_import(
+    storage: &StorageService,
+    operation: &mut ModelOperation,
+    source_path: &str,
+    cancellation: &CancellationToken,
+) -> Result<CompletedOperation, ModelLibraryError> {
+    let (size, _) = storage.read_managed_model_prefix(source_path, 0)?;
+    operation.bytes_total = Some(size);
+    operation.updated_at = now_marker();
+    persist_operation(storage, operation)?;
+    if cancellation.is_cancelled() {
+        return Err(RuntimeError::Cancelled.into());
+    }
+
+    let source_id = operation.source_id.as_deref().ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("managed import source identity is missing".to_owned())
+    })?;
+    let record = parse_managed_gguf_record(storage, source_id, source_path)?;
+    if cancellation.is_cancelled() {
+        return Err(RuntimeError::Cancelled.into());
+    }
+    storage.save_model_record(&record, &now_marker())?;
+    Ok(CompletedOperation::Import {
+        model_id: record.model_id,
+        size: record.size_bytes.unwrap_or(size),
+    })
+}
+
+fn execute_remove(
+    storage: &StorageService,
+    operation: &mut ModelOperation,
+    record: &ModelRecord,
+    cancellation: &CancellationToken,
+) -> Result<CompletedOperation, ModelLibraryError> {
+    if !record.managed || !matches!(record.backend, ModelBackend::LlamaCpp) {
+        return Err(ModelLibraryError::InvalidRequest(
+            "only managed llama.cpp models can be removed".to_owned(),
+        ));
+    }
+    let managed_path = record.managed_path.as_deref().ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("managed model path is missing".to_owned())
+    })?;
+    validate_gguf_path(managed_path)?;
+    let (size, _) = storage.read_managed_model_prefix(managed_path, 0)?;
+    operation.bytes_total = Some(size);
+    operation.updated_at = now_marker();
+    persist_operation(storage, operation)?;
+    if cancellation.is_cancelled() {
+        return Err(RuntimeError::Cancelled.into());
+    }
+
+    let (size, content_hash) =
+        storage.remove_managed_model(managed_path, record.content_hash.as_deref())?;
+    let removal = ModelRemovalEvidence {
+        removal_id: format!(
+            "removal-{}",
+            &crate::domain::sha256_hex(operation.operation_id.as_bytes())[..32]
+        ),
+        model_id: record.model_id.clone(),
+        backend: record.backend.clone(),
+        managed_path: managed_path.to_owned(),
+        content_hash: content_hash.clone(),
+        removed_at: now_marker(),
+        outcome: "removed".to_owned(),
+    };
+    storage.save_model_removal(&removal)?;
+    Ok(CompletedOperation::Remove { size, content_hash })
+}
+
+fn persist_operation(
+    storage: &StorageService,
+    operation: &ModelOperation,
+) -> Result<(), ModelLibraryError> {
+    storage.save_model_operation(operation)?;
+    Ok(())
+}
+
+fn operation_runtime_error(error: ModelLibraryError) -> RuntimeError {
+    RuntimeError::Protocol {
+        message: bound_operation_text(&error.to_string()),
+    }
+}
+
+fn finish_completed(
+    storage: &StorageService,
+    mut operation: ModelOperation,
+    completed: CompletedOperation,
+) -> Result<ModelOperation, ModelLibraryError> {
+    match completed {
+        CompletedOperation::Download => {
+            if let Some(total) = operation.bytes_total {
+                operation.bytes_completed = total;
+            }
+            operation.progress_percent = Some(100);
+        }
+        CompletedOperation::Import { model_id, size } => {
+            operation.model_id = Some(model_id);
+            operation.bytes_total = Some(size);
+            operation.bytes_completed = size;
+            operation.progress_percent = Some(100);
+        }
+        CompletedOperation::Remove { size, content_hash } => {
+            operation.bytes_total = Some(size);
+            operation.bytes_completed = size;
+            operation.progress_percent = Some(100);
+            operation.content_hash = Some(content_hash);
+        }
+    }
+    operation.status = ModelOperationStatus::Completed;
+    operation.message = Some("completed".to_owned());
+    operation.updated_at = now_marker();
+    persist_operation(storage, &operation)?;
+    Ok(operation)
+}
+
+fn finish_cancelled(
+    storage: &StorageService,
+    mut operation: ModelOperation,
+) -> Result<ModelOperation, ModelLibraryError> {
+    operation.status = ModelOperationStatus::Cancelled;
+    operation.message = Some("cancelled".to_owned());
+    operation.updated_at = now_marker();
+    persist_operation(storage, &operation)?;
+    Ok(operation)
+}
+
+fn finish_failed(
+    storage: &StorageService,
+    mut operation: ModelOperation,
+    error: &ModelLibraryError,
+) -> Result<ModelOperation, ModelLibraryError> {
+    operation.status = ModelOperationStatus::Failed;
+    operation.message = Some(bound_operation_text(&error.to_string()));
+    operation.updated_at = now_marker();
+    persist_operation(storage, &operation)?;
+    Ok(operation)
+}
+
+fn bound_operation_text(value: &str) -> String {
+    let mut bounded = String::new();
+    for character in value.chars().filter(|character| !character.is_control()) {
+        if bounded.len() + character.len_utf8() > MAX_MODEL_PATH_BYTES {
+            break;
+        }
+        bounded.push(character);
+    }
+    let bounded = bounded.trim().to_owned();
+    if bounded.is_empty() {
+        "operation update".to_owned()
+    } else {
+        bounded
+    }
 }
 
 pub fn group_duplicate_models(models: &[ModelRecord]) -> Vec<ModelDuplicateGroup> {
@@ -951,7 +1513,15 @@ fn default_label(backend: &ModelBackend) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf, sync::atomic::AtomicU64};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        thread,
+    };
 
     use serde_json::json;
 
@@ -963,8 +1533,73 @@ mod tests {
         std::env::temp_dir().join(format!(
             "prompt-arena-model-library-test-{}-{}",
             std::process::id(),
-            TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    struct PullServer {
+        endpoint: String,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl PullServer {
+        fn start(body: String) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = thread::spawn(move || {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                read_request_headers(&mut stream);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            });
+            Self {
+                endpoint: format!("http://127.0.0.1:{port}"),
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for PullServer {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn read_request_headers(stream: &mut TcpStream) {
+        let mut bytes = Vec::new();
+        let mut one = [0_u8; 1];
+        while bytes.len() < 16 * 1024 {
+            if stream.read_exact(&mut one).is_err() {
+                break;
+            }
+            bytes.push(one[0]);
+            if bytes.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+    }
+
+    fn minimal_gguf(model_name: &str) -> Vec<u8> {
+        let mut bytes = Vec::from(*b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&("general.name".len() as u64).to_le_bytes());
+        bytes.extend_from_slice(b"general.name");
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&(model_name.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(model_name.as_bytes());
+        bytes
     }
 
     fn source(backend: ModelBackend, endpoint: &str) -> ModelSourceConfig {
@@ -1109,5 +1744,153 @@ mod tests {
             group_duplicate_models(&[same, duplicate, different_quantization, different_digest]);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].model_ids, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn download_operation_persists_progress_and_event_history() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let body = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&json!({
+                "status": "downloading",
+                "total": 100,
+                "completed": 25
+            }))
+            .unwrap(),
+            serde_json::to_string(&json!({
+                "status": "success",
+                "total": 100,
+                "completed": 100
+            }))
+            .unwrap()
+        );
+        let server = PullServer::start(body);
+        let operation = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Download {
+                operation_id: "download-1".to_owned(),
+                endpoint: server.endpoint.clone(),
+                model_name: "tiny-model".to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("download operation completes");
+
+        assert_eq!(operation.kind, ModelOperationKind::Download);
+        assert_eq!(operation.status, ModelOperationStatus::Completed);
+        assert_eq!(operation.bytes_total, Some(100));
+        assert_eq!(operation.bytes_completed, 100);
+        assert_eq!(operation.progress_percent, Some(100));
+        assert_eq!(
+            storage.get_model_operation("download-1").unwrap(),
+            Some(operation.clone())
+        );
+        let events = storage
+            .list_model_operation_events("download-1")
+            .expect("download event history");
+        assert!(events.len() >= 5);
+        assert!(events
+            .iter()
+            .any(|event| event.bytes_completed == 25 && event.progress_percent == Some(25)));
+        assert_eq!(events.first().unwrap().status, ModelOperationStatus::Queued);
+        assert_eq!(events.last().unwrap(), &operation);
+
+        drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn import_and_remove_operations_persist_progress_and_audit_hash() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/tiny-model.gguf";
+        let bytes = minimal_gguf("tiny-model");
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &bytes).unwrap();
+
+        let imported = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "import-1".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("import operation completes");
+        assert_eq!(imported.kind, ModelOperationKind::Import);
+        assert_eq!(imported.status, ModelOperationStatus::Completed);
+        assert_eq!(imported.bytes_total, Some(bytes.len() as u64));
+        assert_eq!(imported.bytes_completed, bytes.len() as u64);
+        assert_eq!(imported.progress_percent, Some(100));
+        let model_id = imported.model_id.clone().expect("imported model identity");
+        let record = storage
+            .get_model_record(&model_id)
+            .unwrap()
+            .expect("imported model record");
+        assert!(record.managed);
+        assert_eq!(record.managed_path.as_deref(), Some(relative_path));
+
+        let removed = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Remove {
+                operation_id: "remove-1".to_owned(),
+                model_id: model_id.clone(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("remove operation completes");
+        let expected_hash = crate::domain::sha256_hex(&bytes);
+        assert_eq!(removed.kind, ModelOperationKind::Remove);
+        assert_eq!(removed.status, ModelOperationStatus::Completed);
+        assert_eq!(
+            removed.content_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert!(!path.exists());
+        let removals = storage.list_model_removals().unwrap();
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0].model_id, model_id);
+        assert_eq!(removals[0].managed_path, relative_path);
+        assert_eq!(removals[0].content_hash, expected_hash);
+        assert_eq!(removals[0].outcome, "removed");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pre_cancelled_operation_is_persisted_without_model_side_effects() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let operation = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "cancelled-1".to_owned(),
+                source_path: "cancelled.gguf".to_owned(),
+            },
+            &cancellation,
+        )
+        .expect("cancellation is a terminal operation state");
+
+        assert_eq!(operation.status, ModelOperationStatus::Cancelled);
+        assert_eq!(operation.bytes_completed, 0);
+        assert_eq!(storage.list_model_records().unwrap(), Vec::new());
+        let events = storage.list_model_operation_events("cancelled-1").unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.status.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                ModelOperationStatus::Queued,
+                ModelOperationStatus::Cancelled
+            ]
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -10,6 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::domain::{
     canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
@@ -934,12 +935,53 @@ impl StorageService {
         let read_limit = max_bytes
             .min(MAX_MODEL_METADATA_BYTES)
             .min(size.min(usize::MAX as u64) as usize);
-        let mut file = fs::File::open(&target).map_err(StorageError::from_io)?;
+        let file = fs::File::open(&target).map_err(StorageError::from_io)?;
         let mut bytes = Vec::with_capacity(read_limit);
         file.take(read_limit as u64)
             .read_to_end(&mut bytes)
             .map_err(StorageError::from_io)?;
         Ok((size, bytes))
+    }
+
+    pub fn remove_managed_model(
+        &self,
+        relative_path: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<(u64, String), StorageError> {
+        validate_managed_model_path(relative_path)?;
+        if let Some(expected_content_hash) = expected_content_hash {
+            validate_sha256(expected_content_hash)?;
+        }
+
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let (size, content_hash) = hash_managed_model_file(&target)?;
+        if expected_content_hash
+            .is_some_and(|expected| !expected.eq_ignore_ascii_case(&content_hash))
+        {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != size {
+            return Err(StorageError::InvalidRecordId);
+        }
+        fs::remove_file(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        Ok((size, content_hash))
     }
 
     pub fn save_model_operation(
@@ -1040,6 +1082,28 @@ impl StorageService {
             .map_err(|_| StorageError::DatabaseFailure)?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        rows.map(|row| {
+            let document = row.map_err(|_| StorageError::DatabaseFailure)?;
+            serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure)
+        })
+        .collect()
+    }
+
+    pub fn list_model_operation_events(
+        &self,
+        operation_id: &str,
+    ) -> Result<Vec<ModelOperation>, StorageError> {
+        validate_record_id(operation_id)?;
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT document_json FROM model_operation_events
+                 WHERE operation_id = ?1 ORDER BY rowid",
+            )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let rows = statement
+            .query_map(params![operation_id], |row| row.get::<_, String>(0))
             .map_err(|_| StorageError::DatabaseFailure)?;
         rows.map(|row| {
             let document = row.map_err(|_| StorageError::DatabaseFailure)?;
@@ -1887,6 +1951,41 @@ fn safe_existing_managed_model_path(
     Ok(current)
 }
 
+fn hash_managed_model_file(target: &Path) -> Result<(u64, String), StorageError> {
+    let metadata = fs::symlink_metadata(target).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            StorageError::ArtifactNotFound
+        } else {
+            StorageError::from_io(error)
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(StorageError::InvalidRecordId);
+    }
+    if metadata.len() > MAX_MANAGED_MODEL_BYTES {
+        return Err(StorageError::MetadataTooLarge);
+    }
+
+    let mut file = fs::File::open(target).map_err(StorageError::from_io)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut size = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).map_err(StorageError::from_io)?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .filter(|size| *size <= MAX_MANAGED_MODEL_BYTES)
+            .ok_or(StorageError::MetadataTooLarge)?;
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    let content_hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok((size, content_hash))
+}
+
 fn validate_model_metadata(
     metadata: &std::collections::BTreeMap<String, Value>,
 ) -> Result<(), StorageError> {
@@ -2188,7 +2287,8 @@ mod tests {
     use serde_json::json;
 
     use crate::domain::{
-        validate_benchmark_document, Attempt, ImmutableResultReference, ProfileRevision, Run,
+        sha256_hex, validate_benchmark_document, Attempt, ImmutableResultReference,
+        ProfileRevision, Run,
     };
 
     use super::{
@@ -2898,6 +2998,59 @@ mod tests {
             service.save_profile_revision(&oversized_request, "300"),
             Err(StorageError::ProfileRequestTooLarge)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_model_removal_is_hash_checked_and_root_bounded() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let relative_path = "nested/model.gguf";
+        let target = service.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let payload = b"managed model bytes";
+        fs::write(&target, payload).unwrap();
+
+        let outside = root.join("outside.gguf");
+        fs::write(&outside, payload).unwrap();
+        for path in [
+            "../outside.gguf",
+            "nested/../outside.gguf",
+            "C:/outside.gguf",
+        ] {
+            assert_eq!(
+                service.remove_managed_model(path, None),
+                Err(StorageError::InvalidRecordId)
+            );
+            assert_eq!(
+                service.read_managed_model_prefix(path, 0),
+                Err(StorageError::InvalidRecordId)
+            );
+        }
+        assert!(outside.exists());
+
+        let wrong_hash = "0".repeat(64);
+        assert_eq!(
+            service.remove_managed_model(relative_path, Some(&wrong_hash)),
+            Err(StorageError::ArtifactHashMismatch)
+        );
+        assert!(target.exists());
+
+        let expected_hash = sha256_hex(payload);
+        assert_eq!(
+            service.remove_managed_model(relative_path, Some(&expected_hash)),
+            Ok((payload.len() as u64, expected_hash.clone()))
+        );
+        assert!(!target.exists());
+
+        let directory = service.layout().managed_model_root().join("directory.gguf");
+        fs::create_dir_all(&directory).unwrap();
+        assert_eq!(
+            service.remove_managed_model("directory.gguf", None),
+            Err(StorageError::InvalidRecordId)
+        );
+        assert!(directory.is_dir());
+
         let _ = fs::remove_dir_all(root);
     }
 }
