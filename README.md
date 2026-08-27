@@ -9,6 +9,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#requirements)
 [![Desktop](https://img.shields.io/badge/desktop-Tauri%202-FFC131)](#technology)
 [![Runtime](https://img.shields.io/badge/local%20runtime-Ollama-111111)](#local-first-boundary)
+[![Installers](https://img.shields.io/badge/installers-NSIS%20%7C%20DEB%20%7C%20AppImage-6f42c1)](#installers)
 
 Prompt Arena lets you define benchmarks, run local models, preserve immutable execution evidence, and review results without requiring an account, telemetry, or a hosted Prompt Arena service.
 
@@ -71,6 +72,69 @@ The workspace is designed around:
 - transparent local hardware heuristics;
 - explicit separation between real desktop state and browser-only preview state.
 
+## How a benchmark round works
+
+A round starts from versioned inputs, not from an ad-hoc chat. The benchmark, model profile, selected task, and selected case are resolved into a deterministic run plan before the model is called.
+
+```text
+      Published benchmark                 Immutable model profile
+   version · task · case                 model · parameters · revision
+              │                                      │
+              └──────────────────┬───────────────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │ Deterministic RunPlan │
+                     │ prompt · model · case │
+                     │ runtime configuration │
+                     └───────────┬───────────┘
+                                 │
+                                 ▼
+                     ┌───────────────────────┐
+                     │ Prompt Arena desktop  │
+                     │ validates boundaries  │
+                     │ creates run evidence  │
+                     └───────────┬───────────┘
+                                 │ one bounded request
+                                 ▼
+                     ┌───────────────────────┐
+                     │ One-shot worker       │
+                     │ starts · runs · exits │
+                     └───────────┬───────────┘
+                                 │ loopback HTTP
+                                 ▼
+                     ┌───────────────────────┐
+                     │ Ollama local model    │
+                     │ generates response    │
+                     └───────────┬───────────┘
+                                 │
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │ Immutable execution evidence │
+                  │ attempt · result · artifact  │
+                  │ hashes · effective config    │
+                  └──────────────┬───────────────┘
+                                 │
+                   ┌─────────────┴─────────────┐
+                   │                           │
+                   ▼                           ▼
+        ┌─────────────────────┐     ┌─────────────────────┐
+        │ Objective verifier  │     │ Blind human review  │
+        │ when deterministic  │     │ when human judgment │
+        │ expected text exists│     │ is appropriate      │
+        └──────────┬──────────┘     └──────────┬──────────┘
+                   │                           │
+                   └─────────────┬─────────────┘
+                                 ▼
+                     ┌───────────────────────┐
+                     │ Runs / evidence view  │
+                     │ inspect · compare     │
+                     │ reproduce · audit     │
+                     └───────────────────────┘
+```
+
+The current bounded Arena executes one selected benchmark case with one immutable model profile per run. A fair model comparison repeats the same benchmark version, task, and case under different immutable profiles so the inputs and effective configuration remain auditable instead of changing silently between models.
+
 ## Project status
 
 The current `0.1.0` development baseline includes:
@@ -111,11 +175,35 @@ The current `0.1.0` development baseline includes:
 ## Requirements
 
 - Windows or Linux;
-- Node.js with npm;
-- Rust stable and Cargo;
+- Node.js with npm for source builds and development;
+- Rust stable and Cargo for source builds and development;
 - Ollama for the current local-model execution workflow.
 
 No Prompt Arena account, cloud service, API key, or telemetry service is required for the local workflow.
+
+## Installers
+
+Prompt Arena is configured to produce native desktop bundles for both supported operating systems:
+
+| Platform | Package | Intended use |
+|---|---|---|
+| Windows | NSIS `.exe` installer | Standard Windows installation |
+| Linux | `.deb` | Debian/Ubuntu-family package installation |
+| Linux | `.AppImage` | Portable desktop execution |
+
+> [!WARNING]
+> There is no official prebuilt GitHub Release published yet. Until the first reviewed release exists, installers must be built from source and should be treated as development artifacts rather than signed production binaries.
+
+To build the configured desktop bundles:
+
+```bash
+npm install
+npm run tauri:build
+```
+
+Tauri writes generated packages under the release bundle directory inside `src-tauri/target/`. The build also prepares the packaged Prompt Arena worker sidecar automatically.
+
+When official binaries are published, they will live on the repository's [Releases](https://github.com/bielxdh3/Prompt-Arena/releases) page.
 
 ## Quick start
 
@@ -217,7 +305,8 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md) 
 - secure API credential storage and real provider cost capture are not implemented;
 - GPU and VRAM hardware detection remain explicitly unavailable where no safe feature detection exists;
 - the programming benchmark pack is text-only because Docker-backed coding sandbox execution is not implemented;
-- release signing, publication, and clean-install production validation remain human-gated future work;
+- official prebuilt installers and release signing have not been published yet;
+- clean-install production validation remains human-gated future work;
 - macOS is not supported and is not on the official roadmap.
 
 ## Roadmap
