@@ -165,6 +165,7 @@ impl From<OrchestrationError> for CommandError {
     fn from(error: OrchestrationError) -> Self {
         let code = match &error {
             OrchestrationError::InvalidPlan(_) => "run_plan_invalid",
+            OrchestrationError::ExecutionBlocked(_) => "execution_blocked",
             OrchestrationError::InvalidResponseSummary(_) => "response_summary_invalid",
             OrchestrationError::UnsupportedRuntime(_) => "runtime_unsupported",
             OrchestrationError::Runtime(_) => "runtime_failed",

@@ -28,6 +28,8 @@ export type ArenaExecutionRequest = {
   caseId: string;
   profiles: ProfileRevision[];
   repetitions: number;
+  packId?: string;
+  materializationSeed?: number;
 };
 
 export type ExecutePlan = (plan: RunPlan) => Promise<PersistedExecution>;
@@ -53,6 +55,15 @@ export type ArenaMetricSummary = {
   standardDeviationDurationMs: number | null;
   successRate: number;
   averageTokensPerSecond: number | null;
+  mean: number | null;
+  median: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  stddev: number | null;
+  uncertainty: number;
+  tieMargin: number;
+  objectiveUncertainty: number;
+  objectiveTieMargin: number;
 };
 
 export type ArenaCompetitorSummary = {
@@ -67,6 +78,11 @@ export type ArenaCompetitorSummary = {
   successRate: number;
   averageDurationMs: number | null;
   averageTokensPerSecond: number | null;
+  statistics: ArenaMetricSummary;
+  uncertainty: number;
+  tieMargin: number;
+  objectiveUncertainty: number;
+  objectiveTieMargin: number;
 };
 
 export type ArenaRankingEntry = {
@@ -76,6 +92,8 @@ export type ArenaRankingEntry = {
   metric: "human_average_score" | "objective_pass_rate";
   value: number;
   sampleSize: number;
+  uncertainty: number;
+  tieMargin: number;
 };
 
 export async function executeArena(
@@ -114,6 +132,13 @@ export async function executeArena(
           taskId: request.taskId,
           caseId: request.caseId,
           profileRevision: profile,
+          metadata: {
+            arenaId: request.arenaId,
+            repetition,
+            sampleIndex: profileIndex * request.repetitions + repetition - 1,
+            ...(request.packId ? { packId: request.packId } : {}),
+            ...(request.materializationSeed === undefined ? {} : { materializationSeed: request.materializationSeed }),
+          },
         });
         results.push({
           competitorId,
@@ -167,6 +192,9 @@ export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMet
     .filter((value): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value));
   const objectivePassed = objective.filter((value) => value.passed === true).length;
   const durationStats = statistics(durations);
+  const successRate = executions.length === 0 ? 0 : completed.length / executions.length;
+  const uncertainty = confidenceHalfWidth(durations);
+  const objectiveUncertainty = confidenceHalfWidth(objective.map((value) => value.passed === true ? 1 : 0));
   return {
     total: executions.length,
     completed: completed.length,
@@ -179,8 +207,17 @@ export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMet
     minimumDurationMs: durationStats.minimum,
     maximumDurationMs: durationStats.maximum,
     standardDeviationDurationMs: durationStats.standardDeviation,
-    successRate: executions.length === 0 ? 0 : completed.length / executions.length,
+    successRate,
     averageTokensPerSecond: average(tokenRates),
+    mean: durationStats.average,
+    median: durationStats.median,
+    minimum: durationStats.minimum,
+    maximum: durationStats.maximum,
+    stddev: durationStats.standardDeviation,
+    uncertainty,
+    tieMargin: uncertainty * 2,
+    objectiveUncertainty,
+    objectiveTieMargin: objectiveUncertainty * 2,
   };
 }
 
@@ -199,6 +236,11 @@ export function summarizeArenaCompetitors(executions: ArenaExecution[]): ArenaCo
       successRate: summary.successRate,
       averageDurationMs: summary.averageDurationMs,
       averageTokensPerSecond: summary.averageTokensPerSecond,
+      statistics: summary,
+      uncertainty: summary.objectiveUncertainty,
+      tieMargin: summary.objectiveTieMargin,
+      objectiveUncertainty: summary.objectiveUncertainty,
+      objectiveTieMargin: summary.objectiveTieMargin,
     };
   });
 }
@@ -220,6 +262,8 @@ export function rankArenaCompetitors(
           metric: "human_average_score" as const,
           value: average(scores) ?? 0,
           sampleSize: scores.length,
+          uncertainty: confidenceHalfWidth(scores),
+          tieMargin: confidenceHalfWidth(scores) * 2,
         };
       }
       return {
@@ -228,6 +272,8 @@ export function rankArenaCompetitors(
         metric: "objective_pass_rate" as const,
         value: summary.objectiveChecked === 0 ? 0 : summary.objectivePassed / summary.objectiveChecked,
         sampleSize: summary.objectiveChecked,
+        uncertainty: summary.objectiveUncertainty,
+        tieMargin: summary.objectiveTieMargin,
       };
     })
     .sort((left, right) => right.value - left.value || left.competitorId.localeCompare(right.competitorId))
@@ -262,6 +308,8 @@ export function arenaExportJson(
     taskId: request.taskId,
     caseId: request.caseId,
     repetitions: request.repetitions,
+    packId: request.packId ?? null,
+    materializationSeed: request.materializationSeed ?? null,
     competitors: request.profiles.map((profile) => ({
       profileRevisionId: profile.profileRevisionId,
       model: profile.model,
@@ -362,26 +410,47 @@ function average(values: number[]): number | null {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function statistics(values: number[]): {
+export function summarizeNumericSamples(values: readonly number[]): {
   average: number | null;
+  mean: number | null;
   median: number | null;
   minimum: number | null;
   maximum: number | null;
   standardDeviation: number | null;
+  stddev: number | null;
+  uncertainty: number;
+  tieMargin: number;
 } {
   if (values.length === 0) {
-    return { average: null, median: null, minimum: null, maximum: null, standardDeviation: null };
+    return { average: null, mean: null, median: null, minimum: null, maximum: null, standardDeviation: null, stddev: null, uncertainty: 0, tieMargin: 0 };
   }
   const ordered = [...values].sort((left, right) => left - right);
   const mean = average(ordered) as number;
   const variance = ordered.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / ordered.length;
+  const standardDeviation = Math.sqrt(variance);
+  const uncertainty = confidenceHalfWidth(ordered);
   return {
     average: mean,
+    mean,
     median: ordered.length % 2 === 1 ? ordered[(ordered.length - 1) / 2] : (ordered[ordered.length / 2 - 1] + ordered[ordered.length / 2]) / 2,
     minimum: ordered[0],
     maximum: ordered[ordered.length - 1],
-    standardDeviation: Math.sqrt(variance),
+    standardDeviation,
+    stddev: standardDeviation,
+    uncertainty,
+    tieMargin: uncertainty * 2,
   };
+}
+
+function statistics(values: number[]): ReturnType<typeof summarizeNumericSamples> {
+  return summarizeNumericSamples(values);
+}
+
+export function confidenceHalfWidth(values: readonly number[]): number {
+  if (values.length === 0) return 0;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+  return 1.96 * Math.sqrt(variance / values.length);
 }
 
 function formatNumber(value: number): string {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ObjectiveVerifierPolicy } from "./objective-verifiers";
 
 export type StorageState = "local";
 
@@ -60,11 +61,13 @@ export type ImmutableResultReference = {
 
 export type ObjectiveVerificationEvidence = {
   passed: boolean;
-  verifierKind: "exact_text";
+  verifierKind: "exact_text" | "numeric_tolerance" | "json_schema" | "required_fields" | "classification" | "safe_pattern";
   expectedNormalizedByteCount: number;
   actualNormalizedByteCount: number;
   expectedSha256: string;
   actualSha256: string;
+  reason?: string;
+  details?: Record<string, unknown>;
 };
 
 export type BlindEvaluationStatus = "empty" | "prepared" | "locked";
@@ -131,6 +134,7 @@ export type OfficialPackExecution = {
   status: "available" | "unavailable";
   requiresSandbox: boolean;
   sandboxStatus: "not_required" | "unavailable";
+  executionBoundary: "text_generation" | "docker_required";
   evaluationMode: "objective" | "human_rubric" | "mixed";
   requirement: string;
   notes: string | null;
@@ -151,6 +155,16 @@ export type OfficialPackSummary = {
 export type OfficialPackDocument = {
   summary: OfficialPackSummary;
   documentJson: string;
+};
+
+export type OfficialPackMaterialization = {
+  materializationId: string;
+  summary: OfficialPackSummary;
+  seed: number;
+  caseCount: number;
+  taskCount: number;
+  documentJson: string;
+  savedOutcome: "saved" | "already_present";
 };
 
 export type BenchmarkDraftSummary = {
@@ -230,6 +244,15 @@ export type RunPlan = {
   generation: GenerationRequest;
   runtimeConfig: OllamaConfig;
   objectiveExpectation: string | null;
+  verifierPolicy: ObjectiveVerifierPolicy | null;
+  executionBoundary: ExecutionBoundary;
+  metadata: Record<string, unknown>;
+};
+
+export type ExecutionBoundary = {
+  kind: "text_generation" | "docker_required";
+  status: "available" | "unavailable";
+  reason: string | null;
 };
 
 export type AttemptRecord = {
@@ -430,6 +453,14 @@ export async function readOfficialPack(packId: string): Promise<OfficialPackDocu
     "get_official_pack",
     "The selected official benchmark pack could not be reached.",
     { packId },
+  );
+}
+
+export async function materializeOfficialPack(packId: string, seed: number): Promise<OfficialPackMaterialization> {
+  return invokeDesktop<OfficialPackMaterialization>(
+    "materialize_official_pack",
+    "The selected official benchmark pack could not be materialized.",
+    { packId, seed },
   );
 }
 
