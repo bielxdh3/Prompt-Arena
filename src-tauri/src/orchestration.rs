@@ -6,8 +6,9 @@ use serde_json::{json, Value};
 use crate::{
     domain::{
         sha256_hex, stable_profile_revision_id, stable_version_id, ArtifactRef, Attempt,
+        ExecutionBoundary, ExecutionBoundaryKind, ExecutionBoundaryStatus,
         ImmutableResultReference, ObjectiveVerificationEvidence, ObjectiveVerifierKind,
-        ProfileRevision, Run,
+        ObjectiveVerifierPolicy, ProfileRevision, Run,
     },
     ollama::{OllamaConfig, OllamaProvider},
     runtime::{
@@ -38,6 +39,12 @@ pub struct RunPlan {
     pub runtime_config: OllamaConfig,
     #[serde(default)]
     pub objective_expectation: Option<String>,
+    #[serde(default)]
+    pub verifier_policy: Option<ObjectiveVerifierPolicy>,
+    #[serde(default)]
+    pub execution_boundary: ExecutionBoundary,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +103,7 @@ pub struct PersistedExecution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrchestrationError {
     InvalidPlan(String),
+    ExecutionBlocked(String),
     InvalidResponseSummary(String),
     UnsupportedRuntime(String),
     Runtime(RuntimeError),
@@ -106,6 +114,7 @@ impl fmt::Display for OrchestrationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidPlan(message) => write!(formatter, "run plan is invalid: {message}"),
+            Self::ExecutionBlocked(message) => write!(formatter, "execution is blocked: {message}"),
             Self::InvalidResponseSummary(message) => {
                 write!(formatter, "response summary is invalid: {message}")
             }
@@ -184,7 +193,22 @@ impl RunPlan {
                 "generation model must match the profile revision model".to_owned(),
             ));
         }
+        if matches!(
+            self.execution_boundary.status,
+            ExecutionBoundaryStatus::Unavailable
+        ) || matches!(
+            self.execution_boundary.kind,
+            ExecutionBoundaryKind::DockerRequired
+        ) {
+            return Err(OrchestrationError::ExecutionBlocked(
+                self.execution_boundary.reason.clone().unwrap_or_else(|| {
+                    "Docker execution is unavailable; host execution is prohibited".to_owned()
+                }),
+            ));
+        }
         validate_objective_expectation(self.objective_expectation.as_deref())?;
+        validate_objective_verifier_policy(self.verifier_policy.as_ref())?;
+        validate_plan_metadata(&self.metadata)?;
         self.generation
             .validate_shape()
             .map_err(OrchestrationError::Runtime)
@@ -261,8 +285,11 @@ pub fn execute_once_with_provider(
 
     match stream_result {
         Ok(response) => {
-            let score =
-                objective_verification(&response.text, plan.objective_expectation.as_deref());
+            let score = objective_verification_with_policy(
+                &response.text,
+                plan.verifier_policy.as_ref(),
+                plan.objective_expectation.as_deref(),
+            );
             progress.finish(ProgressKind::Completed);
             Ok(TerminalOutcome::Completed {
                 run: build_run(plan, &attempt_id, "completed", &started_at, provider),
@@ -442,20 +469,725 @@ fn validate_objective_expectation(expectation: Option<&str>) -> Result<(), Orche
     Ok(())
 }
 
+const MAX_VERIFIER_PATTERN_BYTES: usize = 4 * 1024;
+const MAX_VERIFIER_FIELDS: usize = 32;
+const MAX_VERIFIER_SCHEMA_DEPTH: usize = 16;
+const MAX_VERIFIER_SCHEMA_KEYS: usize = 128;
+
+fn validate_objective_verifier_policy(
+    policy: Option<&ObjectiveVerifierPolicy>,
+) -> Result<(), OrchestrationError> {
+    let Some(policy) = policy else {
+        return Ok(());
+    };
+    let serialized = serde_json::to_vec(policy).map_err(|_| {
+        OrchestrationError::InvalidPlan("objective verifier policy cannot be serialized".to_owned())
+    })?;
+    if serialized.len() > MAX_OBJECTIVE_EXPECTATION_BYTES {
+        return Err(OrchestrationError::InvalidPlan(
+            "objective verifier policy exceeds the 64 KiB bound".to_owned(),
+        ));
+    }
+    match policy {
+        ObjectiveVerifierPolicy::ExactText { expected }
+        | ObjectiveVerifierPolicy::Classification { expected } => {
+            validate_verifier_text(expected, "objective verifier expected text")?;
+        }
+        ObjectiveVerifierPolicy::NumericTolerance {
+            expected,
+            tolerance,
+        } => {
+            if !expected.is_finite()
+                || !tolerance.is_finite()
+                || *tolerance < 0.0
+                || *tolerance > 1_000_000.0
+            {
+                return Err(OrchestrationError::InvalidPlan(
+                    "numeric verifier tolerance is invalid".to_owned(),
+                ));
+            }
+        }
+        ObjectiveVerifierPolicy::JsonSchema { expected, required } => {
+            validate_schema_value(expected, 0)?;
+            validate_verifier_fields(required)?;
+        }
+        ObjectiveVerifierPolicy::RequiredFields { fields } => validate_verifier_fields(fields)?,
+        ObjectiveVerifierPolicy::SafePattern { pattern, .. } => {
+            if pattern.contains('\0')
+                || pattern.len() > MAX_VERIFIER_PATTERN_BYTES
+                || pattern.is_empty()
+            {
+                return Err(OrchestrationError::InvalidPlan(
+                    "safe pattern is outside the local bounds".to_owned(),
+                ));
+            }
+            if !matches!(
+                policy,
+                ObjectiveVerifierPolicy::SafePattern {
+                    mode: crate::domain::SafePatternMode::Literal,
+                    ..
+                }
+            ) && !matches!(
+                policy,
+                ObjectiveVerifierPolicy::SafePattern {
+                    mode: crate::domain::SafePatternMode::Regex,
+                    ..
+                }
+            ) {
+                return Err(OrchestrationError::InvalidPlan(
+                    "safe pattern mode is invalid".to_owned(),
+                ));
+            }
+            if let ObjectiveVerifierPolicy::SafePattern {
+                mode: crate::domain::SafePatternMode::Regex,
+                ..
+            } = policy
+            {
+                if parse_safe_regex(pattern).is_none() {
+                    return Err(OrchestrationError::InvalidPlan(
+                        "safe regex uses unsupported or unsafe syntax".to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_plan_metadata(metadata: &BTreeMap<String, Value>) -> Result<(), OrchestrationError> {
+    if metadata.len() > MAX_VERIFIER_SCHEMA_KEYS {
+        return Err(OrchestrationError::InvalidPlan(
+            "run metadata has too many keys".to_owned(),
+        ));
+    }
+    for (key, value) in metadata {
+        if key.is_empty() || key.len() > 512 || key.contains('\0') {
+            return Err(OrchestrationError::InvalidPlan(
+                "run metadata contains an unsafe key".to_owned(),
+            ));
+        }
+        validate_schema_value(value, 0)?;
+    }
+    Ok(())
+}
+
+fn validate_verifier_text(value: &str, label: &str) -> Result<(), OrchestrationError> {
+    if value.contains('\0') || value.len() > MAX_OBJECTIVE_EXPECTATION_BYTES {
+        return Err(OrchestrationError::InvalidPlan(format!(
+            "{label} is outside the 64 KiB bound"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_verifier_fields(fields: &[String]) -> Result<(), OrchestrationError> {
+    if fields.len() > MAX_VERIFIER_FIELDS
+        || fields
+            .iter()
+            .any(|field| field.is_empty() || field.len() > 512 || field.contains('\0'))
+    {
+        return Err(OrchestrationError::InvalidPlan(
+            "required verifier fields are invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_schema_value(value: &Value, depth: usize) -> Result<(), OrchestrationError> {
+    if depth > MAX_VERIFIER_SCHEMA_DEPTH {
+        return Err(OrchestrationError::InvalidPlan(
+            "JSON verifier schema is too deeply nested".to_owned(),
+        ));
+    }
+    match value {
+        Value::Array(values) => {
+            if values.len() > MAX_VERIFIER_SCHEMA_KEYS {
+                return Err(OrchestrationError::InvalidPlan(
+                    "JSON verifier schema has too many entries".to_owned(),
+                ));
+            }
+            for child in values {
+                validate_schema_value(child, depth + 1)?;
+            }
+        }
+        Value::Object(map) => {
+            if map.len() > MAX_VERIFIER_SCHEMA_KEYS {
+                return Err(OrchestrationError::InvalidPlan(
+                    "JSON verifier schema has too many keys".to_owned(),
+                ));
+            }
+            for (key, child) in map {
+                if key.is_empty() || key.len() > 512 || key.contains('\0') {
+                    return Err(OrchestrationError::InvalidPlan(
+                        "JSON verifier schema has an unsafe key".to_owned(),
+                    ));
+                }
+                validate_schema_value(child, depth + 1)?;
+            }
+        }
+        Value::Number(number) if !number.is_f64() && !number.is_i64() && !number.is_u64() => {
+            return Err(OrchestrationError::InvalidPlan(
+                "JSON verifier schema has an invalid number".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn has_json_path(value: &Value, path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let mut current = value;
+    for part in path.split('.') {
+        if part.is_empty() {
+            return false;
+        }
+        let Some(next) = current.get(part) else {
+            return false;
+        };
+        current = next;
+    }
+    true
+}
+
+fn schema_required_fields(schema: &Value) -> Vec<String> {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn matches_json_schema(value: &Value, schema: &Value, depth: usize) -> bool {
+    if schema.is_null() {
+        return true;
+    }
+    if depth > MAX_VERIFIER_SCHEMA_DEPTH {
+        return false;
+    }
+    let Some(schema) = schema.as_object() else {
+        return false;
+    };
+    if schema.len() > MAX_VERIFIER_SCHEMA_KEYS {
+        return false;
+    }
+
+    if let Some(enumeration) = schema.get("enum").and_then(Value::as_array) {
+        if !enumeration.iter().any(|candidate| candidate == value) {
+            return false;
+        }
+    }
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        if !any_of
+            .iter()
+            .any(|candidate| matches_json_schema(value, candidate, depth + 1))
+        {
+            return false;
+        }
+    }
+    if let Some(kind) = schema.get("type").and_then(Value::as_str) {
+        if !matches_json_type(value, kind) {
+            return false;
+        }
+    }
+
+    if let Some(text) = value.as_str() {
+        if schema
+            .get("minLength")
+            .and_then(Value::as_u64)
+            .is_some_and(|minimum| text.chars().count() < minimum as usize)
+            || schema
+                .get("maxLength")
+                .and_then(Value::as_u64)
+                .is_some_and(|maximum| text.chars().count() > maximum as usize)
+        {
+            return false;
+        }
+    }
+    if let Some(number) = value.as_f64() {
+        if schema.get("type").and_then(Value::as_str) == Some("integer") && number.fract() != 0.0 {
+            return false;
+        }
+        if schema
+            .get("minimum")
+            .and_then(Value::as_f64)
+            .is_some_and(|minimum| number < minimum)
+            || schema
+                .get("maximum")
+                .and_then(Value::as_f64)
+                .is_some_and(|maximum| number > maximum)
+        {
+            return false;
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if schema
+            .get("minItems")
+            .and_then(Value::as_u64)
+            .is_some_and(|minimum| items.len() < minimum as usize)
+            || schema
+                .get("maxItems")
+                .and_then(Value::as_u64)
+                .is_some_and(|maximum| items.len() > maximum as usize)
+        {
+            return false;
+        }
+        if let Some(item_schema) = schema.get("items") {
+            if !items
+                .iter()
+                .all(|item| matches_json_schema(item, item_schema, depth + 1))
+            {
+                return false;
+            }
+        }
+    }
+    if let Some(object) = value.as_object() {
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if required
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|key| !object.contains_key(key))
+        {
+            return false;
+        }
+        let properties = schema.get("properties").and_then(Value::as_object);
+        if let Some(properties) = properties {
+            if properties.len() > MAX_VERIFIER_SCHEMA_KEYS {
+                return false;
+            }
+            for (key, child_schema) in properties {
+                if let Some(child) = object.get(key) {
+                    if !matches_json_schema(child, child_schema, depth + 1) {
+                        return false;
+                    }
+                }
+            }
+            if schema.get("additionalProperties") == Some(&Value::Bool(false))
+                && object.keys().any(|key| !properties.contains_key(key))
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn matches_json_type(value: &Value, kind: &str) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "number" => value.as_f64().is_some_and(f64::is_finite),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+fn safe_literal_match(pattern: &str, actual: &str) -> bool {
+    let anchored_start = pattern.starts_with('^');
+    let anchored_end = pattern.ends_with('$') && !pattern.ends_with("\\$");
+    let literal = pattern
+        .strip_prefix('^')
+        .unwrap_or(pattern)
+        .strip_suffix('$')
+        .unwrap_or_else(|| pattern.strip_prefix('^').unwrap_or(pattern));
+    if literal.is_empty()
+        || literal.contains('\0')
+        || literal.contains('^')
+        || literal.contains('$')
+        || literal
+            .chars()
+            .any(|character| r"\.*+?()[\]{}|".contains(character))
+    {
+        return false;
+    }
+    let actual = normalize_objective_text(actual);
+    let literal = normalize_objective_text(literal);
+    if anchored_start && anchored_end {
+        actual == literal
+    } else if anchored_start {
+        actual.starts_with(&literal)
+    } else if anchored_end {
+        actual.ends_with(&literal)
+    } else {
+        actual.contains(&literal)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PatternAtom {
+    Literal(char),
+    Any,
+    Digit,
+    Space,
+    Word,
+    Class {
+        negated: bool,
+        values: Vec<char>,
+        ranges: Vec<(char, char)>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PatternToken {
+    atom: PatternAtom,
+    quantifier: PatternQuantifier,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PatternQuantifier {
+    One,
+    Optional,
+    ZeroOrMore,
+    OneOrMore,
+}
+
+fn safe_regex_match(pattern: &str, actual: &str) -> bool {
+    let anchored_start = pattern.starts_with('^');
+    let without_start = pattern.strip_prefix('^').unwrap_or(pattern);
+    let anchored_end = without_start.ends_with('$') && !without_start.ends_with("\\$");
+    let body = if anchored_end {
+        &without_start[..without_start.len() - 1]
+    } else {
+        without_start
+    };
+    let Some(tokens) = parse_safe_regex(body) else {
+        return false;
+    };
+    if tokens.is_empty() {
+        return false;
+    }
+    let characters: Vec<char> = normalize_objective_text(actual).chars().collect();
+    let starts: Vec<usize> = if anchored_start {
+        vec![0]
+    } else {
+        (0..=characters.len()).collect()
+    };
+    for start in starts {
+        let mut positions = std::collections::BTreeSet::from([start]);
+        for token in &tokens {
+            let mut next = std::collections::BTreeSet::new();
+            for position in positions {
+                if matches!(
+                    token.quantifier,
+                    PatternQuantifier::Optional | PatternQuantifier::ZeroOrMore
+                ) {
+                    next.insert(position);
+                }
+                let mut cursor = position;
+                let mut consumed = 0;
+                while cursor < characters.len() && atom_matches(&token.atom, characters[cursor]) {
+                    cursor += 1;
+                    consumed += 1;
+                    next.insert(cursor);
+                    if matches!(
+                        token.quantifier,
+                        PatternQuantifier::One | PatternQuantifier::Optional
+                    ) {
+                        break;
+                    }
+                }
+                if matches!(
+                    token.quantifier,
+                    PatternQuantifier::One | PatternQuantifier::OneOrMore
+                ) && consumed == 0
+                {
+                    continue;
+                }
+            }
+            positions = next;
+            if positions.is_empty() {
+                break;
+            }
+        }
+        if positions.iter().any(|position| {
+            if anchored_end {
+                *position == characters.len()
+            } else {
+                *position >= start
+            }
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
+fn parse_safe_regex(pattern: &str) -> Option<Vec<PatternToken>> {
+    let characters: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < characters.len() {
+        let character = characters[index];
+        let atom = if character == '\\' {
+            index += 1;
+            let escaped = *characters.get(index)?;
+            match escaped {
+                'd' => PatternAtom::Digit,
+                's' => PatternAtom::Space,
+                'w' => PatternAtom::Word,
+                other => PatternAtom::Literal(other),
+            }
+        } else if character == '.' {
+            PatternAtom::Any
+        } else if character == '[' {
+            let (atom, end) = parse_character_class(&characters, index)?;
+            index = end;
+            atom
+        } else if "()|{}^$*+?".contains(character) {
+            return None;
+        } else {
+            PatternAtom::Literal(character)
+        };
+        let quantifier = match characters.get(index + 1) {
+            Some('?') => {
+                index += 1;
+                PatternQuantifier::Optional
+            }
+            Some('*') => {
+                index += 1;
+                PatternQuantifier::ZeroOrMore
+            }
+            Some('+') => {
+                index += 1;
+                PatternQuantifier::OneOrMore
+            }
+            _ => PatternQuantifier::One,
+        };
+        tokens.push(PatternToken { atom, quantifier });
+        if tokens.len() > 256 {
+            return None;
+        }
+        index += 1;
+    }
+    Some(tokens)
+}
+
+fn parse_character_class(characters: &[char], start: usize) -> Option<(PatternAtom, usize)> {
+    let mut index = start + 1;
+    let negated = characters.get(index) == Some(&'^');
+    if negated {
+        index += 1;
+    }
+    let mut values = Vec::new();
+    let mut ranges = Vec::new();
+    while index < characters.len() && characters[index] != ']' {
+        let first = if characters[index] == '\\' {
+            index += 1;
+            *characters.get(index)?
+        } else {
+            characters[index]
+        };
+        index += 1;
+        if characters.get(index) == Some(&'-') && characters.get(index + 1) != Some(&']') {
+            index += 1;
+            let last = if characters.get(index) == Some(&'\\') {
+                index += 1;
+                *characters.get(index)?
+            } else {
+                *characters.get(index)?
+            };
+            if first > last {
+                return None;
+            }
+            ranges.push((first, last));
+            index += 1;
+        } else {
+            values.push(first);
+        }
+        if values.len() + ranges.len() > 256 {
+            return None;
+        }
+    }
+    if index >= characters.len() || (values.is_empty() && ranges.is_empty()) {
+        return None;
+    }
+    Some((
+        PatternAtom::Class {
+            negated,
+            values,
+            ranges,
+        },
+        index,
+    ))
+}
+
+fn atom_matches(atom: &PatternAtom, character: char) -> bool {
+    match atom {
+        PatternAtom::Literal(expected) => *expected == character,
+        PatternAtom::Any => character != '\n',
+        PatternAtom::Digit => character.is_ascii_digit(),
+        PatternAtom::Space => character.is_whitespace(),
+        PatternAtom::Word => character.is_ascii_alphanumeric() || character == '_',
+        PatternAtom::Class {
+            negated,
+            values,
+            ranges,
+        } => {
+            let matches = values.contains(&character)
+                || ranges
+                    .iter()
+                    .any(|(start, end)| (*start..=*end).contains(&character));
+            if *negated {
+                !matches
+            } else {
+                matches
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 fn objective_verification(
     response_text: &str,
     expectation: Option<&str>,
 ) -> Option<ObjectiveVerificationEvidence> {
-    let expectation = expectation?;
-    let expected = normalize_objective_text(expectation);
+    objective_verification_with_policy(response_text, None, expectation)
+}
+
+fn objective_verification_with_policy(
+    response_text: &str,
+    policy: Option<&ObjectiveVerifierPolicy>,
+    legacy_expectation: Option<&str>,
+) -> Option<ObjectiveVerificationEvidence> {
+    let policy = policy.cloned().or_else(|| {
+        legacy_expectation.map(|expected| ObjectiveVerifierPolicy::ExactText {
+            expected: expected.to_owned(),
+        })
+    })?;
     let actual = normalize_objective_text(response_text);
+    let (kind, expected_text, passed, reason, details) = match &policy {
+        ObjectiveVerifierPolicy::ExactText { expected } => {
+            let expected = normalize_objective_text(expected);
+            (
+                ObjectiveVerifierKind::ExactText,
+                expected.clone(),
+                expected == actual,
+                "normalized text comparison".to_owned(),
+                None,
+            )
+        }
+        ObjectiveVerifierPolicy::NumericTolerance {
+            expected,
+            tolerance,
+        } => {
+            let parsed = actual.parse::<f64>().ok();
+            let difference = parsed
+                .map(|value| (value - expected).abs())
+                .unwrap_or(f64::INFINITY);
+            (
+                ObjectiveVerifierKind::NumericTolerance,
+                expected.to_string(),
+                parsed.is_some_and(|value| value.is_finite() && difference <= *tolerance),
+                format!("absolute difference {difference}"),
+                Some(json!({ "expected": expected, "actual": parsed, "tolerance": tolerance })),
+            )
+        }
+        ObjectiveVerifierPolicy::Classification { expected } => {
+            let expected = normalize_objective_text(expected);
+            (
+                ObjectiveVerifierKind::Classification,
+                expected.clone(),
+                expected.eq_ignore_ascii_case(&actual),
+                "case-insensitive label comparison".to_owned(),
+                None,
+            )
+        }
+        ObjectiveVerifierPolicy::RequiredFields { fields } => {
+            let parsed = serde_json::from_str::<Value>(response_text).ok();
+            let missing: Vec<String> = fields
+                .iter()
+                .filter(|field| {
+                    !parsed
+                        .as_ref()
+                        .is_some_and(|value| has_json_path(value, field))
+                })
+                .cloned()
+                .collect();
+            (
+                ObjectiveVerifierKind::RequiredFields,
+                fields.join(","),
+                missing.is_empty(),
+                if missing.is_empty() {
+                    "all required fields are present".to_owned()
+                } else {
+                    format!("missing: {}", missing.join(", "))
+                },
+                Some(json!({ "missing": missing })),
+            )
+        }
+        ObjectiveVerifierPolicy::JsonSchema { expected, required } => {
+            let parsed = serde_json::from_str::<Value>(response_text).ok();
+            let schema_required = if required.is_empty() {
+                schema_required_fields(expected)
+            } else {
+                required.clone()
+            };
+            let missing: Vec<String> = schema_required
+                .iter()
+                .filter(|field| {
+                    !parsed
+                        .as_ref()
+                        .is_some_and(|value| has_json_path(value, field))
+                })
+                .cloned()
+                .collect();
+            let shape_ok = parsed
+                .as_ref()
+                .is_some_and(|value| missing.is_empty() && matches_json_schema(value, expected, 0));
+            (
+                ObjectiveVerifierKind::JsonSchema,
+                serde_json::to_string(expected).unwrap_or_default(),
+                shape_ok,
+                if parsed.is_none() {
+                    "response is not valid JSON".to_owned()
+                } else if !missing.is_empty() {
+                    format!("missing: {}", missing.join(", "))
+                } else if shape_ok {
+                    "bounded JSON shape accepted".to_owned()
+                } else {
+                    "JSON shape does not match the declared schema".to_owned()
+                },
+                Some(json!({ "missing": missing })),
+            )
+        }
+        ObjectiveVerifierPolicy::SafePattern { pattern, mode } => {
+            let matched = match mode {
+                crate::domain::SafePatternMode::Literal => safe_literal_match(pattern, &actual),
+                crate::domain::SafePatternMode::Regex => safe_regex_match(pattern, &actual),
+            };
+            (
+                ObjectiveVerifierKind::SafePattern,
+                pattern.clone(),
+                matched,
+                "bounded pattern match".to_owned(),
+                Some(json!({ "mode": mode })),
+            )
+        }
+    };
     Some(ObjectiveVerificationEvidence {
-        passed: expected == actual,
-        verifier_kind: ObjectiveVerifierKind::ExactText,
-        expected_normalized_byte_count: expected.len() as u64,
+        passed,
+        verifier_kind: kind,
+        expected_normalized_byte_count: expected_text.len() as u64,
         actual_normalized_byte_count: actual.len() as u64,
-        expected_sha256: sha256_hex(expected.as_bytes()),
+        expected_sha256: sha256_hex(expected_text.as_bytes()),
         actual_sha256: sha256_hex(actual.as_bytes()),
+        reason: Some(reason),
+        details,
     })
 }
 
@@ -686,7 +1418,7 @@ mod tests {
         MAX_PROGRESS_EVENTS, MAX_RESPONSE_SUMMARY_BYTES,
     };
     use crate::{
-        domain::{ObjectiveVerifierKind, ProfileRevision},
+        domain::{ExecutionBoundary, ObjectiveVerifierKind, ProfileRevision},
         ollama::OllamaConfig,
         runtime::{
             CancellationToken, Capability, ChatMessage, GenerationChunk, GenerationParameter,
@@ -799,6 +1531,9 @@ mod tests {
             },
             runtime_config: OllamaConfig::default(),
             objective_expectation: None,
+            verifier_policy: None,
+            execution_boundary: ExecutionBoundary::default(),
+            metadata: BTreeMap::new(),
         }
     }
 

@@ -177,9 +177,87 @@ pub struct ImmutableResultReference {
 #[serde(rename_all = "snake_case")]
 pub enum ObjectiveVerifierKind {
     ExactText,
+    NumericTolerance,
+    JsonSchema,
+    RequiredFields,
+    Classification,
+    SafePattern,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SafePatternMode {
+    Literal,
+    Regex,
+}
+
+impl Default for SafePatternMode {
+    fn default() -> Self {
+        Self::Literal
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObjectiveVerifierPolicy {
+    ExactText {
+        expected: String,
+    },
+    NumericTolerance {
+        expected: f64,
+        tolerance: f64,
+    },
+    JsonSchema {
+        expected: Value,
+        #[serde(default)]
+        required: Vec<String>,
+    },
+    RequiredFields {
+        fields: Vec<String>,
+    },
+    Classification {
+        expected: String,
+    },
+    SafePattern {
+        pattern: String,
+        #[serde(default)]
+        mode: SafePatternMode,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBoundaryKind {
+    TextGeneration,
+    DockerRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBoundaryStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionBoundary {
+    pub kind: ExecutionBoundaryKind,
+    pub status: ExecutionBoundaryStatus,
+    pub reason: Option<String>,
+}
+
+impl Default for ExecutionBoundary {
+    fn default() -> Self {
+        Self {
+            kind: ExecutionBoundaryKind::TextGeneration,
+            status: ExecutionBoundaryStatus::Available,
+            reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectiveVerificationEvidence {
     pub passed: bool,
@@ -188,6 +266,10 @@ pub struct ObjectiveVerificationEvidence {
     pub actual_normalized_byte_count: u64,
     pub expected_sha256: String,
     pub actual_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
