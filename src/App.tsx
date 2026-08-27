@@ -5,9 +5,14 @@ import {
   lockBlindEvaluation,
   materializeOfficialPack,
   prepareBlindEvaluation,
+  cancelModelOperation,
   readHardwareSnapshot,
   readLocalOllamaModels,
+  readModelCatalog,
+  readModelOperations,
+  readModelRemovals,
   startLocalOllama,
+  startModelOperation,
   readBenchmarkVersion,
   readBlindEvaluation,
   readOfficialPack,
@@ -43,7 +48,14 @@ import {
   type OfficialPackDocument,
   type OfficialPackMaterialization,
   type OfficialPackSummary,
-  type ModelInfo,
+  type ModelBackend,
+  type ModelCatalog,
+  type ModelDiscoveryRequest,
+  type ModelOperation,
+  type ModelOperationRequest,
+  type ModelRecord,
+  type ModelRemovalEvidence,
+  type ModelSourceConfig,
   type PersistedExecution,
   type ProfileRevision,
   type RunRecord,
@@ -131,13 +143,24 @@ import {
 } from "./provider-foundation";
 import {
   boundedRecommendationThresholds,
+  buildDownloadModelOperationRequest,
+  buildImportModelOperationRequest,
+  buildRemoveModelOperationRequest,
   classifyModelRecommendation,
+  DEFAULT_MODEL_SOURCE_CONFIGS,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
+  filterModelCatalog,
   EMPTY_PROFILE_FORM,
   hardwarePreviewCopy,
+  isActiveModelOperation,
+  modelBackendLabel,
   modelEmptyCopy,
-  modelMetadataLabel,
+  modelOperationProgressLabel,
+  modelOperationStatusLabel,
   modelPreviewCopy,
+  modelRecordMetadataLabel,
+  modelRecordQuantizationLabel,
+  modelSourceStatusLabel,
   profileEmptyCopy,
   profilePreviewCopy,
   profileRevisionFromForm,
@@ -1067,7 +1090,7 @@ type ProfileState =
 
 type ModelsState =
   | { status: "loading" }
-  | { status: "ready"; models: ModelInfo[] }
+  | { status: "ready"; catalog: ModelCatalog; operations: ModelOperation[]; removals: ModelRemovalEvidence[] }
   | { status: "error"; message: string }
   | { status: "preview" };
 
@@ -1084,17 +1107,29 @@ type HardwareState =
   | { status: "preview" };
 
 function ModelsView() {
+  const desktop = isDesktopEnvironment();
   const [profileState, setProfileState] = useState<ProfileState>({ status: "loading" });
-  const [modelState, setModelState] = useState<ModelsState>({ status: "loading" });
+  const [modelState, setModelState] = useState<ModelsState>(() => (
+    desktop ? { status: "loading" } : { status: "preview" }
+  ));
   const [hardwareState, setHardwareState] = useState<HardwareState>(() => (
-    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+    desktop ? { status: "loading" } : { status: "preview" }
   ));
   const [thresholds, setThresholds] = useState<RecommendationThresholds>(DEFAULT_RECOMMENDATION_THRESHOLDS);
   const [form, setForm] = useState<ProfileFormState>(EMPTY_PROFILE_FORM);
+  const [sourceConfigs, setSourceConfigs] = useState<ModelSourceConfig[]>(() => (
+    DEFAULT_MODEL_SOURCE_CONFIGS.map((config) => ({ ...config }))
+  ));
+  const [managedGgufPath, setManagedGgufPath] = useState("");
+  const [query, setQuery] = useState("");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
+  const [operationStarting, setOperationStarting] = useState(false);
+  const [operationAction, setOperationAction] = useState<string | null>(null);
+  const [cancellingOperation, setCancellingOperation] = useState<string | null>(null);
   const [ollamaStartState, setOllamaStartState] = useState<OllamaStartState>({ status: "idle" });
   const ollamaStartInFlight = useRef(false);
+  const operationCounter = useRef(0);
 
   async function refreshProfiles() {
     if (!isDesktopEnvironment()) {
@@ -1112,24 +1147,143 @@ function ModelsView() {
     }
   }
 
+  function discoveryRequest(): ModelDiscoveryRequest {
+    const sources = sourceConfigs.map((config) => ({
+      ...config,
+      endpoint: config.endpoint?.trim() || null,
+    }));
+    const path = managedGgufPath.trim();
+    if (path) {
+      sources.push({
+        backend: "llama_cpp",
+        label: "Managed GGUF",
+        endpoint: null,
+        path,
+      });
+    }
+    return { sources, query: null };
+  }
+
   async function refreshModels() {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setModelState({ status: "preview" });
       return;
     }
     setModelState({ status: "loading" });
     try {
-      setModelState({ status: "ready", models: await readLocalOllamaModels() });
+      const [catalog, operations, removals] = await Promise.all([
+        readModelCatalog(discoveryRequest()),
+        readModelOperations(),
+        readModelRemovals(),
+      ]);
+      setModelState({ status: "ready", catalog, operations, removals });
     } catch (error: unknown) {
       setModelState({
         status: "error",
-        message: error instanceof Error ? error.message : "The local Ollama model list is unavailable.",
+        message: error instanceof Error ? error.message : "The local model catalog is unavailable.",
       });
     }
   }
 
+  async function refreshOperationData() {
+    if (!desktop) return;
+    try {
+      const [operations, removals] = await Promise.all([readModelOperations(), readModelRemovals()]);
+      setModelState((current) => current.status === "ready" ? { ...current, operations, removals } : current);
+    } catch {
+      // Keep the last catalog visible during a transient activity poll failure.
+    }
+  }
+
+  function nextOperationId(kind: "download" | "import" | "remove"): string {
+    operationCounter.current += 1;
+    return `model-${kind}-${Date.now().toString(36)}-${operationCounter.current}`;
+  }
+
+  async function launchOperation(request: ModelOperationRequest) {
+    if (!desktop) return;
+    setOperationStarting(true);
+    setOperationAction(request.operationId);
+    try {
+      const operation = await startModelOperation(request);
+      const subject = operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model";
+      setFeedback({
+        kind: operation.status === "completed" ? "success" : operation.status === "cancelled" ? "info" : "error",
+        message: `${subject}: ${modelOperationStatusLabel(operation.status).toLowerCase()}.`,
+      });
+    } catch (error: unknown) {
+      setFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The model operation could not be started.",
+      });
+    } finally {
+      await refreshModels();
+      setOperationStarting(false);
+      setOperationAction(null);
+    }
+  }
+
+  function showModelActionError(error: unknown) {
+    setFeedback({
+      kind: "error",
+      message: error instanceof Error ? error.message : "The model operation request is invalid.",
+    });
+  }
+
+  function handleDownload(model: ModelRecord) {
+    try {
+      void launchOperation(buildDownloadModelOperationRequest(nextOperationId("download"), model));
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  function handleImport() {
+    try {
+      const request = buildImportModelOperationRequest(nextOperationId("import"), managedGgufPath);
+      setManagedGgufPath(request.sourcePath);
+      void launchOperation(request);
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  function handleRemove(model: ModelRecord) {
+    if (!desktop || !window.confirm(
+      `Remove "${model.name}" from the app-managed model root? This deletes only the managed GGUF and records its SHA-256 audit evidence.`,
+    )) return;
+    try {
+      void launchOperation(buildRemoveModelOperationRequest(nextOperationId("remove"), model));
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  async function handleCancel(operationId: string) {
+    setCancellingOperation(operationId);
+    try {
+      await cancelModelOperation(operationId);
+      setFeedback({ kind: "info", message: "Cancellation requested for the model operation." });
+      await refreshOperationData();
+    } catch (error: unknown) {
+      setFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The model operation could not be cancelled.",
+      });
+    } finally {
+      setCancellingOperation(null);
+    }
+  }
+
+  function updateSourceEndpoint(backend: ModelBackend, endpoint: string) {
+    setSourceConfigs((current) => current.map((config) => (
+      config.backend === backend ? { ...config, endpoint } : config
+    )));
+    setFeedback(null);
+  }
+
   async function handleStartOllama() {
-    if (!isDesktopEnvironment() || ollamaStartInFlight.current) return;
+    if (!desktop || ollamaStartInFlight.current) return;
     ollamaStartInFlight.current = true;
     setOllamaStartState({ status: "starting" });
     try {
@@ -1149,7 +1303,7 @@ function ModelsView() {
   }
 
   async function refreshHardware() {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setHardwareState({ status: "preview" });
       return;
     }
@@ -1165,7 +1319,7 @@ function ModelsView() {
   }
 
   useEffect(() => {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setProfileState({ status: "preview" });
       setModelState({ status: "preview" });
       return;
@@ -1174,6 +1328,17 @@ function ModelsView() {
     void refreshModels();
     void refreshHardware();
   }, []);
+
+  const hasActiveOperations = modelState.status === "ready"
+    && (operationStarting || modelState.operations.some(isActiveModelOperation));
+
+  useEffect(() => {
+    if (!desktop || !hasActiveOperations) return;
+    const timer = window.setInterval(() => { void refreshOperationData(); }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [desktop, hasActiveOperations]);
+
+  const visibleModels = modelState.status === "ready" ? filterModelCatalog(modelState.catalog, query) : [];
 
   function updateThreshold(field: keyof RecommendationThresholds, value: string) {
     const parsed = Number(value);
@@ -1186,7 +1351,7 @@ function ModelsView() {
   }
 
   async function handleRegister() {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setFeedback({ kind: "info", message: profilePreviewCopy() });
       return;
     }
@@ -1218,9 +1383,9 @@ function ModelsView() {
         <p className="eyebrow">Model library</p>
         <h2>Profiles and local models</h2>
         <p>
-          Register immutable local profile revisions and inspect installed Ollama models through the fixed
-          127.0.0.1:11434 boundary, alongside a read-only local hardware baseline. This slice has no endpoint field,
-          credentials, downloads, deletion, telemetry, or cloud provider.
+          Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp models through
+          explicit loopback endpoints. Import only app-managed relative GGUF paths, track persisted local operations,
+          and keep removal evidence alongside a read-only hardware baseline. No credentials, telemetry, or cloud provider.
         </p>
       </section>
 
@@ -1228,22 +1393,51 @@ function ModelsView() {
         <section className="panel model-list-panel" aria-live="polite">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Ollama / local only</p>
-              <h3>Installed models</h3>
+              <p className="eyebrow">Unified local catalog</p>
+              <h3>Models</h3>
             </div>
             <div className="model-actions">
-              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!isDesktopEnvironment() || busy}>
+              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!desktop || busy || operationStarting}>
                 Refresh
               </button>
               <button
                 className="text-button"
                 type="button"
                 onClick={() => void handleStartOllama()}
-                disabled={!isDesktopEnvironment() || busy || ollamaStartState.status === "starting"}
+                disabled={!desktop || busy || operationStarting || ollamaStartState.status === "starting"}
               >
                 {ollamaStartState.status === "starting" ? "Starting Ollama…" : "Start Ollama"}
               </button>
             </div>
+          </div>
+          <div className="profile-form form-section">
+            <p className="eyebrow">Loopback sources</p>
+            <div className="form-grid">
+              {sourceConfigs.map((config) => (
+                <FormInput
+                  key={config.backend}
+                  id={`model-endpoint-${config.backend}`}
+                  label={`${modelBackendLabel(config.backend)} endpoint`}
+                  value={config.endpoint ?? ""}
+                  onChange={(value) => updateSourceEndpoint(config.backend, value)}
+                />
+              ))}
+            </div>
+            <p className="field-help">Only HTTP endpoints on localhost, 127.0.0.1, or ::1 are accepted. Refresh applies the current source values.</p>
+            <FormInput id="model-search" label="Filter catalog" value={query} onChange={setQuery} />
+          </div>
+          <div className="profile-form form-section">
+            <p className="eyebrow">Managed GGUF</p>
+            <FormInput
+              id="managed-gguf-path"
+              label="Relative path under the managed model root"
+              value={managedGgufPath}
+              onChange={(value) => { setManagedGgufPath(value); setFeedback(null); }}
+            />
+            <p className="field-help">Import reads an existing relative .gguf file owned by the app. No arbitrary filesystem path or browser file operation is used.</p>
+            <button className="secondary-button" type="button" onClick={handleImport} disabled={!desktop || busy || operationStarting}>
+              Import managed GGUF
+            </button>
           </div>
           {ollamaStartState.status === "starting" && <p className="field-help" role="status">Starting Ollama…</p>}
           {ollamaStartState.status === "running" && <p className="field-help" role="status">Ollama running.</p>}
@@ -1256,45 +1450,163 @@ function ModelsView() {
             <StateMessage icon="◇" title="Browser preview" description={modelPreviewCopy()} />
           )}
           {modelState.status === "loading" && (
-            <StateMessage icon="…" title="Checking local Ollama" description="Reading installed model metadata from the fixed loopback runtime." />
+            <StateMessage icon="…" title="Checking local sources" description="Reading model metadata from the configured loopback runtimes and managed model root." />
           )}
           {modelState.status === "error" && (
-            <StateMessage icon="!" title="Ollama unavailable" description={modelState.message} error />
+            <StateMessage icon="!" title="Local model catalog unavailable" description={modelState.message} error />
           )}
-          {modelState.status === "ready" && modelState.models.length === 0 && (
-            <EmptyState title="No installed models" description={modelEmptyCopy()} />
-          )}
-          {modelState.status === "ready" && modelState.models.length > 0 && (
-            <div className="model-list">
-              {modelState.models.map((model) => (
-                <article className="model-row" key={`${model.name}-${model.digest ?? "unknown"}`}>
-                  <div>
-                    <h3>{model.name}</h3>
-                    <p className="model-meta">{modelMetadataLabel(model)}</p>
-                    <p className="model-meta">
-                      {model.digest ? `${model.digest.slice(0, 12)}…` : "Digest unavailable"}
-                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
-                    </p>
-                    {(() => {
-                      const recommendation = classifyModelRecommendation(
-                        model,
-                        hardwareState.status === "ready" ? hardwareState.snapshot : null,
-                        thresholds,
-                      );
-                      return (
-                        <div className="model-recommendation">
-                          <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
-                          <p className="model-meta">{recommendation.explanation}</p>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
-                </article>
-              ))}
+          {modelState.status === "ready" && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Source status</p>
+                  <h3>{modelState.catalog.sources.length} configured sources</h3>
+                </div>
+                <span className="run-status run-status-neutral">{modelState.catalog.models.length} records</span>
+              </div>
+              <div className="profile-record-list">
+                {modelState.catalog.sources.map((source) => (
+                  <article className="profile-record-row" key={source.sourceId}>
+                    <span>
+                      <strong>{source.label} · {modelBackendLabel(source.backend)}</strong>
+                      <small>{source.message ?? `${source.models.length} model${source.models.length === 1 ? "" : "s"} reported`}</small>
+                    </span>
+                    <span className={`run-status ${source.status === "error" ? "run-status-failure" : source.status === "unavailable" ? "run-status-neutral" : ""}`}>
+                      {modelSourceStatusLabel(source.status)}
+                    </span>
+                  </article>
+                ))}
+              </div>
             </div>
           )}
-          {!isDesktopEnvironment() && <p className="field-help">Desktop storage and a local Ollama runtime are required. Preview never invents model rows.</p>}
+          {modelState.status === "ready" && visibleModels.length === 0 && (
+            <EmptyState
+              title={query.trim() ? "No matching models" : "No local models"}
+              description={modelEmptyCopy()}
+            />
+          )}
+          {modelState.status === "ready" && visibleModels.length > 0 && (
+            <div className="model-list">
+              {visibleModels.map((model) => {
+                const rowOperation = [...modelState.operations].reverse().find((operation) => (
+                  operation.modelId === model.modelId
+                  || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
+                ));
+                const recommendation = classifyModelRecommendation(
+                  model,
+                  hardwareState.status === "ready" ? hardwareState.snapshot : null,
+                  thresholds,
+                );
+                const canDownload = model.backend === "ollama";
+                const canRemove = model.backend === "llama_cpp" && model.managed && model.managedPath !== null;
+                return (
+                <article className="model-row" key={model.modelId}>
+                  <div>
+                    <h3>{model.name}</h3>
+                    <p className="model-meta">
+                      {modelBackendLabel(model.backend)} · {modelRecordMetadataLabel(model)} · {modelRecordQuantizationLabel(model)}
+                    </p>
+                    <p className="model-meta">
+                      {model.contentHash
+                        ? `SHA-256 ${model.contentHash.slice(0, 12)}…`
+                        : model.digest ? `Digest ${model.digest.slice(0, 12)}…` : "Digest unavailable"}
+                      {model.managedPath ? ` · managed/${model.managedPath}` : ""}
+                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
+                    </p>
+                    <div className="model-recommendation">
+                      <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
+                      <p className="model-meta">{recommendation.explanation}</p>
+                    </div>
+                    {rowOperation && (
+                      <p className="model-meta">
+                        Operation {modelOperationStatusLabel(rowOperation.status).toLowerCase()} · {modelOperationProgressLabel(rowOperation)}
+                        {rowOperation.message ? ` · ${rowOperation.message}` : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="model-actions">
+                    <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
+                    {canDownload && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => handleDownload(model)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {operationAction === rowOperation?.operationId ? "Starting…" : "Download"}
+                      </button>
+                    )}
+                    {canRemove && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => handleRemove(model)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
+                      </button>
+                    )}
+                  </div>
+                </article>
+                );
+              })}
+            </div>
+          )}
+          {!desktop && <p className="field-help">Desktop storage and local loopback runtimes are required. Preview never invents model rows.</p>}
+          {modelState.status === "ready" && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Persisted activity</p>
+                  <h3>Model operations</h3>
+                </div>
+              </div>
+              {modelState.operations.length === 0 ? (
+                <p className="field-help">No model operations are persisted locally.</p>
+              ) : (
+                <div className="profile-record-list">
+                  {[...modelState.operations].reverse().map((operation) => (
+                    <article className="profile-record-row" key={operation.operationId}>
+                      <span>
+                        <strong>{operation.kind} · {operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model"}</strong>
+                        <small>{modelBackendLabel(operation.backend)} · {modelOperationStatusLabel(operation.status)} · {modelOperationProgressLabel(operation)}{operation.message ? ` · ${operation.message}` : ""}</small>
+                      </span>
+                      {isActiveModelOperation(operation) ? (
+                        <button className="text-button" type="button" onClick={() => void handleCancel(operation.operationId)} disabled={cancellingOperation === operation.operationId}>
+                          {cancellingOperation === operation.operationId ? "Cancelling…" : "Cancel"}
+                        </button>
+                      ) : (
+                        <span className={`run-status ${operation.status === "failed" ? "run-status-failure" : operation.status === "cancelled" ? "run-status-neutral" : ""}`}>
+                          {modelOperationStatusLabel(operation.status)}
+                        </span>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {modelState.status === "ready" && modelState.removals.length > 0 && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Removal audit</p>
+                  <h3>Managed model evidence</h3>
+                </div>
+              </div>
+              <div className="profile-record-list">
+                {[...modelState.removals].reverse().map((removal) => (
+                  <article className="profile-record-row" key={removal.removalId}>
+                    <span>
+                      <strong>{removal.modelId}</strong>
+                      <small>{removal.managedPath} · SHA-256 {removal.contentHash.slice(0, 12)}… · {removal.removedAt}</small>
+                    </span>
+                    <span className="run-status run-status-neutral">{removal.outcome}</span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="panel profile-panel" aria-live="polite">

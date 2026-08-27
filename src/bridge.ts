@@ -357,6 +357,108 @@ export type ModelInfo = {
   metadata: Record<string, unknown>;
 };
 
+export type ModelBackend = "ollama" | "lm_studio" | "llama_cpp";
+export type ModelSourceStatus = "available" | "unavailable" | "error";
+export type ModelAvailability = "available" | "unavailable" | "removed";
+
+export type ModelRecord = {
+  modelId: string;
+  sourceId: string;
+  backend: ModelBackend;
+  name: string;
+  endpoint: string | null;
+  path: string | null;
+  availability: ModelAvailability;
+  digest: string | null;
+  contentHash: string | null;
+  sizeBytes: number | null;
+  family: string | null;
+  parameterSize: string | null;
+  quantizationLevel: string | null;
+  contextLength: number | null;
+  modifiedAt: string | null;
+  managed: boolean;
+  managedPath: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ModelSourceConfig = {
+  backend: ModelBackend;
+  label?: string | null;
+  endpoint?: string | null;
+  path?: string | null;
+};
+
+export type ModelDiscoveryRequest = {
+  sources: ModelSourceConfig[];
+  query?: string | null;
+};
+
+export type ModelDuplicateGroup = {
+  groupId: string;
+  digest: string | null;
+  contentHash: string | null;
+  modelIds: string[];
+};
+
+export type ModelSource = {
+  sourceId: string;
+  backend: ModelBackend;
+  label: string;
+  endpoint: string | null;
+  path: string | null;
+  status: ModelSourceStatus;
+  message: string | null;
+  models: ModelRecord[];
+};
+
+export type ModelCatalog = {
+  generatedAt: string;
+  sources: ModelSource[];
+  models: ModelRecord[];
+  duplicateGroups: ModelDuplicateGroup[];
+};
+
+export type ModelOperationKind = "download" | "import" | "remove";
+export type ModelOperationStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+export type ModelOperation = {
+  operationId: string;
+  kind: ModelOperationKind;
+  backend: ModelBackend;
+  sourceId: string | null;
+  modelName: string | null;
+  modelId: string | null;
+  managedPath: string | null;
+  status: ModelOperationStatus;
+  bytesTotal: number | null;
+  bytesCompleted: number;
+  progressPercent: number | null;
+  contentHash: string | null;
+  message: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ModelImportRequest = {
+  sourcePath: string;
+};
+
+export type ModelOperationRequest =
+  | { kind: "download"; operationId: string; endpoint: string; modelName: string }
+  | { kind: "import"; operationId: string; sourcePath: string }
+  | { kind: "remove"; operationId: string; modelId: string };
+
+export type ModelRemovalEvidence = {
+  removalId: string;
+  modelId: string;
+  backend: ModelBackend;
+  managedPath: string;
+  contentHash: string;
+  removedAt: string;
+  outcome: string;
+};
+
 export type OllamaStartStatus = "already_running" | "running";
 
 export type HardwarePlatform = "windows" | "linux" | "other";
@@ -586,6 +688,60 @@ export async function registerProfileRevision(
     "register_profile_revision",
     "The local profile revision could not be registered.",
     { revision },
+  );
+}
+
+export async function readModelCatalog(request: ModelDiscoveryRequest): Promise<ModelCatalog> {
+  return invokeDesktop<ModelCatalog>(
+    "discover_local_models",
+    "The local model catalog could not be reached.",
+    { request },
+  );
+}
+
+export async function importManagedGgufModel(request: ModelImportRequest): Promise<ModelRecord> {
+  return invokeDesktop<ModelRecord>(
+    "import_managed_gguf_model",
+    "The managed GGUF model could not be imported.",
+    { request },
+  );
+}
+
+export async function startModelOperation(request: ModelOperationRequest): Promise<ModelOperation> {
+  return invokeDesktop<ModelOperation>(
+    "start_model_operation",
+    "The model operation could not be started.",
+    { request },
+  );
+}
+
+export async function readModelOperations(): Promise<ModelOperation[]> {
+  return invokeDesktop<ModelOperation[]>(
+    "list_model_operations",
+    "The local model operations could not be reached.",
+  );
+}
+
+export async function readModelOperation(operationId: string): Promise<ModelOperation | null> {
+  return invokeDesktop<ModelOperation | null>(
+    "get_model_operation",
+    "The selected model operation could not be reached.",
+    { operationId },
+  );
+}
+
+export async function cancelModelOperation(operationId: string): Promise<void> {
+  return invokeDesktop<void>(
+    "cancel_model_operation",
+    "The model operation could not be cancelled.",
+    { operationId },
+  );
+}
+
+export async function readModelRemovals(): Promise<ModelRemovalEvidence[]> {
+  return invokeDesktop<ModelRemovalEvidence[]>(
+    "list_model_removals",
+    "The local model removal audit could not be reached.",
   );
 }
 

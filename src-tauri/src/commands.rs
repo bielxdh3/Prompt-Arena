@@ -2,7 +2,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     thread,
     time::Duration,
 };
@@ -15,7 +15,8 @@ use crate::{
         sha256_hex, validate_benchmark_document as validate_document,
         validate_benchmark_document_size as validate_document_size, Attempt,
         BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord,
-        ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+        ModelCatalog, ModelDiscoveryRequest, ModelImportRequest, ModelOperation, ModelRecord,
+        ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
     },
     evaluation::{
         get_blind_evaluation as get_blind_evaluation_record,
@@ -23,6 +24,11 @@ use crate::{
         prepare_blind_evaluation as prepare_blind_evaluation_record, BlindEvaluationError,
     },
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
+    model_library::{
+        discover_local_models as discover_local_models_backend,
+        import_managed_gguf_model as import_managed_gguf_model_backend, ModelLibraryError,
+        ModelOperationController, ModelOperationRequest,
+    },
     official_packs::{
         get_official_pack as get_official_pack_record,
         list_official_packs as list_official_pack_records,
@@ -96,6 +102,11 @@ const OLLAMA_START_RETRIES: usize = 20;
 const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
+static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
+
+fn model_operation_controller() -> &'static ModelOperationController {
+    MODEL_OPERATION_CONTROLLER.get_or_init(ModelOperationController::default)
+}
 
 impl From<ValidationError> for CommandError {
     fn from(error: ValidationError) -> Self {
@@ -165,6 +176,23 @@ impl From<RuntimeError> for CommandError {
         Self {
             code,
             message: error.to_string(),
+        }
+    }
+}
+
+impl From<ModelLibraryError> for CommandError {
+    fn from(error: ModelLibraryError) -> Self {
+        match error {
+            ModelLibraryError::InvalidRequest(message) => Self {
+                code: "model_request_invalid",
+                message,
+            },
+            ModelLibraryError::GgufImport(message) => Self {
+                code: "model_import_invalid",
+                message,
+            },
+            ModelLibraryError::Runtime(error) => error.into(),
+            ModelLibraryError::Storage(error) => error.into(),
         }
     }
 }
@@ -414,6 +442,61 @@ pub fn list_profile_revisions(app: AppHandle) -> Result<Vec<ProfileRevision>, Co
     storage_for(&app)?
         .list_profile_revisions()
         .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn discover_local_models(
+    app: AppHandle,
+    request: ModelDiscoveryRequest,
+) -> Result<ModelCatalog, CommandError> {
+    discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn import_managed_gguf_model(
+    app: AppHandle,
+    request: ModelImportRequest,
+) -> Result<ModelRecord, CommandError> {
+    import_managed_gguf_model_backend(&storage_for(&app)?, &request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn start_model_operation(
+    app: AppHandle,
+    request: ModelOperationRequest,
+) -> Result<ModelOperation, CommandError> {
+    model_operation_controller()
+        .execute(&storage_for(&app)?, &request)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_model_operations(app: AppHandle) -> Result<Vec<ModelOperation>, CommandError> {
+    storage_for(&app)?
+        .list_model_operations()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_model_operation(
+    app: AppHandle,
+    operation_id: String,
+) -> Result<Option<ModelOperation>, CommandError> {
+    storage_for(&app)?
+        .get_model_operation(&operation_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn cancel_model_operation(operation_id: String) -> Result<(), CommandError> {
+    model_operation_controller()
+        .cancel(&operation_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_model_removals(app: AppHandle) -> Result<Vec<ModelRemovalEvidence>, CommandError> {
+    storage_for(&app)?.list_model_removals().map_err(Into::into)
 }
 
 #[tauri::command]
