@@ -1840,11 +1840,11 @@ mod tests {
     };
 
     use super::{
-        ArtifactRef, ArtifactStore, BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout,
-        StorageService, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
-        BLIND_EVALUATIONS_MIGRATION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
-        MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES, MAX_PROFILE_MODEL_BYTES,
-        MAX_PROFILE_REQUEST_BYTES,
+        ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
+        BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout, StorageService,
+        ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
+        FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
+        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1967,6 +1967,54 @@ mod tests {
         assert!(!BLIND_EVALUATIONS_MIGRATION
             .to_ascii_uppercase()
             .contains("DROP TABLE"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn arena_summaries_are_immutable_replayable_and_listed() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let summary = ArenaSummaryPayload {
+            arena_id: "arena-1".to_owned(),
+            benchmark_version_id: "logic@1".to_owned(),
+            task_id: "task".to_owned(),
+            case_id: "case".to_owned(),
+            repetitions: 1,
+            pack_id: None,
+            materialization_seed: Some(42),
+            summary: json!({"total": 1, "uncertainty": 0.1, "tieMargin": 0.2}),
+            competitors: vec![json!({"competitorId": "profile-1@1", "uncertainty": 0.1})],
+            evidence: vec![ArenaExecutionEvidence {
+                competitor_id: "profile-1@1".to_owned(),
+                competitor_label: "model".to_owned(),
+                repetition: 1,
+                run_id: "arena-1-1-1".to_owned(),
+                attempt_id: Some("attempt-1".to_owned()),
+                status: "completed".to_owned(),
+                duration_ms: Some(12.5),
+                completion_tokens: Some(4),
+                objective_passed: Some(true),
+            }],
+        };
+
+        let (first, first_outcome) = service
+            .save_arena_summary(&summary, "100")
+            .expect("summary saves");
+        assert_eq!(first_outcome, SaveOutcome::Saved);
+        let (replay, replay_outcome) = service
+            .save_arena_summary(&summary, "200")
+            .expect("summary replay saves");
+        assert_eq!(replay, first);
+        assert_eq!(replay_outcome, SaveOutcome::AlreadyPresent);
+
+        let mut changed = summary.clone();
+        changed.summary["tieMargin"] = json!(9.0);
+        assert_eq!(
+            service.save_arena_summary(&changed, "300"),
+            Err(StorageError::ImmutableConflict)
+        );
+        assert_eq!(service.get_arena_summary("arena-1").unwrap(), Some(first));
+        assert_eq!(service.list_arena_summaries().unwrap().len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 

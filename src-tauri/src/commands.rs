@@ -39,9 +39,9 @@ use crate::{
     },
     runtime::{ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
-        now_marker, BenchmarkDraft, BenchmarkDraftInput, BenchmarkDraftSummary, BenchmarkVersion,
-        BenchmarkVersionSummary, StorageError, StorageService, MAX_DRAFT_REQUEST_BYTES,
-        MAX_PROFILE_REQUEST_BYTES,
+        now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
+        BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary, StorageError,
+        StorageService, MAX_DRAFT_REQUEST_BYTES, MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -67,6 +67,13 @@ pub struct BenchmarkValidationSummary {
 #[serde(rename_all = "camelCase")]
 pub struct SavedBenchmarkVersion {
     pub summary: BenchmarkVersionSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedArenaSummary {
+    pub record: ArenaSummaryRecord,
+    pub save_outcome: crate::storage::SaveOutcome,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -242,6 +249,35 @@ pub fn materialize_official_pack(
     seed: u64,
 ) -> Result<OfficialPackMaterialization, CommandError> {
     materialize_official_pack_record(&storage_for(&app)?, &pack_id, seed).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn save_arena_summary(
+    app: AppHandle,
+    summary: ArenaSummaryPayload,
+) -> Result<SavedArenaSummary, CommandError> {
+    let (record, save_outcome) = storage_for(&app)?.save_arena_summary(&summary, &now_marker())?;
+    Ok(SavedArenaSummary {
+        record,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_arena_summaries(app: AppHandle) -> Result<Vec<ArenaSummaryRecord>, CommandError> {
+    storage_for(&app)?
+        .list_arena_summaries()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_arena_summary(
+    app: AppHandle,
+    arena_id: String,
+) -> Result<Option<ArenaSummaryRecord>, CommandError> {
+    storage_for(&app)?
+        .get_arena_summary(&arena_id)
+        .map_err(Into::into)
 }
 
 #[tauri::command]

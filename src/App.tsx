@@ -3,6 +3,7 @@ import {
   executeRunOnce,
   isDesktopEnvironment,
   lockBlindEvaluation,
+  materializeOfficialPack,
   prepareBlindEvaluation,
   readHardwareSnapshot,
   readLocalOllamaModels,
@@ -11,6 +12,8 @@ import {
   readBlindEvaluation,
   readOfficialPack,
   readOfficialPacks,
+  readArenaSummaries,
+  readArenaSummary,
   readAttemptResponse,
   readRunAttempts,
   readProfileRevisions,
@@ -20,12 +23,14 @@ import {
   readBenchmarkDrafts,
   readBenchmarkVersions,
   readRuns,
+  saveArenaSummary,
   saveBenchmarkDraft,
   validateBenchmarkDocument,
   readAppStatus,
   type AppStatus,
   type AttemptRecord,
   type AttemptResponse,
+  type ArenaSummaryRecord,
   type BlindEvaluationPreparation,
   type BlindEvaluationRecord,
   type BlindEvaluationScore,
@@ -36,11 +41,13 @@ import {
   type HardwareMetric,
   type HardwareSnapshot,
   type OfficialPackDocument,
+  type OfficialPackMaterialization,
   type OfficialPackSummary,
   type ModelInfo,
   type PersistedExecution,
   type ProfileRevision,
   type RunRecord,
+  type SaveOutcome,
 } from "./bridge";
 import {
   attemptStatusLabel,
@@ -73,10 +80,12 @@ import {
   arenaExportCsv,
   arenaExportJson,
   arenaExportMarkdown,
+  buildArenaSummaryPayload,
   buildBlindArenaCards,
   executeArena,
   groupArenaExecutions,
   rankArenaCompetitors,
+  summarizeArenaCompetitors,
   summarizeArenaExecutions,
   type ArenaExecution,
   type ArenaProgress,
@@ -99,7 +108,10 @@ import {
   benchmarkEmptyCopy,
   benchmarkPreviewCopy,
   classifyBenchmarkSurface,
+  officialPackExecutionState,
   officialPacksPreviewCopy,
+  parseDeterministicMaterializationMetadata,
+  parseOfficialPackSeed,
 } from "./benchmark-ui";
 import {
   ACCENT_OPTIONS,
@@ -404,11 +416,19 @@ type OfficialPackDetailState =
   | { status: "ready"; document: OfficialPackDocument }
   | { status: "error"; message: string };
 
+type OfficialPackMaterializationState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; materialization: OfficialPackMaterialization }
+  | { status: "error"; message: string };
+
 type Feedback = { kind: "success" | "error" | "info"; message: string };
 
 function BenchmarksView() {
   const [state, setState] = useState<BenchmarksState>({ status: "loading" });
   const [officialPackDetail, setOfficialPackDetail] = useState<OfficialPackDetailState>({ status: "idle" });
+  const [officialPackMaterialization, setOfficialPackMaterialization] = useState<OfficialPackMaterializationState>({ status: "idle" });
+  const [materializationSeed, setMaterializationSeed] = useState("42");
   const [form, setForm] = useState<DraftFormState>(EMPTY_DRAFT_FORM);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
@@ -603,6 +623,7 @@ function BenchmarksView() {
   async function handleLoadOfficialPack(packId: string) {
     if (!isDesktopEnvironment()) return;
     setOfficialPackDetail({ status: "loading" });
+    setOfficialPackMaterialization({ status: "idle" });
     try {
       const document = await readOfficialPack(packId);
       if (!document) throw new Error("The selected official pack is not in the bundled catalog.");
@@ -612,6 +633,35 @@ function BenchmarksView() {
         status: "error",
         message: error instanceof Error ? error.message : "The selected official pack could not be loaded.",
       });
+    }
+  }
+
+  async function handleMaterializeOfficialPack() {
+    if (!isDesktopEnvironment()) return;
+    if (officialPackDetail.status !== "ready") return;
+    const seed = parseOfficialPackSeed(materializationSeed);
+    if (seed === null) {
+      setOfficialPackMaterialization({
+        status: "error",
+        message: "Choose a whole-number seed from 0 through 4,294,967,295.",
+      });
+      return;
+    }
+    setBusy(true);
+    setOfficialPackMaterialization({ status: "loading" });
+    try {
+      const materialization = await materializeOfficialPack(
+        officialPackDetail.document.summary.packId,
+        seed,
+      );
+      setOfficialPackMaterialization({ status: "ready", materialization });
+    } catch (error: unknown) {
+      setOfficialPackMaterialization({
+        status: "error",
+        message: error instanceof Error ? error.message : "The official pack could not be materialized.",
+      });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -629,6 +679,7 @@ function BenchmarksView() {
     versionCount: state.status === "ready" ? state.versions.length : 0,
     error: state.status === "error" ? state.message : undefined,
   });
+  const parsedMaterializationSeed = parseOfficialPackSeed(materializationSeed);
 
   return (
     <div className="view-stack">
@@ -771,7 +822,7 @@ function BenchmarksView() {
             <p className="eyebrow">Phase C source records</p>
             <h3>Official benchmark packs</h3>
           </div>
-          <span className="run-status run-status-neutral">read-only</span>
+          <span className="run-status run-status-neutral">source + evidence</span>
         </div>
         {surface === "preview" && (
           <StateMessage icon="◇" title="Browser preview" description={officialPacksPreviewCopy()} />
@@ -796,7 +847,7 @@ function BenchmarksView() {
                   <span>
                     <strong>{pack.packName}</strong>
                     <small>{pack.versionId} · {pack.contentHash.slice(0, 12)}…</small>
-                    <small>{pack.execution.evaluationMode} · {pack.execution.sandboxStatus === "unavailable" ? "sandbox unavailable" : "sandbox not required"}</small>
+                    <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? "Docker required · blocked" : "text generation"}</small>
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>
@@ -822,11 +873,84 @@ function BenchmarksView() {
                     <BoundaryRow label="Canonical bytes" value={String(officialPackDetail.document.summary.documentBytes)} />
                     <BoundaryRow label="Capability" value={`${officialPackDetail.document.summary.execution.capability} · ${officialPackDetail.document.summary.execution.status}`} />
                     <BoundaryRow label="Sandbox" value={officialPackDetail.document.summary.execution.sandboxStatus} />
+                    <BoundaryRow label="Execution boundary" value={officialPackDetail.document.summary.execution.executionBoundary} />
                     <BoundaryRow label="Evaluation" value={officialPackDetail.document.summary.execution.evaluationMode} />
                   </div>
                   {officialPackDetail.document.summary.description && <p className="field-help">{officialPackDetail.document.summary.description}</p>}
                   <p className="field-help">{officialPackDetail.document.summary.execution.requirement}</p>
                   {officialPackDetail.document.summary.execution.notes && <p className="field-help">{officialPackDetail.document.summary.execution.notes}</p>}
+                  {officialPackExecutionState(officialPackDetail.document.summary.execution) === "docker_blocked" && (
+                    <StateMessage
+                      icon="!"
+                      title="Docker execution blocked"
+                      description="This pack requires Docker, which is unavailable in this build. Host execution is never used."
+                      error
+                    />
+                  )}
+                  {officialPackExecutionState(officialPackDetail.document.summary.execution) === "unavailable" && (
+                    <StateMessage
+                      icon="!"
+                      title="Pack execution unavailable"
+                      description="The declared execution boundary is unavailable; no fallback runtime is used."
+                      error
+                    />
+                  )}
+                  <section className="official-pack-materialization results-section" aria-live="polite">
+                    <div className="section-heading compact-heading">
+                      <div>
+                        <p className="eyebrow">Deterministic materialization</p>
+                        <h4>Create seeded evidence</h4>
+                      </div>
+                      <span className="run-status run-status-neutral">immutable</span>
+                    </div>
+                    <p className="field-help">Choose a bounded seed to materialize deterministic case metadata. This stores evidence only; it does not execute the pack.</p>
+                    <div className="arena-actions">
+                      <label className="arena-select-control" htmlFor="official-pack-seed">
+                        <span className="field-label">Seed</span>
+                        <input
+                          id="official-pack-seed"
+                          type="number"
+                          min="0"
+                          max="4294967295"
+                          step="1"
+                          inputMode="numeric"
+                          value={materializationSeed}
+                          disabled={busy}
+                          onChange={(event) => setMaterializationSeed(event.currentTarget.value)}
+                        />
+                      </label>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void handleMaterializeOfficialPack()}
+                        disabled={busy || parsedMaterializationSeed === null}
+                      >
+                        Materialize seed
+                      </button>
+                    </div>
+                    {parsedMaterializationSeed === null && <p className="field-help" role="alert">Seed must be a whole number from 0 through 4,294,967,295.</p>}
+                    {officialPackMaterialization.status === "loading" && (
+                      <StateMessage icon="…" title="Materializing official pack" description="Deriving deterministic case seeds and writing one immutable local evidence record." />
+                    )}
+                    {officialPackMaterialization.status === "error" && (
+                      <StateMessage icon="!" title="Materialization unavailable" description={officialPackMaterialization.message} error />
+                    )}
+                    {officialPackMaterialization.status === "ready" && (
+                      <>
+                        <div className="official-pack-facts">
+                          <BoundaryRow label="Materialization ID" value={officialPackMaterialization.materialization.materializationId} />
+                          <BoundaryRow label="Seed" value={String(officialPackMaterialization.materialization.seed)} />
+                          <BoundaryRow label="Materialized content hash" value={officialPackMaterialization.materialization.materializedContentHash} />
+                          <BoundaryRow label="Saved outcome" value={officialPackMaterialization.materialization.savedOutcome} />
+                          <BoundaryRow label="Seeded cases" value={String(parseDeterministicMaterializationMetadata(officialPackMaterialization.materialization.documentJson)?.caseSeeds.length ?? 0)} />
+                        </div>
+                        <details className="official-pack-document-block">
+                          <summary className="eyebrow">Materialized canonical document</summary>
+                          <pre className="official-pack-document">{officialPackMaterialization.materialization.documentJson}</pre>
+                        </details>
+                      </>
+                    )}
+                  </section>
                   <div className="official-pack-document-block">
                     <p className="eyebrow">Validated canonical document</p>
                     <pre className="official-pack-document">{officialPackDetail.document.documentJson}</pre>
@@ -1314,6 +1438,25 @@ function formatHardwareBytes(value: number): string {
   return formatByteCount(value);
 }
 
+function formatArenaMetric(value: number | null): string {
+  return value === null || !Number.isFinite(value) ? "Not recorded" : value.toFixed(2);
+}
+
+function summaryNumberText(summary: Record<string, unknown>, key: string): string {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "Not recorded";
+}
+
+function summaryPercentText(summary: Record<string, unknown>, key: string): string {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "Not recorded";
+}
+
+function summaryMetricText(summary: Record<string, unknown>, key: string): string {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? formatArenaMetric(value) : "Not recorded";
+}
+
 function formatModelSize(sizeBytes: number | null): string {
   if (sizeBytes === null) return "size unavailable";
   if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
@@ -1714,6 +1857,12 @@ type ArenaSessionState =
   | { status: "error"; message: string }
   | { status: "terminal"; request: ArenaExecutionRequest; results: ArenaExecution[] };
 
+type ArenaSummaryPersistenceState =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "saved"; record: ArenaSummaryRecord; saveOutcome: SaveOutcome }
+  | { status: "error"; message: string };
+
 type ArenaExecutionRequest = Parameters<typeof executeArena>[0];
 
 type ArenaResponseState =
@@ -1735,6 +1884,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [repetitions, setRepetitions] = useState<number>(1);
   const [session, setSession] = useState<ArenaSessionState>({ status: "idle" });
+  const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
   const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
   const cancelRequestedRef = useRef(false);
   const recordsRequestRef = useRef(0);
@@ -1828,6 +1978,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
   useEffect(() => {
     setSession({ status: "idle" });
+    setSummaryPersistence({ status: "idle" });
     setResponseState({ status: "idle" });
     cancelRequestedRef.current = false;
   }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions]);
@@ -1858,6 +2009,8 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       previewError = error instanceof Error ? error.message : "The selected Arena inputs are not runnable.";
     }
   }
+  const dockerExecutionBlocked = preview?.executionBoundary?.kind === "docker_required"
+    && preview.executionBoundary.status === "unavailable";
 
   async function loadResponses(results: ArenaExecution[]) {
     const completed = results.filter((item) => item.execution?.attempt.status === "completed");
@@ -1907,9 +2060,24 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       const results = await executeArena(request, executeRunOnce, (progress) => {
         setSession((current) => current.status === "busy" ? { ...current, progress } : current);
       }, () => !cancelRequestedRef.current);
+      setSummaryPersistence({ status: "saving" });
+      try {
+        const saved = await saveArenaSummary(buildArenaSummaryPayload(request, results));
+        setSummaryPersistence({
+          status: "saved",
+          record: saved.record,
+          saveOutcome: saved.saveOutcome,
+        });
+      } catch (error: unknown) {
+        setSummaryPersistence({
+          status: "error",
+          message: error instanceof Error ? error.message : "The Arena summary could not be saved.",
+        });
+      }
       setSession({ status: "terminal", request, results });
       void loadResponses(results);
     } catch (error: unknown) {
+      setSummaryPersistence({ status: "idle" });
       setSession({ status: "error", message: error instanceof Error ? error.message : "The Arena could not be started." });
     }
   }
@@ -1977,21 +2145,22 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
               <>
                 <div className="arena-preview-facts"><BoundaryRow label="Benchmark" value={preview.benchmarkVersionId} /><BoundaryRow label="Task / case" value={`${preview.taskId} / ${preview.caseId}`} /><BoundaryRow label="Competitors" value={String(selectedProfiles.length)} /><BoundaryRow label="Samples" value={String(selectedProfiles.length * repetitions)} /></div>
                 <div className="arena-prompt-block"><p className="eyebrow">Prompt sent to every competitor</p><pre className="arena-prompt">{preview.prompt}</pre></div>
-                <div className="arena-boundary"><BoundaryRow label="Runtime" value="Ollama · sequential fair mode" /><BoundaryRow label="Endpoint" value={preview.endpoint} /><BoundaryRow label="Failure policy" value="Isolate competitor" /><BoundaryRow label="Worker" value="App-owned one-shot" /></div>
+                <div className="arena-boundary"><BoundaryRow label="Runtime" value="Ollama · sequential fair mode" /><BoundaryRow label="Endpoint" value={preview.endpoint} /><BoundaryRow label="Failure policy" value="Isolate competitor" /><BoundaryRow label="Worker" value="App-owned one-shot" />{preview.executionBoundary && <BoundaryRow label="Execution boundary" value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
+                {dockerExecutionBlocked && <StateMessage icon="!" title="Docker execution blocked" description="This case requires Docker, which is unavailable in this build. Host execution is never used." error />}
                 <div className="arena-actions">
-                  <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2}>Run Arena <span aria-hidden="true">→</span></button>
+                  <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}>Run Arena <span aria-hidden="true">→</span></button>
                   {busy && <button className="secondary-button" type="button" onClick={() => { cancelRequestedRef.current = true; }}>Cancel queued work</button>}
                   <button className="text-button" type="button" onClick={onOpenRuns}>View history <span aria-hidden="true">→</span></button>
                 </div>
               </>
             )}
-            {busy && <div className="arena-execution-status"><StateMessage icon="…" title={`Running ${session.progress.completed}/${session.progress.total}`} description={`${session.progress.currentCompetitor} · repetition ${session.progress.repetition}. Results are persisted per competitor; queued work can be cancelled.`} /></div>}
+            {busy && <div className="arena-execution-status"><StateMessage icon="…" title={summaryPersistence.status === "saving" ? "Saving Arena summary" : `Running ${session.progress.completed}/${session.progress.total}`} description={summaryPersistence.status === "saving" ? "Writing the repetition statistics and per-sample evidence to immutable local storage." : `${session.progress.currentCompetitor} · repetition ${session.progress.repetition}. Results are persisted per competitor; queued work can be cancelled.`} /></div>}
             {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title="Arena could not start" description={session.message} error /></div>}
           </section>
         </div>
       )}
 
-      {session.status === "terminal" && <ArenaResultsSurface request={session.request} results={session.results} responseState={responseState} onOpenRuns={onOpenRuns} />}
+      {session.status === "terminal" && <ArenaResultsSurface request={session.request} results={session.results} responseState={responseState} summaryPersistence={summaryPersistence} onOpenRuns={onOpenRuns} />}
     </div>
   );
 }
@@ -2000,11 +2169,13 @@ function ArenaResultsSurface({
   request,
   results,
   responseState,
+  summaryPersistence,
   onOpenRuns,
 }: {
   request: ArenaExecutionRequest;
   results: ArenaExecution[];
   responseState: ArenaResponseState;
+  summaryPersistence: ArenaSummaryPersistenceState;
   onOpenRuns: () => void;
 }) {
   const [blind, setBlind] = useState(false);
@@ -2018,6 +2189,7 @@ function ArenaResultsSurface({
     : new Map<string, string>();
   const cards = buildBlindArenaCards(results, responseMap);
   const grouped = groupArenaExecutions(results);
+  const competitorSummaries = summarizeArenaCompetitors(results);
   const ranking = lockState === "locked"
     ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.token] ?? 3] as const)))
     : [];
@@ -2061,8 +2233,23 @@ function ArenaResultsSurface({
 
   return (
     <section className="panel arena-results-panel" aria-live="polite">
-      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{summary.completed}/{summary.total} samples completed</h3></div><span className="run-status arena-status-success">Saved</span></div>
+      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{summary.completed}/{summary.total} samples completed</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
       <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>
+      {summaryPersistence.status === "error" && <StateMessage icon="!" title="Aggregate summary unavailable" description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
+      {summaryPersistence.status === "saved" && (
+        <div className="results-section">
+          <p className="eyebrow">Immutable Arena summary</p>
+          <div className="results-facts">
+            <BoundaryRow label="Saved outcome" value={summaryPersistence.saveOutcome} />
+            <BoundaryRow label="Content hash" value={summaryPersistence.record.contentHash} />
+            <BoundaryRow label="Timing uncertainty" value={`${formatArenaMetric(summary.uncertainty)} ms`} />
+            <BoundaryRow label="Timing tie margin" value={`${formatArenaMetric(summary.tieMargin)} ms`} />
+            <BoundaryRow label="Objective uncertainty" value={formatArenaMetric(summary.objectiveUncertainty)} />
+            <BoundaryRow label="Objective tie margin" value={formatArenaMetric(summary.objectiveTieMargin)} />
+            <BoundaryRow label="Per-sample evidence" value={String(summaryPersistence.record.evidence.length)} />
+          </div>
+        </div>
+      )}
       {responseState.status === "loading" && <StateMessage icon="…" title="Reading verified response artifacts" description="Response text is loaded only from app-owned, hash-verified artifacts." />}
       {responseState.status === "error" && <StateMessage icon="!" title="Some responses are unavailable" description={responseState.message} error />}
       {blind && !revealed ? (
@@ -2076,7 +2263,7 @@ function ArenaResultsSurface({
       ) : (
         <>
           <div className="section-heading compact-heading"><div><p className="eyebrow">Comparison</p><h4>Responses by competitor</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>Blind evaluate</button><button className="text-button" type="button" onClick={onOpenRuns}>Open history →</button></div></div>
-          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">Competitor</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} sample{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} /></div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">No response text is available for this competitor. Inspect run history for verified evidence.</p>}<ul className="arena-sample-list">{items.map((item) => <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled")} {item.error ? `· ${item.error}` : ""}</li>)}</ul></article>; })}</div>
+          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">Competitor</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} sample{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">No response text is available for this competitor. Inspect run history for verified evidence.</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`} {item.error ? `· ${item.error}` : ""}</li>; })}</ul></article>; })}</div>
           {ranking.length > 0 && <div className="arena-ranking" aria-label="Arena ranking"><div className="section-heading compact-heading"><div><p className="eyebrow">Ranking</p><h4>Human scores after immutable lock</h4></div><span className="run-status arena-status-success">Revealed</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${entry.value.toFixed(2)}/5 average` : `${Math.round(entry.value * 100)}% objective pass rate`} · n={entry.sampleSize}</span></li>)}</ol></div>}
           {revealed && lockState === "locked" && <p className="field-help" role="status">Blind scores are locked in immutable per-run evaluation records. Responses are now identified.</p>}
           <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => download("json")}>Export JSON</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>Export Markdown</button><button className="secondary-button" type="button" onClick={() => download("csv")}>Export CSV</button></div>
@@ -2171,7 +2358,7 @@ function arenaTerminalStatus(status: string): "success" | "failure" | "cancelled
 
 type RunsState =
   | { status: "loading" }
-  | { status: "ready"; runs: RunRecord[] }
+  | { status: "ready"; runs: RunRecord[]; summaries: ArenaSummaryRecord[] }
   | { status: "error"; message: string };
 
 type AttemptsState =
@@ -2194,9 +2381,9 @@ function RunsView() {
         current = false;
       };
     }
-    void readRuns()
-      .then((runs) => {
-        if (current) setState({ status: "ready", runs });
+    void Promise.all([readRuns(), readArenaSummaries()])
+      .then(([runs, summaries]) => {
+        if (current) setState({ status: "ready", runs, summaries });
       })
       .catch((error: unknown) => {
         if (current) {
@@ -2274,7 +2461,7 @@ function RunsView() {
             error
           />
         )}
-        {state.status === "ready" && state.runs.length === 0 && (
+        {state.status === "ready" && state.runs.length === 0 && state.summaries.length === 0 && (
           <EmptyState
             title="No run history"
             description="There are no local run records yet. No sample runs are bundled or invented in this view."
@@ -2342,7 +2529,132 @@ function RunsView() {
             </section>
           </div>
         )}
+        {state.status === "ready" && <ArenaSummaryHistory summaries={state.summaries} />}
       </section>
+    </div>
+  );
+}
+
+type ArenaSummaryDetailState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; record: ArenaSummaryRecord }
+  | { status: "error"; message: string };
+
+function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] }) {
+  const [selectedArenaId, setSelectedArenaId] = useState("");
+  const [detail, setDetail] = useState<ArenaSummaryDetailState>({ status: "idle" });
+
+  useEffect(() => {
+    if (!summaries.some((summary) => summary.arenaId === selectedArenaId)) {
+      setSelectedArenaId("");
+      setDetail({ status: "idle" });
+    }
+  }, [selectedArenaId, summaries]);
+
+  async function selectSummary(arenaId: string) {
+    setSelectedArenaId(arenaId);
+    setDetail({ status: "loading" });
+    try {
+      const record = await readArenaSummary(arenaId);
+      if (!record) {
+        setDetail({ status: "error", message: "The selected Arena summary no longer exists locally." });
+        return;
+      }
+      setDetail({ status: "ready", record });
+    } catch (error: unknown) {
+      setDetail({
+        status: "error",
+        message: error instanceof Error ? error.message : "The selected Arena summary is unavailable.",
+      });
+    }
+  }
+
+  return (
+    <section className="results-section" aria-live="polite" aria-label="Arena summary history">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Aggregate evidence</p>
+          <h3>Arena summaries</h3>
+        </div>
+        <span className="run-status run-status-neutral">immutable</span>
+      </div>
+      {summaries.length === 0 ? (
+        <p className="field-help">No aggregate Arena summaries have been saved yet.</p>
+      ) : (
+        <div className="runs-layout">
+          <div className="runs-list" aria-label="Arena summary records">
+            {summaries.map((summary) => (
+              <button
+                className={`benchmark-record-row ${selectedArenaId === summary.arenaId ? "is-selected" : ""}`}
+                key={summary.arenaId}
+                type="button"
+                onClick={() => void selectSummary(summary.arenaId)}
+              >
+                <span>
+                  <strong>{summary.arenaId}</strong>
+                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                </span>
+                <span aria-hidden="true">→</span>
+              </button>
+            ))}
+          </div>
+          <div className="attempts-panel">
+            {detail.status === "idle" && <StateMessage icon="◇" title="Select an Arena summary" description="Choose an immutable aggregate record to reload its statistics and sample evidence." />}
+            {detail.status === "loading" && <StateMessage icon="…" title="Loading Arena summary" description="Reading the selected immutable aggregate record." />}
+            {detail.status === "error" && <StateMessage icon="!" title="Arena summary unavailable" description={detail.message} error />}
+            {detail.status === "ready" && (
+              <ArenaSummaryHistoryDetail record={detail.record} />
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
+  const summary = record.summary;
+  return (
+    <div className="arena-summary-history-detail">
+      <div className="results-facts">
+        <BoundaryRow label="Arena" value={record.arenaId} />
+        <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
+        <BoundaryRow label="Content hash" value={record.contentHash} />
+        <BoundaryRow label="Samples" value={String(record.evidence.length)} />
+        <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
+        <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
+        <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
+        <BoundaryRow label="Tie margin" value={summaryMetricText(summary, "tieMargin")} />
+        <BoundaryRow label="Objective uncertainty" value={summaryMetricText(summary, "objectiveUncertainty")} />
+        <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
+      </div>
+      <div className="results-section">
+        <p className="eyebrow">Competitor summaries</p>
+        <ul className="arena-sample-list">
+          {record.competitors.map((competitor, index) => (
+            <li key={`${String(competitor.competitorId ?? index)}`}>
+              <strong>{String(competitor.competitorLabel ?? competitor.competitorId ?? `Competitor ${index + 1}`)}</strong>
+              {` · ${String(competitor.completed ?? 0)}/${String(competitor.total ?? 0)} completed`}
+              {` · uncertainty ${summaryMetricText(competitor, "uncertainty")}`}
+              {` · tie margin ${summaryMetricText(competitor, "tieMargin")}`}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="results-section">
+        <p className="eyebrow">Per-sample evidence</p>
+        <ul className="arena-sample-list">
+          {record.evidence.map((evidence) => (
+            <li key={`${evidence.runId}-${evidence.repetition}`}>
+              <strong>{evidence.competitorLabel} #{evidence.repetition}</strong>
+              {` · ${evidence.status} · ${evidence.durationMs === null ? "duration not recorded" : `${evidence.durationMs.toFixed(0)} ms`}`}
+              {evidence.completionTokens === null ? "" : ` · ${evidence.completionTokens} completion tokens`}
+              {evidence.objectivePassed === null ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`}
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
