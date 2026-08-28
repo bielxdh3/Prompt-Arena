@@ -91,7 +91,12 @@ Acceptance: ranking, regression, tournament, and calibration workflows operate o
 
 Provider catalog and cost-safety helpers exist; no external request is silently enabled. Secure OS credential storage,
 OpenAI-compatible/OpenAI/Anthropic/Gemini adapters, network-egress confirmation, dated prices, budgets, usage, and
-provider identity/version evidence remain to be implemented.
+provider identity evidence are implemented. Successful provider responses now persist immutable sanitized evidence with
+provider/model identity and confidence, network disclosure, usage, estimated/actual cost, budget decisions, and the
+dated price snapshot; Settings can reload this history without prompt/response text or secrets.
+
+P5 remains IN PROGRESS: real native Tauri acceptance of secure configuration, provider calls, history reload, and
+export/log review, plus the remaining security and publication gates, are still pending.
 
 Acceptance: a user with their own credential can run a paid Arena with explicit egress, estimate, ceiling, and immutable
 price/usage history; CI never calls a paid API.

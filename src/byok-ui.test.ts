@@ -13,6 +13,7 @@ import {
   validateByokPriceSnapshot,
   type ByokPriceSnapshotDraft,
 } from "./byok-ui";
+import type { ExternalGenerationEvidenceRecord } from "./bridge";
 
 const PRICE_DRAFT: ByokPriceSnapshotDraft = {
   modelId: "model-example",
@@ -109,5 +110,29 @@ describe("BYOK UI helpers", () => {
       "Explicit cost confirmation is required.",
     );
     expect(byokErrorMessage({ message: "untrusted text" })).not.toContain("untrusted text");
+  });
+
+  it("keeps external history typed to sanitized evidence only", () => {
+    const evidence: ExternalGenerationEvidenceRecord = {
+      generationId: "external-generation-1",
+      providerId: "openai",
+      requestedModel: "model-example",
+      providerModel: "served-model",
+      identityConfidence: "provider_reported",
+      networkUsed: true,
+      usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+      estimated: { inputTokens: 5, outputTokens: 4, inputCostUsd: 0.00001, outputCostUsd: 0.000016, totalCostUsd: 0.000026 },
+      actual: { inputTokens: 2, outputTokens: 3, inputCostUsd: 0.000004, outputCostUsd: 0.000012, totalCostUsd: 0.000016 },
+      preflightDecision: "allow",
+      finalDecision: "allow",
+      priceSnapshot: { providerId: "openai", modelId: "model-example", capturedOn: "2026-08-20", currency: "USD", inputUsdPerMillionTokens: 2, outputUsdPerMillionTokens: 4 },
+      contentHash: "a".repeat(64),
+      createdAt: "100",
+    };
+    const serialized = JSON.stringify(evidence);
+    expect(serialized).not.toContain("prompt");
+    expect(serialized).not.toContain("response");
+    expect(serialized).not.toContain("apiKey");
+    expect(serialized).not.toContain("headers");
   });
 });
