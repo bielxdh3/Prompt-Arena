@@ -1782,6 +1782,272 @@ button.official-pack-row:hover,
   color: var(--color-text);
 }
 
+.advanced-state-panel,
+.advanced-summary-panel,
+.advanced-input-panel,
+.advanced-rankings-panel,
+.advanced-regression-panel,
+.advanced-tournament-panel,
+.advanced-calibration-panel,
+.advanced-evidence-panel {
+  padding: clamp(22px, 3vw, 32px);
+}
+
+.advanced-selection-grid,
+.advanced-boundary-grid,
+.advanced-summary-meta {
+  display: grid;
+  gap: 16px;
+}
+
+.advanced-selection-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.advanced-regression-controls {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.advanced-source-facts,
+.advanced-summary-meta,
+.advanced-boundary-grid {
+  border-top: 1px solid var(--color-border);
+}
+
+.advanced-source-facts {
+  display: grid;
+  gap: 0;
+}
+
+.advanced-summary-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 20px;
+}
+
+.advanced-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.advanced-field {
+  display: block;
+  min-width: 0;
+}
+
+.advanced-field-wide {
+  grid-column: 1 / -1;
+}
+
+.advanced-input,
+.advanced-textarea {
+  width: 100%;
+  padding: 12px 14px;
+  color: var(--color-text);
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.advanced-textarea {
+  min-height: 112px;
+  resize: vertical;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.advanced-input:focus,
+.advanced-textarea:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.advanced-inline-select {
+  display: block;
+  width: min(260px, 100%);
+}
+
+.advanced-ranking-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 16px;
+}
+
+.advanced-ranking-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+}
+
+.advanced-ranking-card .compact-heading {
+  margin-bottom: 0;
+}
+
+.advanced-ranking-list,
+.advanced-schedule-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.advanced-ranking-list li,
+.advanced-schedule-list li {
+  display: grid;
+  gap: 3px;
+  color: var(--color-text-muted);
+}
+
+.advanced-ranking-list li > div {
+  display: grid;
+  gap: 3px;
+}
+
+.advanced-ranking-list strong,
+.advanced-schedule-list strong {
+  color: var(--color-text);
+}
+
+.advanced-ranking-list span,
+.advanced-schedule-list span,
+.advanced-ranking-list small,
+.advanced-schedule-list small {
+  overflow-wrap: anywhere;
+}
+
+.advanced-tie-note {
+  color: var(--color-accent-strong);
+}
+
+.advanced-checkbox {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  margin-top: 18px;
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.advanced-checkbox input {
+  accent-color: var(--color-accent);
+}
+
+.advanced-regression-results,
+.advanced-tournament-result {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.advanced-boundary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.advanced-table-wrap,
+.advanced-regression-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.advanced-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.advanced-table caption {
+  padding: 13px 14px;
+  color: var(--color-text-muted);
+  text-align: left;
+  background: var(--color-surface-soft);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.advanced-table th,
+.advanced-table td {
+  padding: 12px 14px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.advanced-table thead th {
+  color: var(--color-text);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.advanced-table tbody tr:last-child th,
+.advanced-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.advanced-table tbody th {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.advanced-table small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-subtle);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.advanced-table code {
+  color: var(--color-accent-strong);
+  overflow-wrap: anywhere;
+}
+
+.advanced-assessment {
+  display: inline-block;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.advanced-assessment-improved {
+  color: var(--color-success);
+  border-color: rgb(154 198 164 / 0.36);
+}
+
+.advanced-assessment-regressed {
+  color: var(--color-danger);
+  border-color: rgb(224 160 154 / 0.38);
+}
+
+.advanced-assessment-insufficient_data,
+.advanced-assessment-tie {
+  color: var(--color-text-muted);
+}
+
+.advanced-disagreement {
+  padding: 16px;
+  color: var(--color-text);
+  border: 1px solid rgb(224 160 154 / 0.38);
+  border-radius: var(--radius-sm);
+  background: rgb(102 51 47 / 0.19);
+}
+
+.advanced-id-list {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding-left: 18px;
+}
+
 .new-draft-button {
   margin-top: 18px;
 }
@@ -2154,6 +2420,14 @@ button.official-pack-row:hover,
   .arena-layout {
     grid-template-columns: 1fr;
   }
+
+  .advanced-regression-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .advanced-boundary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 680px) {
@@ -2200,6 +2474,22 @@ button.official-pack-row:hover,
 
   .arena-actions button {
     justify-content: center;
+    width: 100%;
+  }
+
+  .advanced-selection-grid,
+  .advanced-regression-controls,
+  .advanced-input-grid,
+  .advanced-summary-meta,
+  .advanced-boundary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .advanced-field-wide {
+    grid-column: auto;
+  }
+
+  .advanced-inline-select {
     width: 100%;
   }
 

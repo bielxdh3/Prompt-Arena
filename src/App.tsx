@@ -172,8 +172,9 @@ import {
   type RecommendationThresholds,
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
+import { AdvancedArenaView } from "./advanced-arena-view";
 
-type ViewId = "overview" | "arena" | "benchmarks" | "models" | "runs" | "settings";
+type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -182,6 +183,7 @@ type ConnectionState =
 const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] = [
   { id: "overview", label: "Overview", description: "Workspace status" },
   { id: "arena", label: "Arena", description: "Compare model revisions" },
+  { id: "advanced-arena", label: "Advanced Arena", description: "Rank saved evidence" },
   { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
   { id: "models", label: "Models", description: "Profiles and local models" },
   { id: "runs", label: "Runs", description: "Execution history" },
@@ -318,6 +320,7 @@ function App() {
         <main className="main-content" id="main-content">
           {activeView === "overview" && <Overview onOpenArena={() => setActiveView("arena")} />}
           {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
+          {activeView === "advanced-arena" && <AdvancedArenaView />}
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView />}
