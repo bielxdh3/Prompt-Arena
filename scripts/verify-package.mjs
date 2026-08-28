@@ -16,6 +16,7 @@ import {
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SMOKE_WAIT_MS = 2_500;
+const SMOKE_TERMINATION_WAIT_MS = 5_000;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
   const configPath = path.join(repositoryRoot, "src-tauri", "tauri.conf.json");
@@ -124,25 +125,45 @@ function launchCommand(executable, args) {
 function launchAndStop(command, args) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timedOut = false;
+    let terminationTimer;
     const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+    const clearTimers = () => {
+      clearTimeout(timer);
+      if (terminationTimer) clearTimeout(terminationTimer);
+    };
+    const resolveStopped = () => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      resolve({ stayedRunning: true });
+    };
     const timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
+      timedOut = true;
       child.kill();
-      resolve({ stayedRunning: true });
+      terminationTimer = setTimeout(resolveStopped, SMOKE_TERMINATION_WAIT_MS);
     }, SMOKE_WAIT_MS);
     child.once("error", (error) => {
-      if (settled) return;
+      if (settled || timedOut) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       reject(new Error(`could not launch ${command}: ${error.message}`));
     });
-    child.once("exit", (code, signal) => {
+    const handleTermination = (code, signal) => {
+      if (timedOut) {
+        resolveStopped();
+        return;
+      }
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       if (code !== null && code !== 0) reject(new Error(`${command} exited with code ${code}${signal ? ` (${signal})` : ""}`));
       else resolve({ stayedRunning: false });
+    };
+    child.once("exit", handleTermination);
+    child.once("close", () => {
+      if (timedOut) resolveStopped();
     });
   });
 }
