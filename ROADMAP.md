@@ -73,9 +73,12 @@ Acceptance: a user discovers and manages supported local runtimes without leavin
 
 ### P4 — Advanced Arena — IN PROGRESS
 
-Single-run comparability diagnostics and explicit per-Arena human/objective ranking exist. Cross-run rankings, regression
-replay, tournaments, calibration storage, frozen AI-judge panels, and explicit human-vs-AI disagreement views remain to
-be implemented.
+Single-run comparability diagnostics and explicit per-Arena human/objective ranking exist. Commit `734633f` implements
+and tests immutable app-owned calibration benchmark/result persistence, frozen AI-judge metadata and panel validation,
+evidence-backed tournament outcomes/standings, and Advanced Arena save/reopen/disagreement UI. Official benchmark-version
+judge integration remains pending.
+
+P4 remains IN PROGRESS: real native Tauri acceptance and the remaining publication/security gates are still pending.
 
 Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence.
 
