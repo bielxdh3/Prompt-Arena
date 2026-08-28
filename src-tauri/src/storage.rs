@@ -1,6 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -9,19 +9,23 @@ use std::{
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::domain::{
     canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
     validate_artifact_ref, validate_benchmark_document, validate_benchmark_document_size, Attempt,
-    BlindEvaluationRecord, ImmutableResultReference, ProfileRevision, Run, ValidatedBenchmark,
-    ValidationError, MAX_BENCHMARK_DOCUMENT_BYTES,
+    BlindEvaluationRecord, ImmutableResultReference, ModelOperation, ModelRecord,
+    ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+    MAX_BENCHMARK_DOCUMENT_BYTES,
 };
 
+use crate::orchestration::MAX_OBJECTIVE_EXPECTATION_BYTES;
 use crate::runtime::GenerationResponse;
 
 pub use crate::domain::ArtifactRef;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 4;
+pub const STORAGE_SCHEMA_VERSION: u32 = 6;
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const FOUNDATION_MIGRATION: &str = include_str!("storage/migrations/0001_foundation.sql");
 pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_core_arena.sql");
@@ -29,6 +33,8 @@ pub const BENCHMARK_DRAFTS_MIGRATION: &str =
     include_str!("storage/migrations/0003_benchmark_drafts.sql");
 pub const BLIND_EVALUATIONS_MIGRATION: &str =
     include_str!("storage/migrations/0004_blind_evaluations.sql");
+pub const P2_EVIDENCE_MIGRATION: &str = include_str!("storage/migrations/0005_p2_evidence.sql");
+pub const MODEL_LIBRARY_MIGRATION: &str = include_str!("storage/migrations/0006_model_library.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = MAX_BENCHMARK_DOCUMENT_BYTES;
@@ -39,6 +45,11 @@ pub const MAX_PROFILE_MODEL_BYTES: usize = 256;
 pub const MAX_PROFILE_RUNTIME_BYTES: usize = 64;
 pub const MAX_PROFILE_SYSTEM_PROMPT_BYTES: usize = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_MANAGED_MODEL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+pub const MAX_MODEL_PATH_BYTES: usize = 512;
+pub const MAX_MODEL_NAME_BYTES: usize = 256;
+pub const MAX_MODEL_METADATA_BYTES: usize = 256 * 1024;
+pub const MAX_MODEL_RECORD_COUNT: usize = 512;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +72,14 @@ impl StorageLayout {
 
     pub fn artifact_root(&self) -> PathBuf {
         self.root.join("artifacts")
+    }
+
+    pub fn model_root(&self) -> PathBuf {
+        self.root.join("models")
+    }
+
+    pub fn managed_model_root(&self) -> PathBuf {
+        self.model_root().join("managed")
     }
 }
 
@@ -183,6 +202,59 @@ pub struct ArtifactRecord {
 pub enum SaveOutcome {
     Saved,
     AlreadyPresent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficialPackMaterializationRecord {
+    pub materialization_id: String,
+    pub pack_id: String,
+    pub version_id: String,
+    pub seed: u64,
+    pub source_content_hash: String,
+    pub case_count: usize,
+    pub task_count: usize,
+    pub document_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArenaExecutionEvidence {
+    pub competitor_id: String,
+    pub competitor_label: String,
+    pub repetition: u32,
+    pub run_id: String,
+    pub attempt_id: Option<String>,
+    pub status: String,
+    pub duration_ms: Option<f64>,
+    #[serde(default)]
+    pub tokens_per_second: Option<f64>,
+    pub completion_tokens: Option<u64>,
+    pub objective_passed: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArenaSummaryPayload {
+    pub arena_id: String,
+    pub benchmark_version_id: String,
+    pub task_id: String,
+    pub case_id: String,
+    pub repetitions: u32,
+    pub pack_id: Option<String>,
+    pub materialization_seed: Option<u64>,
+    pub summary: Value,
+    pub competitors: Vec<Value>,
+    pub evidence: Vec<ArenaExecutionEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArenaSummaryRecord {
+    #[serde(flatten)]
+    pub payload: ArenaSummaryPayload,
+    pub content_hash: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -351,11 +423,15 @@ impl StorageService {
     pub fn initialize(&self) -> Result<(), StorageError> {
         ensure_directory(&self.layout.root)?;
         ensure_directory(&self.layout.artifact_root())?;
+        ensure_directory(&self.layout.model_root())?;
+        ensure_directory(&self.layout.managed_model_root())?;
         let mut connection = self.connection()?;
         apply_migration(&mut connection, 1, FOUNDATION_MIGRATION)?;
         apply_migration(&mut connection, 2, CORE_ARENA_MIGRATION)?;
         apply_migration(&mut connection, 3, BENCHMARK_DRAFTS_MIGRATION)?;
         apply_migration(&mut connection, 4, BLIND_EVALUATIONS_MIGRATION)?;
+        apply_migration(&mut connection, 5, P2_EVIDENCE_MIGRATION)?;
+        apply_migration(&mut connection, 6, MODEL_LIBRARY_MIGRATION)?;
         Ok(())
     }
 
@@ -703,6 +779,357 @@ impl StorageService {
             attempt,
             created_at,
         )
+    }
+
+    pub fn save_official_pack_materialization(
+        &self,
+        materialization: &OfficialPackMaterializationRecord,
+        created_at: &str,
+    ) -> Result<SaveOutcome, StorageError> {
+        validate_official_pack_materialization(materialization)?;
+        save_immutable_json(
+            &self.connection()?,
+            JsonTable::OfficialPackMaterializations,
+            &materialization.materialization_id,
+            materialization,
+            created_at,
+        )
+    }
+
+    pub fn get_official_pack_materialization(
+        &self,
+        materialization_id: &str,
+    ) -> Result<Option<OfficialPackMaterializationRecord>, StorageError> {
+        validate_record_id(materialization_id)?;
+        get_json_record(
+            &self.connection()?,
+            JsonTable::OfficialPackMaterializations,
+            materialization_id,
+        )
+    }
+
+    pub fn list_official_pack_materializations(
+        &self,
+    ) -> Result<Vec<OfficialPackMaterializationRecord>, StorageError> {
+        list_json_records(&self.connection()?, JsonTable::OfficialPackMaterializations)
+    }
+
+    pub fn save_arena_summary(
+        &self,
+        summary: &ArenaSummaryPayload,
+        created_at: &str,
+    ) -> Result<(ArenaSummaryRecord, SaveOutcome), StorageError> {
+        validate_arena_summary(summary)?;
+        let connection = self.connection()?;
+        let outcome = save_immutable_json(
+            &connection,
+            JsonTable::ArenaSummaries,
+            &summary.arena_id,
+            summary,
+            created_at,
+        )?;
+        let (content_hash, stored_created_at): (String, String) = connection
+            .query_row(
+                "SELECT content_hash, created_at FROM arena_summaries WHERE record_id = ?1",
+                params![summary.arena_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        Ok((
+            ArenaSummaryRecord {
+                payload: summary.clone(),
+                content_hash,
+                created_at: stored_created_at,
+            },
+            outcome,
+        ))
+    }
+
+    pub fn get_arena_summary(
+        &self,
+        arena_id: &str,
+    ) -> Result<Option<ArenaSummaryRecord>, StorageError> {
+        validate_record_id(arena_id)?;
+        query_arena_summary(&self.connection()?, arena_id)
+    }
+
+    pub fn list_arena_summaries(&self) -> Result<Vec<ArenaSummaryRecord>, StorageError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT record_id, content_hash, document_json, created_at
+                 FROM arena_summaries ORDER BY created_at, record_id",
+            )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        rows.map(|row| {
+            let (arena_id, content_hash, document_json, created_at) =
+                row.map_err(|_| StorageError::DatabaseFailure)?;
+            let payload: ArenaSummaryPayload =
+                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
+            if payload.arena_id != arena_id {
+                return Err(StorageError::DatabaseFailure);
+            }
+            Ok(ArenaSummaryRecord {
+                payload,
+                content_hash,
+                created_at,
+            })
+        })
+        .collect()
+    }
+
+    pub fn save_model_record(
+        &self,
+        record: &ModelRecord,
+        created_at: &str,
+    ) -> Result<SaveOutcome, StorageError> {
+        validate_model_record(record)?;
+        save_immutable_json(
+            &self.connection()?,
+            JsonTable::ModelRecords,
+            &record.model_id,
+            record,
+            created_at,
+        )
+    }
+
+    pub fn get_model_record(&self, model_id: &str) -> Result<Option<ModelRecord>, StorageError> {
+        validate_record_id(model_id)?;
+        get_json_record(&self.connection()?, JsonTable::ModelRecords, model_id)
+    }
+
+    pub fn list_model_records(&self) -> Result<Vec<ModelRecord>, StorageError> {
+        list_json_records(&self.connection()?, JsonTable::ModelRecords)
+    }
+
+    pub fn read_managed_model_prefix(
+        &self,
+        relative_path: &str,
+        max_bytes: usize,
+    ) -> Result<(u64, Vec<u8>), StorageError> {
+        validate_managed_model_path(relative_path)?;
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(StorageError::InvalidRecordId);
+        }
+        let size = metadata.len();
+        if size > MAX_MANAGED_MODEL_BYTES {
+            return Err(StorageError::MetadataTooLarge);
+        }
+        let read_limit = max_bytes
+            .min(MAX_MODEL_METADATA_BYTES)
+            .min(size.min(usize::MAX as u64) as usize);
+        let file = fs::File::open(&target).map_err(StorageError::from_io)?;
+        let mut bytes = Vec::with_capacity(read_limit);
+        file.take(read_limit as u64)
+            .read_to_end(&mut bytes)
+            .map_err(StorageError::from_io)?;
+        Ok((size, bytes))
+    }
+
+    pub fn remove_managed_model(
+        &self,
+        relative_path: &str,
+        expected_content_hash: Option<&str>,
+    ) -> Result<(u64, String), StorageError> {
+        validate_managed_model_path(relative_path)?;
+        if let Some(expected_content_hash) = expected_content_hash {
+            validate_sha256(expected_content_hash)?;
+        }
+
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let (size, content_hash) = hash_managed_model_file(&target)?;
+        if expected_content_hash
+            .is_some_and(|expected| !expected.eq_ignore_ascii_case(&content_hash))
+        {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != size {
+            return Err(StorageError::InvalidRecordId);
+        }
+        fs::remove_file(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        Ok((size, content_hash))
+    }
+
+    pub fn save_model_operation(
+        &self,
+        operation: &ModelOperation,
+    ) -> Result<SaveOutcome, StorageError> {
+        validate_model_operation(operation)?;
+        let json = serde_json::to_value(operation).map_err(|_| StorageError::DatabaseFailure)?;
+        let (document_json, content_hash) = canonical_json_and_hash(&json)?;
+        ensure_metadata_size(&document_json)?;
+        let connection = self.connection()?;
+        let existing: Option<String> = connection
+            .query_row(
+                "SELECT content_hash FROM model_operations WHERE record_id = ?1",
+                params![operation.operation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        if existing.as_ref().is_some_and(|hash| hash == &content_hash) {
+            return Ok(SaveOutcome::AlreadyPresent);
+        }
+        if existing.is_some() {
+            connection
+                .execute(
+                    "UPDATE model_operations
+                     SET content_hash = ?2, document_json = ?3, updated_at = ?4
+                     WHERE record_id = ?1",
+                    params![
+                        operation.operation_id,
+                        content_hash,
+                        document_json,
+                        operation.updated_at
+                    ],
+                )
+                .map_err(|_| StorageError::DatabaseFailure)?;
+        } else {
+            connection
+                .execute(
+                    "INSERT INTO model_operations
+                     (record_id, content_hash, document_json, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        operation.operation_id,
+                        content_hash,
+                        document_json,
+                        operation.created_at,
+                        operation.updated_at
+                    ],
+                )
+                .map_err(|_| StorageError::DatabaseFailure)?;
+        }
+        let event_id = format!("{}-{}", operation.operation_id, &content_hash[..16]);
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO model_operation_events
+                 (event_id, operation_id, content_hash, document_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    event_id,
+                    operation.operation_id,
+                    content_hash,
+                    document_json,
+                    operation.updated_at
+                ],
+            )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        Ok(if existing.is_some() {
+            SaveOutcome::AlreadyPresent
+        } else {
+            SaveOutcome::Saved
+        })
+    }
+
+    pub fn get_model_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<ModelOperation>, StorageError> {
+        validate_record_id(operation_id)?;
+        let connection = self.connection()?;
+        let document: Option<String> = connection
+            .query_row(
+                "SELECT document_json FROM model_operations WHERE record_id = ?1",
+                params![operation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        document
+            .map(|value| serde_json::from_str(&value).map_err(|_| StorageError::DatabaseFailure))
+            .transpose()
+    }
+
+    pub fn list_model_operations(&self) -> Result<Vec<ModelOperation>, StorageError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT document_json FROM model_operations ORDER BY updated_at, record_id")
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        rows.map(|row| {
+            let document = row.map_err(|_| StorageError::DatabaseFailure)?;
+            serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure)
+        })
+        .collect()
+    }
+
+    pub fn list_model_operation_events(
+        &self,
+        operation_id: &str,
+    ) -> Result<Vec<ModelOperation>, StorageError> {
+        validate_record_id(operation_id)?;
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT document_json FROM model_operation_events
+                 WHERE operation_id = ?1 ORDER BY rowid",
+            )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let rows = statement
+            .query_map(params![operation_id], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        rows.map(|row| {
+            let document = row.map_err(|_| StorageError::DatabaseFailure)?;
+            serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure)
+        })
+        .collect()
+    }
+
+    pub fn save_model_removal(
+        &self,
+        removal: &ModelRemovalEvidence,
+    ) -> Result<SaveOutcome, StorageError> {
+        validate_model_removal(removal)?;
+        save_immutable_json(
+            &self.connection()?,
+            JsonTable::ModelRemovals,
+            &removal.removal_id,
+            removal,
+            &removal.removed_at,
+        )
+    }
+
+    pub fn list_model_removals(&self) -> Result<Vec<ModelRemovalEvidence>, StorageError> {
+        list_json_records(&self.connection()?, JsonTable::ModelRemovals)
     }
 
     pub fn save_attempt_and_result(
@@ -1065,6 +1492,10 @@ enum JsonTable {
     Runs,
     Attempts,
     BlindEvaluations,
+    OfficialPackMaterializations,
+    ArenaSummaries,
+    ModelRecords,
+    ModelRemovals,
 }
 
 impl JsonTable {
@@ -1074,6 +1505,10 @@ impl JsonTable {
             Self::Runs => "runs",
             Self::Attempts => "attempts",
             Self::BlindEvaluations => "blind_evaluations",
+            Self::OfficialPackMaterializations => "official_pack_materializations",
+            Self::ArenaSummaries => "arena_summaries",
+            Self::ModelRecords => "model_records",
+            Self::ModelRemovals => "model_removals",
         }
     }
 }
@@ -1161,6 +1596,178 @@ fn get_json_record<T: DeserializeOwned>(
         .transpose()
 }
 
+const MAX_OFFICIAL_PACK_SEED: u64 = u32::MAX as u64;
+const MAX_OFFICIAL_PACK_ITEMS: usize = 128;
+const MAX_ARENA_SUMMARY_COMPETITORS: usize = 8;
+const MAX_ARENA_SUMMARY_EVIDENCE: usize = 80;
+const MAX_BOUNDED_JSON_DEPTH: usize = 16;
+const MAX_BOUNDED_JSON_ENTRIES: usize = 128;
+
+fn validate_official_pack_materialization(
+    materialization: &OfficialPackMaterializationRecord,
+) -> Result<(), StorageError> {
+    validate_record_id(&materialization.materialization_id)?;
+    validate_record_id(&materialization.pack_id)?;
+    validate_benchmark_version_id(&materialization.version_id)?;
+    validate_sha256(&materialization.source_content_hash)?;
+    if materialization.seed > MAX_OFFICIAL_PACK_SEED
+        || materialization.task_count > MAX_OFFICIAL_PACK_ITEMS
+        || materialization.case_count > MAX_OFFICIAL_PACK_ITEMS
+        || materialization.document_json.len() > MAX_BENCHMARK_DOCUMENT_BYTES
+    {
+        return Err(StorageError::MetadataTooLarge);
+    }
+    let validated = validate_benchmark_document(&materialization.document_json)
+        .map_err(StorageError::BenchmarkInvalid)?;
+    if validated.version_id != materialization.version_id
+        || validated.document.pack.pack_id != materialization.pack_id
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageError> {
+    validate_record_id(&summary.arena_id)?;
+    validate_benchmark_version_id(&summary.benchmark_version_id)?;
+    validate_summary_identifier(&summary.task_id)?;
+    validate_summary_identifier(&summary.case_id)?;
+    if !(1..=10).contains(&summary.repetitions)
+        || summary.competitors.len() > MAX_ARENA_SUMMARY_COMPETITORS
+        || summary.evidence.len() > MAX_ARENA_SUMMARY_EVIDENCE
+        || summary
+            .materialization_seed
+            .is_some_and(|seed| seed > MAX_OFFICIAL_PACK_SEED)
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    if let Some(pack_id) = &summary.pack_id {
+        validate_record_id(pack_id)?;
+    }
+    validate_bounded_json(&summary.summary, 0)?;
+    for competitor in &summary.competitors {
+        validate_bounded_json(competitor, 0)?;
+    }
+    for evidence in &summary.evidence {
+        validate_summary_identifier(&evidence.competitor_id)?;
+        validate_bounded_text(&evidence.competitor_label, 256)?;
+        validate_summary_identifier(&evidence.run_id)?;
+        if let Some(attempt_id) = &evidence.attempt_id {
+            validate_summary_identifier(attempt_id)?;
+        }
+        validate_bounded_text(&evidence.status, 64)?;
+        if evidence.repetition == 0 || evidence.repetition > 10 {
+            return Err(StorageError::InvalidRecordId);
+        }
+        if evidence
+            .duration_ms
+            .is_some_and(|duration| !duration.is_finite() || duration < 0.0)
+        {
+            return Err(StorageError::InvalidRecordId);
+        }
+        if evidence
+            .tokens_per_second
+            .is_some_and(|rate| !rate.is_finite() || rate < 0.0)
+        {
+            return Err(StorageError::InvalidRecordId);
+        }
+    }
+    let json = serde_json::to_value(summary).map_err(|_| StorageError::DatabaseFailure)?;
+    let document_json = canonical_json_value(&json).map_err(|_| StorageError::DatabaseFailure)?;
+    ensure_metadata_size(&document_json)
+}
+
+fn query_arena_summary(
+    connection: &Connection,
+    arena_id: &str,
+) -> Result<Option<ArenaSummaryRecord>, StorageError> {
+    connection
+        .query_row(
+            "SELECT content_hash, document_json, created_at
+             FROM arena_summaries WHERE record_id = ?1",
+            params![arena_id],
+            |row| {
+                let content_hash: String = row.get(0)?;
+                let document_json: String = row.get(1)?;
+                let created_at: String = row.get(2)?;
+                Ok((content_hash, document_json, created_at))
+            },
+        )
+        .optional()
+        .map_err(|_| StorageError::DatabaseFailure)?
+        .map(|(content_hash, document_json, created_at)| {
+            let payload: ArenaSummaryPayload =
+                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
+            if payload.arena_id != arena_id {
+                return Err(StorageError::DatabaseFailure);
+            }
+            Ok(ArenaSummaryRecord {
+                payload,
+                content_hash,
+                created_at,
+            })
+        })
+        .transpose()
+}
+
+fn validate_sha256(value: &str) -> Result<(), StorageError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_summary_identifier(value: &str) -> Result<(), StorageError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_bounded_text(value: &str, max_bytes: usize) -> Result<(), StorageError> {
+    if value.is_empty() || value.len() > max_bytes || value.contains('\0') {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_bounded_json(value: &Value, depth: usize) -> Result<(), StorageError> {
+    if depth > MAX_BOUNDED_JSON_DEPTH {
+        return Err(StorageError::MetadataTooLarge);
+    }
+    match value {
+        Value::Array(values) => {
+            if values.len() > MAX_BOUNDED_JSON_ENTRIES {
+                return Err(StorageError::MetadataTooLarge);
+            }
+            for child in values {
+                validate_bounded_json(child, depth + 1)?;
+            }
+        }
+        Value::Object(map) => {
+            if map.len() > MAX_BOUNDED_JSON_ENTRIES {
+                return Err(StorageError::MetadataTooLarge);
+            }
+            for (key, child) in map {
+                if key.is_empty() || key.len() > 512 || key.contains('\0') {
+                    return Err(StorageError::InvalidRecordId);
+                }
+                validate_bounded_json(child, depth + 1)?;
+            }
+        }
+        Value::String(text) if text.len() > MAX_OBJECTIVE_EXPECTATION_BYTES => {
+            return Err(StorageError::MetadataTooLarge);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn validate_record_id(record_id: &str) -> Result<(), StorageError> {
     if record_id.is_empty()
         || record_id.len() > 128
@@ -1214,6 +1821,190 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
     let request_bytes = serde_json::to_vec(revision).map_err(|_| StorageError::DatabaseFailure)?;
     if request_bytes.len() > MAX_PROFILE_REQUEST_BYTES {
         return Err(StorageError::ProfileRequestTooLarge);
+    }
+    Ok(())
+}
+
+fn validate_model_record(record: &ModelRecord) -> Result<(), StorageError> {
+    validate_record_id(&record.model_id)?;
+    validate_record_id(&record.source_id)?;
+    validate_model_text(&record.name, MAX_MODEL_NAME_BYTES)?;
+    for value in [
+        record.endpoint.as_deref(),
+        record.path.as_deref(),
+        record.digest.as_deref(),
+        record.family.as_deref(),
+        record.parameter_size.as_deref(),
+        record.quantization_level.as_deref(),
+        record.modified_at.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        validate_model_text(value, MAX_MODEL_PATH_BYTES)?;
+    }
+    if let Some(path) = &record.managed_path {
+        validate_managed_model_path(path)?;
+    }
+    if record.managed != record.managed_path.is_some() {
+        return Err(StorageError::InvalidRecordId);
+    }
+    if record
+        .size_bytes
+        .is_some_and(|size| size > MAX_MANAGED_MODEL_BYTES)
+    {
+        return Err(StorageError::MetadataTooLarge);
+    }
+    if let Some(content_hash) = &record.content_hash {
+        validate_sha256(content_hash)?;
+    }
+    validate_model_metadata(&record.metadata)
+}
+
+fn validate_model_operation(operation: &ModelOperation) -> Result<(), StorageError> {
+    validate_record_id(&operation.operation_id)?;
+    for value in [
+        operation.source_id.as_deref(),
+        operation.model_id.as_deref(),
+    ] {
+        if let Some(value) = value {
+            validate_record_id(value)?;
+        }
+    }
+    if let Some(model_name) = &operation.model_name {
+        validate_model_text(model_name, MAX_MODEL_NAME_BYTES)?;
+    }
+    if let Some(managed_path) = &operation.managed_path {
+        validate_managed_model_path(managed_path)?;
+    }
+    if let Some(bytes_total) = operation.bytes_total {
+        if bytes_total > MAX_MANAGED_MODEL_BYTES {
+            return Err(StorageError::MetadataTooLarge);
+        }
+        if operation.bytes_completed > bytes_total {
+            return Err(StorageError::InvalidRecordId);
+        }
+    }
+    if operation.bytes_completed > MAX_MANAGED_MODEL_BYTES
+        || operation
+            .progress_percent
+            .is_some_and(|progress| progress > 100)
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    if let Some(content_hash) = &operation.content_hash {
+        validate_sha256(content_hash)?;
+    }
+    validate_model_text(&operation.created_at, 64)?;
+    validate_model_text(&operation.updated_at, 64)?;
+    if let Some(message) = &operation.message {
+        validate_model_text(message, MAX_MODEL_PATH_BYTES)?;
+    }
+    Ok(())
+}
+
+fn validate_model_removal(removal: &ModelRemovalEvidence) -> Result<(), StorageError> {
+    validate_record_id(&removal.removal_id)?;
+    validate_record_id(&removal.model_id)?;
+    validate_managed_model_path(&removal.managed_path)?;
+    validate_sha256(&removal.content_hash)?;
+    validate_model_text(&removal.removed_at, 64)?;
+    validate_model_text(&removal.outcome, 64)
+}
+
+fn validate_model_text(value: &str, max_bytes: usize) -> Result<(), StorageError> {
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_managed_model_path(path: &str) -> Result<(), StorageError> {
+    validate_model_text(path, MAX_MODEL_PATH_BYTES)?;
+    if path.contains('\\')
+        || path.starts_with('/')
+        || path.as_bytes().get(1) == Some(&b':')
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn safe_existing_managed_model_path(
+    model_root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, StorageError> {
+    let root_metadata = fs::symlink_metadata(model_root).map_err(StorageError::from_io)?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(StorageError::InvalidRecordId);
+    }
+    let mut current = model_root.to_path_buf();
+    let segments: Vec<&str> = relative_path.split('/').collect();
+    for (index, segment) in segments.iter().enumerate() {
+        current.push(segment);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || (index + 1 < segments.len() && !metadata.is_dir()) {
+            return Err(StorageError::InvalidRecordId);
+        }
+    }
+    Ok(current)
+}
+
+fn hash_managed_model_file(target: &Path) -> Result<(u64, String), StorageError> {
+    let metadata = fs::symlink_metadata(target).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            StorageError::ArtifactNotFound
+        } else {
+            StorageError::from_io(error)
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(StorageError::InvalidRecordId);
+    }
+    if metadata.len() > MAX_MANAGED_MODEL_BYTES {
+        return Err(StorageError::MetadataTooLarge);
+    }
+
+    let mut file = fs::File::open(target).map_err(StorageError::from_io)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut size = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).map_err(StorageError::from_io)?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .filter(|size| *size <= MAX_MANAGED_MODEL_BYTES)
+            .ok_or(StorageError::MetadataTooLarge)?;
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    let content_hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok((size, content_hash))
+}
+
+fn validate_model_metadata(
+    metadata: &std::collections::BTreeMap<String, Value>,
+) -> Result<(), StorageError> {
+    if metadata.keys().any(|key| {
+        key.is_empty() || key.len() > MAX_MODEL_NAME_BYTES || key.chars().any(char::is_control)
+    }) {
+        return Err(StorageError::InvalidRecordId);
+    }
+    let metadata_bytes = serde_json::to_vec(metadata).map_err(|_| StorageError::DatabaseFailure)?;
+    if metadata_bytes.len() > MAX_MODEL_METADATA_BYTES {
+        return Err(StorageError::MetadataTooLarge);
     }
     Ok(())
 }
@@ -1504,15 +2295,16 @@ mod tests {
     use serde_json::json;
 
     use crate::domain::{
-        validate_benchmark_document, Attempt, ImmutableResultReference, ProfileRevision, Run,
+        sha256_hex, validate_benchmark_document, Attempt, ImmutableResultReference,
+        ProfileRevision, Run,
     };
 
     use super::{
-        ArtifactRef, ArtifactStore, BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout,
-        StorageService, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
-        BLIND_EVALUATIONS_MIGRATION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
-        MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES, MAX_PROFILE_MODEL_BYTES,
-        MAX_PROFILE_REQUEST_BYTES,
+        ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
+        BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout, StorageService,
+        ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
+        FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
+        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1620,9 +2412,15 @@ mod tests {
     fn migration_setup_is_idempotent_and_preserves_history() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
-        assert_eq!(service.migration_versions().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            service.migration_versions().unwrap(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
         service.initialize().expect("second migration pass");
-        assert_eq!(service.migration_versions().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            service.migration_versions().unwrap(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
         assert!(FOUNDATION_MIGRATION.contains("CREATE TABLE"));
         assert!(!FOUNDATION_MIGRATION
             .to_ascii_uppercase()
@@ -1635,6 +2433,55 @@ mod tests {
         assert!(!BLIND_EVALUATIONS_MIGRATION
             .to_ascii_uppercase()
             .contains("DROP TABLE"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn arena_summaries_are_immutable_replayable_and_listed() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let summary = ArenaSummaryPayload {
+            arena_id: "arena-1".to_owned(),
+            benchmark_version_id: "logic@1".to_owned(),
+            task_id: "task".to_owned(),
+            case_id: "case".to_owned(),
+            repetitions: 1,
+            pack_id: None,
+            materialization_seed: Some(42),
+            summary: json!({"total": 1, "uncertainty": 0.1, "tieMargin": 0.2}),
+            competitors: vec![json!({"competitorId": "profile-1@1", "uncertainty": 0.1})],
+            evidence: vec![ArenaExecutionEvidence {
+                competitor_id: "profile-1@1".to_owned(),
+                competitor_label: "model".to_owned(),
+                repetition: 1,
+                run_id: "arena-1-1-1".to_owned(),
+                attempt_id: Some("attempt-1".to_owned()),
+                status: "completed".to_owned(),
+                duration_ms: Some(12.5),
+                tokens_per_second: Some(4.0),
+                completion_tokens: Some(4),
+                objective_passed: Some(true),
+            }],
+        };
+
+        let (first, first_outcome) = service
+            .save_arena_summary(&summary, "100")
+            .expect("summary saves");
+        assert_eq!(first_outcome, SaveOutcome::Saved);
+        let (replay, replay_outcome) = service
+            .save_arena_summary(&summary, "200")
+            .expect("summary replay saves");
+        assert_eq!(replay, first);
+        assert_eq!(replay_outcome, SaveOutcome::AlreadyPresent);
+
+        let mut changed = summary.clone();
+        changed.summary["tieMargin"] = json!(9.0);
+        assert_eq!(
+            service.save_arena_summary(&changed, "300"),
+            Err(StorageError::ImmutableConflict)
+        );
+        assert_eq!(service.get_arena_summary("arena-1").unwrap(), Some(first));
+        assert_eq!(service.list_arena_summaries().unwrap().len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2160,6 +3007,59 @@ mod tests {
             service.save_profile_revision(&oversized_request, "300"),
             Err(StorageError::ProfileRequestTooLarge)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_model_removal_is_hash_checked_and_root_bounded() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let relative_path = "nested/model.gguf";
+        let target = service.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        let payload = b"managed model bytes";
+        fs::write(&target, payload).unwrap();
+
+        let outside = root.join("outside.gguf");
+        fs::write(&outside, payload).unwrap();
+        for path in [
+            "../outside.gguf",
+            "nested/../outside.gguf",
+            "C:/outside.gguf",
+        ] {
+            assert_eq!(
+                service.remove_managed_model(path, None),
+                Err(StorageError::InvalidRecordId)
+            );
+            assert_eq!(
+                service.read_managed_model_prefix(path, 0),
+                Err(StorageError::InvalidRecordId)
+            );
+        }
+        assert!(outside.exists());
+
+        let wrong_hash = "0".repeat(64);
+        assert_eq!(
+            service.remove_managed_model(relative_path, Some(&wrong_hash)),
+            Err(StorageError::ArtifactHashMismatch)
+        );
+        assert!(target.exists());
+
+        let expected_hash = sha256_hex(payload);
+        assert_eq!(
+            service.remove_managed_model(relative_path, Some(&expected_hash)),
+            Ok((payload.len() as u64, expected_hash.clone()))
+        );
+        assert!(!target.exists());
+
+        let directory = service.layout().managed_model_root().join("directory.gguf");
+        fs::create_dir_all(&directory).unwrap();
+        assert_eq!(
+            service.remove_managed_model("directory.gguf", None),
+            Err(StorageError::InvalidRecordId)
+        );
+        assert!(directory.is_dir());
+
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -1,10 +1,12 @@
 import type {
+  ExecutionBoundary,
   BenchmarkVersion as PublishedBenchmarkVersion,
   GenerationParameters,
   OllamaConfig,
   ProfileRevision,
   RunPlan,
 } from "./bridge";
+import { normalizeObjectivePolicy, type ObjectiveVerifierPolicy } from "./objective-verifiers";
 
 const DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434";
 const MAX_RUN_PLAN_BYTES = 256 * 1024;
@@ -33,6 +35,7 @@ export type BuildRunPlanInput = {
   taskId: string;
   caseId: string;
   profileRevision: ProfileRevision;
+  metadata?: Record<string, unknown>;
 };
 
 export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
@@ -79,8 +82,13 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   if (benchmarkVersion.versionId !== benchmarkVersionId || benchmarkVersionId !== summaryVersionId) {
     throw new Error("Benchmark document version identity is invalid.");
   }
-  if (benchmarkVersion.defaultRepetitions !== 1) {
-    throw new Error("This bounded run-plan slice supports exactly one repetition.");
+  if (
+    typeof benchmarkVersion.defaultRepetitions !== "number"
+    || !Number.isSafeInteger(benchmarkVersion.defaultRepetitions)
+    || benchmarkVersion.defaultRepetitions < 1
+    || benchmarkVersion.defaultRepetitions > 10
+  ) {
+    throw new Error("Benchmark repetitions must be between one and ten.");
   }
 
   const tasks = arrayValue(benchmarkVersion.tasks, "Benchmark tasks");
@@ -104,11 +112,13 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   const benchmarkCase = record(matchingCases[0], "Benchmark case");
   identifier(benchmarkCase.caseId, "Case ID", MAX_PROFILE_ID_BYTES);
   const casePrompt = optionalPrompt(benchmarkCase.prompt, "Case prompt", MAX_RUN_PLAN_BYTES);
-  const objectiveExpectation = objectiveExpectationValue(benchmarkCase.expected);
+  const verifierPolicy = objectiveVerifierPolicy(benchmarkCase);
+  const objectiveExpectation = verifierPolicy?.kind === "exact_text" ? objectiveExpectationValue(verifierPolicy.expected) : null;
+  const executionBoundary = executionBoundaryValue(documentRecord, task, benchmarkCase);
 
   const profile = normalizeProfile(input.profileRevision);
   const prompt = combinePrompts([taskPrompt, casePrompt]);
-  const systemPrompt = combinePrompts([profile.systemPrompt, taskSystemPrompt]);
+  const systemPrompt = combineOptionalPrompts([profile.systemPrompt, taskSystemPrompt]);
   const plan: RunPlan = {
     runId,
     benchmarkVersionId: summaryVersionId,
@@ -129,6 +139,9 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
     },
     runtimeConfig: defaultOllamaConfig(),
     objectiveExpectation,
+    verifierPolicy,
+    executionBoundary,
+    metadata: boundedJsonRecord(input.metadata ?? {}, "Run metadata", MAX_RUN_PLAN_BYTES),
   };
   if (bytes(JSON.stringify(plan)) > MAX_RUN_PLAN_BYTES) {
     throw new Error("Run plan exceeds the one-shot request size limit.");
@@ -237,6 +250,11 @@ function combinePrompts(parts: Array<string | null>): string {
   return combined;
 }
 
+function combineOptionalPrompts(parts: Array<string | null>): string | null {
+  const combined = parts.filter((part): part is string => part !== null).join("\n\n").trim();
+  return combined || null;
+}
+
 function requiredPrompt(value: unknown, label: string): string {
   const prompt = optionalPrompt(value, label, MAX_RUN_PLAN_BYTES);
   if (prompt === null) throw new Error(`${label} is required.`);
@@ -259,6 +277,37 @@ function objectiveExpectationValue(value: unknown): string | null {
     throw new Error("Objective expectation is outside the local bounds.");
   }
   return value;
+}
+
+function objectiveVerifierPolicy(benchmarkCase: Record<string, unknown>): ObjectiveVerifierPolicy | null {
+  const explicit = benchmarkCase.verifierPolicy ?? benchmarkCase.objectiveVerifier ?? benchmarkCase.verifier;
+  if (explicit !== undefined) {
+    const normalized = normalizeObjectivePolicy(explicit);
+    if (!normalized) throw new Error("Benchmark case verifier policy is invalid.");
+    return normalized;
+  }
+  if (typeof benchmarkCase.expected === "string") {
+    objectiveExpectationValue(benchmarkCase.expected);
+    return { kind: "exact_text", expected: benchmarkCase.expected };
+  }
+  return null;
+}
+
+function executionBoundaryValue(
+  document: Record<string, unknown>,
+  task: Record<string, unknown>,
+  benchmarkCase: Record<string, unknown>,
+): ExecutionBoundary {
+  const execution = isRecord(document.execution) ? document.execution : null;
+  const raw = benchmarkCase.executionBoundary ?? task.executionBoundary ?? document.executionBoundary ?? execution?.executionBoundary;
+  if (raw === "docker_required") {
+    return {
+      kind: "docker_required",
+      status: "unavailable",
+      reason: typeof execution?.notes === "string" ? execution.notes : "Docker execution is unavailable; host execution is prohibited.",
+    };
+  }
+  return { kind: "text_generation", status: "available", reason: null };
 }
 
 function text(value: unknown, label: string, maxBytes: number): string {

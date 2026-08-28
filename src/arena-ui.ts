@@ -1,4 +1,5 @@
-import type { BenchmarkVersionSummary, ProfileRevision, RunPlan } from "./bridge";
+import type { BenchmarkVersionSummary, ExecutionBoundary, ProfileRevision, RunPlan } from "./bridge";
+import type { ObjectiveVerifierPolicy } from "./objective-verifiers";
 
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_IDENTIFIER_BYTES = 128;
@@ -12,6 +13,9 @@ export type ArenaOption = {
 export type ArenaCase = {
   caseId: string;
   prompt: string | null;
+  expected: unknown | null;
+  verifierPolicy: ObjectiveVerifierPolicy | null;
+  executionBoundary: ExecutionBoundary["kind"];
 };
 
 export type ArenaTask = {
@@ -39,10 +43,12 @@ export type ArenaPreview = {
   systemPrompt: string | null;
   endpoint: string;
   repetitions: 1;
+  verifierKind?: ObjectiveVerifierPolicy["kind"] | "human_review";
+  executionBoundary?: ExecutionBoundary;
 };
 
 export function arenaPreviewCopy(): string {
-  return "Browser preview shows the Arena contract only. It does not read desktop records or execute a model; it does not create run state.";
+  return "Browser preview shows the Arena builder only. It does not read desktop records or execute a model; it does not create run state.";
 }
 
 export function arenaEmptyCopy(kind: "versions" | "profiles" | "tasks" | "cases"): string {
@@ -121,7 +127,17 @@ export function parseArenaDocument(documentJson: string): ArenaDocument {
       const caseId = identifier(benchmarkCase.caseId, `Case ${taskId}/${caseIndex + 1} ID`);
       if (caseIds.has(caseId)) throw new Error(`Task ${taskId} case identities are ambiguous.`);
       caseIds.add(caseId);
-      return { caseId, prompt: optionalPrompt(benchmarkCase.prompt, `Case ${taskId}/${caseId} prompt`) };
+      const verifierPolicy = benchmarkCase.verifierPolicy ?? benchmarkCase.objectiveVerifier ?? benchmarkCase.verifier;
+      const executionBoundary: ArenaCase["executionBoundary"] = benchmarkCase.executionBoundary === "docker_required" || task.executionBoundary === "docker_required"
+        ? "docker_required"
+        : "text_generation";
+      return {
+        caseId,
+        prompt: optionalPrompt(benchmarkCase.prompt, `Case ${taskId}/${caseId} prompt`),
+        expected: benchmarkCase.expected ?? null,
+        verifierPolicy: verifierPolicy && typeof verifierPolicy === "object" ? verifierPolicy as ObjectiveVerifierPolicy : null,
+        executionBoundary,
+      };
     });
     return { taskId, name, prompt, systemPrompt, cases };
   });
@@ -158,6 +174,8 @@ export function arenaPreviewFromPlan(plan: RunPlan, taskId: string): ArenaPrevie
     systemPrompt: plan.generation.systemPrompt,
     endpoint: plan.runtimeConfig.endpoint,
     repetitions: 1,
+    ...(plan.verifierPolicy ? { verifierKind: plan.verifierPolicy.kind } : {}),
+    ...(plan.executionBoundary.kind !== "text_generation" ? { executionBoundary: plan.executionBoundary } : {}),
   };
 }
 

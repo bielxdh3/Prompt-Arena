@@ -132,6 +132,170 @@ pub struct ProfileRevision {
     pub extra: ExtraFields,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelBackend {
+    Ollama,
+    LmStudio,
+    LlamaCpp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSourceStatus {
+    Available,
+    Unavailable,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelAvailability {
+    Available,
+    Unavailable,
+    Removed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRecord {
+    pub model_id: String,
+    pub source_id: String,
+    pub backend: ModelBackend,
+    pub name: String,
+    pub endpoint: Option<String>,
+    pub path: Option<String>,
+    pub availability: ModelAvailability,
+    pub digest: Option<String>,
+    pub content_hash: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub family: Option<String>,
+    pub parameter_size: Option<String>,
+    pub quantization_level: Option<String>,
+    pub context_length: Option<u64>,
+    pub modified_at: Option<String>,
+    pub managed: bool,
+    pub managed_path: Option<String>,
+    pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSource {
+    pub source_id: String,
+    pub backend: ModelBackend,
+    pub label: String,
+    pub endpoint: Option<String>,
+    pub path: Option<String>,
+    pub status: ModelSourceStatus,
+    pub message: Option<String>,
+    pub models: Vec<ModelRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSourceConfig {
+    pub backend: ModelBackend,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDiscoveryRequest {
+    #[serde(default)]
+    pub sources: Vec<ModelSourceConfig>,
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDuplicateGroup {
+    pub group_id: String,
+    pub digest: Option<String>,
+    pub content_hash: Option<String>,
+    pub model_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCatalog {
+    pub generated_at: String,
+    pub sources: Vec<ModelSource>,
+    pub models: Vec<ModelRecord>,
+    pub duplicate_groups: Vec<ModelDuplicateGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationKind {
+    Download,
+    Import,
+    Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOperationStatus {
+    Queued,
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOperation {
+    pub operation_id: String,
+    pub kind: ModelOperationKind,
+    pub backend: ModelBackend,
+    pub source_id: Option<String>,
+    pub model_name: Option<String>,
+    pub model_id: Option<String>,
+    pub managed_path: Option<String>,
+    pub status: ModelOperationStatus,
+    pub bytes_total: Option<u64>,
+    pub bytes_completed: u64,
+    pub progress_percent: Option<u8>,
+    pub content_hash: Option<String>,
+    pub message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelImportRequest {
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelProfileRegistrationRequest {
+    pub revision: ProfileRevision,
+    pub model_id: String,
+    pub source_id: String,
+    pub backend: ModelBackend,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRemovalEvidence {
+    pub removal_id: String,
+    pub model_id: String,
+    pub backend: ModelBackend,
+    pub managed_path: String,
+    pub content_hash: String,
+    pub removed_at: String,
+    pub outcome: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
@@ -177,9 +341,119 @@ pub struct ImmutableResultReference {
 #[serde(rename_all = "snake_case")]
 pub enum ObjectiveVerifierKind {
     ExactText,
+    NumericTolerance,
+    JsonSchema,
+    RequiredFields,
+    Classification,
+    SafePattern,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SafePatternMode {
+    Literal,
+    Regex,
+}
+
+impl Default for SafePatternMode {
+    fn default() -> Self {
+        Self::Literal
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObjectiveVerifierPolicy {
+    ExactText {
+        expected: String,
+    },
+    NumericTolerance {
+        expected: f64,
+        tolerance: f64,
+    },
+    JsonSchema {
+        expected: Value,
+        #[serde(default)]
+        required: Vec<String>,
+    },
+    RequiredFields {
+        fields: Vec<String>,
+    },
+    Classification {
+        expected: String,
+    },
+    SafePattern {
+        pattern: String,
+        #[serde(default)]
+        mode: SafePatternMode,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObjectiveVerifierEvidencePolicy {
+    ExactText {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+    },
+    NumericTolerance {
+        expected: f64,
+        tolerance: f64,
+    },
+    JsonSchema {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+        required_field_count: u32,
+    },
+    RequiredFields {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+        field_count: u32,
+    },
+    Classification {
+        expected_sha256: String,
+        expected_normalized_byte_count: u64,
+    },
+    SafePattern {
+        pattern_sha256: String,
+        pattern_normalized_byte_count: u64,
+        mode: SafePatternMode,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBoundaryKind {
+    TextGeneration,
+    DockerRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBoundaryStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionBoundary {
+    pub kind: ExecutionBoundaryKind,
+    pub status: ExecutionBoundaryStatus,
+    pub reason: Option<String>,
+}
+
+impl Default for ExecutionBoundary {
+    fn default() -> Self {
+        Self {
+            kind: ExecutionBoundaryKind::TextGeneration,
+            status: ExecutionBoundaryStatus::Available,
+            reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectiveVerificationEvidence {
     pub passed: bool,
@@ -188,6 +462,12 @@ pub struct ObjectiveVerificationEvidence {
     pub actual_normalized_byte_count: u64,
     pub expected_sha256: String,
     pub actual_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ObjectiveVerifierEvidencePolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,16 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  configureExternalProvider,
+  executeExternalGeneration,
   executeRunOnce,
   isDesktopEnvironment,
   lockBlindEvaluation,
+  materializeOfficialPack,
   prepareBlindEvaluation,
+  cancelModelOperation,
   readHardwareSnapshot,
   readLocalOllamaModels,
+  readModelCatalog,
+  readModelOperations,
+  readModelRemovals,
   startLocalOllama,
+  startModelOperation,
   readBenchmarkVersion,
   readBlindEvaluation,
   readOfficialPack,
   readOfficialPacks,
+  readArenaSummaries,
+  readArenaSummary,
+  readAttemptResponse,
   readRunAttempts,
   readProfileRevisions,
   registerProfileRevision,
@@ -19,11 +30,17 @@ import {
   readBenchmarkDrafts,
   readBenchmarkVersions,
   readRuns,
+  readExternalProviders,
+  removeExternalProvider,
+  saveArenaSummary,
   saveBenchmarkDraft,
+  updateExternalCostPolicy,
   validateBenchmarkDocument,
   readAppStatus,
   type AppStatus,
   type AttemptRecord,
+  type AttemptResponse,
+  type ArenaSummaryRecord,
   type BlindEvaluationPreparation,
   type BlindEvaluationRecord,
   type BlindEvaluationScore,
@@ -31,15 +48,45 @@ import {
   type BenchmarkDraftSummary,
   type BenchmarkVersion,
   type BenchmarkVersionSummary,
+  type CostPolicy,
+  type ExternalGenerationResult,
+  type ExternalProviderId,
+  type ExternalProviderMetadata,
   type HardwareMetric,
   type HardwareSnapshot,
   type OfficialPackDocument,
+  type OfficialPackMaterialization,
   type OfficialPackSummary,
-  type ModelInfo,
+  type ModelBackend,
+  type ModelCatalog,
+  type ModelDiscoveryRequest,
+  type ModelOperation,
+  type ModelOperationRequest,
+  type ModelRecord,
+  type ModelRemovalEvidence,
+  type ModelSourceConfig,
   type PersistedExecution,
   type ProfileRevision,
   type RunRecord,
+  type SaveOutcome,
 } from "./bridge";
+import {
+  byokErrorMessage,
+  firstByokValidationError,
+  formatByokDecision,
+  formatByokMoney,
+  formatByokTokens,
+  formatCredentialSource,
+  formatIdentityConfidence,
+  formatStorageStatus,
+  providerLabel,
+  validateByokBudget,
+  validateByokConfiguration,
+  validateByokGeneration,
+  type ByokBudgetDraft,
+  type ByokGenerationDraft,
+  type ByokPriceSnapshotDraft,
+} from "./byok-ui";
 import {
   attemptStatusLabel,
   attemptStatusTone,
@@ -66,6 +113,22 @@ import {
 } from "./arena-ui";
 import { buildRunPlan } from "./run-plan";
 import {
+  ARENA_REPETITION_OPTIONS,
+  MAX_ARENA_COMPETITORS,
+  arenaExportCsv,
+  arenaExportJson,
+  arenaExportMarkdown,
+  buildArenaSummaryPayload,
+  buildBlindArenaCards,
+  executeArena,
+  groupArenaExecutions,
+  rankArenaCompetitors,
+  summarizeArenaCompetitors,
+  summarizeArenaExecutions,
+  type ArenaExecution,
+  type ArenaProgress,
+} from "./arena-runner";
+import {
   documentJsonForDraft,
   documentToForm,
   EMPTY_DRAFT_FORM,
@@ -83,7 +146,10 @@ import {
   benchmarkEmptyCopy,
   benchmarkPreviewCopy,
   classifyBenchmarkSurface,
+  officialPackExecutionState,
   officialPacksPreviewCopy,
+  parseDeterministicMaterializationMetadata,
+  parseOfficialPackSeed,
 } from "./benchmark-ui";
 import {
   ACCENT_OPTIONS,
@@ -103,13 +169,27 @@ import {
 } from "./provider-foundation";
 import {
   boundedRecommendationThresholds,
+  buildDownloadModelOperationRequest,
+  buildImportModelOperationRequest,
+  buildRemoveModelOperationRequest,
   classifyModelRecommendation,
+  DEFAULT_MODEL_SOURCE_CONFIGS,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
+  filterModelCatalog,
   EMPTY_PROFILE_FORM,
   hardwarePreviewCopy,
+  isActiveModelOperation,
+  modelBackendLabel,
+  modelDuplicateEvidenceLabel,
+  modelDuplicateGroupLabel,
   modelEmptyCopy,
-  modelMetadataLabel,
+  modelOperationProgressLabel,
+  modelOperationStatusLabel,
   modelPreviewCopy,
+  modelRecordMetadataLabel,
+  modelRecordMetadataValue,
+  modelRecordQuantizationLabel,
+  modelSourceStatusLabel,
   profileEmptyCopy,
   profilePreviewCopy,
   profileRevisionFromForm,
@@ -118,8 +198,9 @@ import {
   type RecommendationThresholds,
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
+import { AdvancedArenaView } from "./advanced-arena-view";
 
-type ViewId = "overview" | "arena" | "benchmarks" | "models" | "runs" | "settings";
+type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -127,7 +208,8 @@ type ConnectionState =
 
 const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] = [
   { id: "overview", label: "Overview", description: "Workspace status" },
-  { id: "arena", label: "Arena", description: "Run one bounded case" },
+  { id: "arena", label: "Arena", description: "Compare model revisions" },
+  { id: "advanced-arena", label: "Advanced Arena", description: "Rank saved evidence" },
   { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
   { id: "models", label: "Models", description: "Profiles and local models" },
   { id: "runs", label: "Runs", description: "Execution history" },
@@ -231,7 +313,7 @@ function App() {
         <div className="sidebar-footer">
           <span className="status-dot" aria-hidden="true" />
           <div>
-            <p className="sidebar-footer-label">Foundation</p>
+            <p className="sidebar-footer-label">Workspace</p>
             <p className="sidebar-footer-value">Local-first by default</p>
           </div>
         </div>
@@ -245,7 +327,7 @@ function App() {
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
-            <span className="version-chip">Foundation 0.1</span>
+            <span className="version-chip">v0.1.0</span>
           </div>
         </header>
 
@@ -256,7 +338,7 @@ function App() {
             </span>
             <div>
               <strong>Desktop bridge unavailable</strong>
-              <p>{connection.message} The content below remains an honest empty foundation.</p>
+              <p>{connection.message} The content below remains an honest local preview.</p>
             </div>
           </div>
         )}
@@ -264,6 +346,7 @@ function App() {
         <main className="main-content" id="main-content">
           {activeView === "overview" && <Overview onOpenArena={() => setActiveView("arena")} />}
           {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
+          {activeView === "advanced-arena" && <AdvancedArenaView />}
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView />}
@@ -294,6 +377,30 @@ function ConnectionBadge({ connection }: { connection: ConnectionState }) {
 }
 
 function Overview({ onOpenArena }: { onOpenArena: () => void }) {
+  const [localData, setLocalData] = useState<{ status: "loading" | "ready" | "error" | "preview"; runs: number; profiles: number; models: number }>({
+    status: isDesktopEnvironment() ? "loading" : "preview",
+    runs: 0,
+    profiles: 0,
+    models: 0,
+  });
+
+  useEffect(() => {
+    if (!isDesktopEnvironment()) {
+      setLocalData((current) => ({ ...current, status: "preview" }));
+      return;
+    }
+    let active = true;
+    void Promise.all([readRuns(), readProfileRevisions(), readLocalOllamaModels()])
+      .then(([runs, profiles, models]) => {
+        if (active) setLocalData({ status: "ready", runs: runs.length, profiles: profiles.length, models: models.length });
+      })
+      .catch(() => {
+        if (active) setLocalData((current) => ({ ...current, status: "error" }));
+      });
+    return () => { active = false; };
+  }, []);
+
+  const count = (value: number) => localData.status === "ready" ? String(value) : localData.status === "preview" ? "Preview" : "—";
   return (
     <div className="view-stack">
       <section className="hero-panel panel">
@@ -301,10 +408,9 @@ function Overview({ onOpenArena }: { onOpenArena: () => void }) {
           <p className="eyebrow">A quiet place for reproducible work</p>
           <h2>Compare models with evidence, not noise.</h2>
           <p>
-            Prompt Arena is a standalone local-first desktop workspace. Local persistence, immutable records, a bounded
-            Arena one-shot flow, a structured benchmark-draft editor, a read-only official-pack catalog, and a bounded
-            local model-library baseline are ready. Broader run controls, unified model search/downloads, and
-            human/AI evaluation arrive in later phases.
+            Prompt Arena is a standalone local-first desktop laboratory. Create reproducible Arenas, compare multiple
+            immutable model revisions, review verified responses, and keep the evidence on this machine. Ollama is the
+            current executable runtime; other adapters remain clearly marked in the roadmap.
           </p>
           <button className="primary-button" type="button" onClick={onOpenArena}>
             Open Arena
@@ -318,23 +424,23 @@ function Overview({ onOpenArena }: { onOpenArena: () => void }) {
         </div>
       </section>
 
-      <section className="metric-grid" aria-label="Workspace foundation status">
-        <MetricCard label="Benchmark records" value="Not connected" detail="Local SQLite + artifacts" />
-        <MetricCard label="Worker mode" value="One-shot" detail="App-owned protocol" />
-        <MetricCard label="Data boundary" value="Local" detail="No Prompt Arena server" />
+      <section className="metric-grid" aria-label="Workspace status">
+        <MetricCard label="Saved runs" value={count(localData.runs)} detail="Immutable local history" />
+        <MetricCard label="Registered profiles" value={count(localData.profiles)} detail="Model revisions" />
+        <MetricCard label="Installed Ollama models" value={count(localData.models)} detail="Loopback discovery" />
       </section>
 
       <section className="panel section-panel">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Start here</p>
-            <h2>Nothing is being hidden.</h2>
+            <h2>Build an Arena from local evidence.</h2>
           </div>
           <span className="section-index">01</span>
         </div>
         <EmptyState
-          title="No benchmark versions yet"
-          description="This installation has no local benchmark records yet. Publish an immutable version before selecting a case in Arena."
+          title={localData.status === "ready" && localData.runs > 0 ? "Keep comparing" : "Start your first Arena"}
+          description={localData.status === "ready" && localData.runs > 0 ? "Open Arena to compare another immutable model revision or inspect saved evidence in Runs." : "Publish or select an immutable benchmark version, register two model revisions, and run a comparison."}
           actionLabel="Open Arena"
           onAction={onOpenArena}
         />
@@ -365,11 +471,19 @@ type OfficialPackDetailState =
   | { status: "ready"; document: OfficialPackDocument }
   | { status: "error"; message: string };
 
+type OfficialPackMaterializationState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; materialization: OfficialPackMaterialization }
+  | { status: "error"; message: string };
+
 type Feedback = { kind: "success" | "error" | "info"; message: string };
 
 function BenchmarksView() {
   const [state, setState] = useState<BenchmarksState>({ status: "loading" });
   const [officialPackDetail, setOfficialPackDetail] = useState<OfficialPackDetailState>({ status: "idle" });
+  const [officialPackMaterialization, setOfficialPackMaterialization] = useState<OfficialPackMaterializationState>({ status: "idle" });
+  const [materializationSeed, setMaterializationSeed] = useState("42");
   const [form, setForm] = useState<DraftFormState>(EMPTY_DRAFT_FORM);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
@@ -564,6 +678,7 @@ function BenchmarksView() {
   async function handleLoadOfficialPack(packId: string) {
     if (!isDesktopEnvironment()) return;
     setOfficialPackDetail({ status: "loading" });
+    setOfficialPackMaterialization({ status: "idle" });
     try {
       const document = await readOfficialPack(packId);
       if (!document) throw new Error("The selected official pack is not in the bundled catalog.");
@@ -573,6 +688,35 @@ function BenchmarksView() {
         status: "error",
         message: error instanceof Error ? error.message : "The selected official pack could not be loaded.",
       });
+    }
+  }
+
+  async function handleMaterializeOfficialPack() {
+    if (!isDesktopEnvironment()) return;
+    if (officialPackDetail.status !== "ready") return;
+    const seed = parseOfficialPackSeed(materializationSeed);
+    if (seed === null) {
+      setOfficialPackMaterialization({
+        status: "error",
+        message: "Choose a whole-number seed from 0 through 4,294,967,295.",
+      });
+      return;
+    }
+    setBusy(true);
+    setOfficialPackMaterialization({ status: "loading" });
+    try {
+      const materialization = await materializeOfficialPack(
+        officialPackDetail.document.summary.packId,
+        seed,
+      );
+      setOfficialPackMaterialization({ status: "ready", materialization });
+    } catch (error: unknown) {
+      setOfficialPackMaterialization({
+        status: "error",
+        message: error instanceof Error ? error.message : "The official pack could not be materialized.",
+      });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -590,6 +734,7 @@ function BenchmarksView() {
     versionCount: state.status === "ready" ? state.versions.length : 0,
     error: state.status === "error" ? state.message : undefined,
   });
+  const parsedMaterializationSeed = parseOfficialPackSeed(materializationSeed);
 
   return (
     <div className="view-stack">
@@ -732,7 +877,7 @@ function BenchmarksView() {
             <p className="eyebrow">Phase C source records</p>
             <h3>Official benchmark packs</h3>
           </div>
-          <span className="run-status run-status-neutral">read-only</span>
+          <span className="run-status run-status-neutral">source + evidence</span>
         </div>
         {surface === "preview" && (
           <StateMessage icon="◇" title="Browser preview" description={officialPacksPreviewCopy()} />
@@ -757,7 +902,7 @@ function BenchmarksView() {
                   <span>
                     <strong>{pack.packName}</strong>
                     <small>{pack.versionId} · {pack.contentHash.slice(0, 12)}…</small>
-                    <small>{pack.execution.evaluationMode} · {pack.execution.sandboxStatus === "unavailable" ? "sandbox unavailable" : "sandbox not required"}</small>
+                    <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? "Docker required · blocked" : "text generation"}</small>
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>
@@ -783,11 +928,84 @@ function BenchmarksView() {
                     <BoundaryRow label="Canonical bytes" value={String(officialPackDetail.document.summary.documentBytes)} />
                     <BoundaryRow label="Capability" value={`${officialPackDetail.document.summary.execution.capability} · ${officialPackDetail.document.summary.execution.status}`} />
                     <BoundaryRow label="Sandbox" value={officialPackDetail.document.summary.execution.sandboxStatus} />
+                    <BoundaryRow label="Execution boundary" value={officialPackDetail.document.summary.execution.executionBoundary} />
                     <BoundaryRow label="Evaluation" value={officialPackDetail.document.summary.execution.evaluationMode} />
                   </div>
                   {officialPackDetail.document.summary.description && <p className="field-help">{officialPackDetail.document.summary.description}</p>}
                   <p className="field-help">{officialPackDetail.document.summary.execution.requirement}</p>
                   {officialPackDetail.document.summary.execution.notes && <p className="field-help">{officialPackDetail.document.summary.execution.notes}</p>}
+                  {officialPackExecutionState(officialPackDetail.document.summary.execution) === "docker_blocked" && (
+                    <StateMessage
+                      icon="!"
+                      title="Docker execution blocked"
+                      description="This pack requires Docker, which is unavailable in this build. Host execution is never used."
+                      error
+                    />
+                  )}
+                  {officialPackExecutionState(officialPackDetail.document.summary.execution) === "unavailable" && (
+                    <StateMessage
+                      icon="!"
+                      title="Pack execution unavailable"
+                      description="The declared execution boundary is unavailable; no fallback runtime is used."
+                      error
+                    />
+                  )}
+                  <section className="official-pack-materialization results-section" aria-live="polite">
+                    <div className="section-heading compact-heading">
+                      <div>
+                        <p className="eyebrow">Deterministic materialization</p>
+                        <h4>Create seeded evidence</h4>
+                      </div>
+                      <span className="run-status run-status-neutral">immutable</span>
+                    </div>
+                    <p className="field-help">Choose a bounded seed to materialize deterministic case metadata. This stores evidence only; it does not execute the pack.</p>
+                    <div className="arena-actions">
+                      <label className="arena-select-control" htmlFor="official-pack-seed">
+                        <span className="field-label">Seed</span>
+                        <input
+                          id="official-pack-seed"
+                          type="number"
+                          min="0"
+                          max="4294967295"
+                          step="1"
+                          inputMode="numeric"
+                          value={materializationSeed}
+                          disabled={busy}
+                          onChange={(event) => setMaterializationSeed(event.currentTarget.value)}
+                        />
+                      </label>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void handleMaterializeOfficialPack()}
+                        disabled={busy || parsedMaterializationSeed === null}
+                      >
+                        Materialize seed
+                      </button>
+                    </div>
+                    {parsedMaterializationSeed === null && <p className="field-help" role="alert">Seed must be a whole number from 0 through 4,294,967,295.</p>}
+                    {officialPackMaterialization.status === "loading" && (
+                      <StateMessage icon="…" title="Materializing official pack" description="Deriving deterministic case seeds and writing one immutable local evidence record." />
+                    )}
+                    {officialPackMaterialization.status === "error" && (
+                      <StateMessage icon="!" title="Materialization unavailable" description={officialPackMaterialization.message} error />
+                    )}
+                    {officialPackMaterialization.status === "ready" && (
+                      <>
+                        <div className="official-pack-facts">
+                          <BoundaryRow label="Materialization ID" value={officialPackMaterialization.materialization.materializationId} />
+                          <BoundaryRow label="Seed" value={String(officialPackMaterialization.materialization.seed)} />
+                          <BoundaryRow label="Materialized content hash" value={officialPackMaterialization.materialization.materializedContentHash} />
+                          <BoundaryRow label="Saved outcome" value={officialPackMaterialization.materialization.savedOutcome} />
+                          <BoundaryRow label="Seeded cases" value={String(parseDeterministicMaterializationMetadata(officialPackMaterialization.materialization.documentJson)?.caseSeeds.length ?? 0)} />
+                        </div>
+                        <details className="official-pack-document-block">
+                          <summary className="eyebrow">Materialized canonical document</summary>
+                          <pre className="official-pack-document">{officialPackMaterialization.materialization.documentJson}</pre>
+                        </details>
+                      </>
+                    )}
+                  </section>
                   <div className="official-pack-document-block">
                     <p className="eyebrow">Validated canonical document</p>
                     <pre className="official-pack-document">{officialPackDetail.document.documentJson}</pre>
@@ -904,7 +1122,7 @@ type ProfileState =
 
 type ModelsState =
   | { status: "loading" }
-  | { status: "ready"; models: ModelInfo[] }
+  | { status: "ready"; catalog: ModelCatalog; operations: ModelOperation[]; removals: ModelRemovalEvidence[] }
   | { status: "error"; message: string }
   | { status: "preview" };
 
@@ -921,17 +1139,29 @@ type HardwareState =
   | { status: "preview" };
 
 function ModelsView() {
+  const desktop = isDesktopEnvironment();
   const [profileState, setProfileState] = useState<ProfileState>({ status: "loading" });
-  const [modelState, setModelState] = useState<ModelsState>({ status: "loading" });
+  const [modelState, setModelState] = useState<ModelsState>(() => (
+    desktop ? { status: "loading" } : { status: "preview" }
+  ));
   const [hardwareState, setHardwareState] = useState<HardwareState>(() => (
-    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+    desktop ? { status: "loading" } : { status: "preview" }
   ));
   const [thresholds, setThresholds] = useState<RecommendationThresholds>(DEFAULT_RECOMMENDATION_THRESHOLDS);
   const [form, setForm] = useState<ProfileFormState>(EMPTY_PROFILE_FORM);
+  const [sourceConfigs, setSourceConfigs] = useState<ModelSourceConfig[]>(() => (
+    DEFAULT_MODEL_SOURCE_CONFIGS.map((config) => ({ ...config }))
+  ));
+  const [managedGgufPath, setManagedGgufPath] = useState("");
+  const [query, setQuery] = useState("");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
+  const [operationStarting, setOperationStarting] = useState(false);
+  const [operationAction, setOperationAction] = useState<string | null>(null);
+  const [cancellingOperation, setCancellingOperation] = useState<string | null>(null);
   const [ollamaStartState, setOllamaStartState] = useState<OllamaStartState>({ status: "idle" });
   const ollamaStartInFlight = useRef(false);
+  const operationCounter = useRef(0);
 
   async function refreshProfiles() {
     if (!isDesktopEnvironment()) {
@@ -949,24 +1179,143 @@ function ModelsView() {
     }
   }
 
+  function discoveryRequest(): ModelDiscoveryRequest {
+    const sources = sourceConfigs.map((config) => ({
+      ...config,
+      endpoint: config.endpoint?.trim() || null,
+    }));
+    const path = managedGgufPath.trim();
+    if (path) {
+      sources.push({
+        backend: "llama_cpp",
+        label: "Managed GGUF",
+        endpoint: null,
+        path,
+      });
+    }
+    return { sources, query: null };
+  }
+
   async function refreshModels() {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setModelState({ status: "preview" });
       return;
     }
     setModelState({ status: "loading" });
     try {
-      setModelState({ status: "ready", models: await readLocalOllamaModels() });
+      const [catalog, operations, removals] = await Promise.all([
+        readModelCatalog(discoveryRequest()),
+        readModelOperations(),
+        readModelRemovals(),
+      ]);
+      setModelState({ status: "ready", catalog, operations, removals });
     } catch (error: unknown) {
       setModelState({
         status: "error",
-        message: error instanceof Error ? error.message : "The local Ollama model list is unavailable.",
+        message: error instanceof Error ? error.message : "The local model catalog is unavailable.",
       });
     }
   }
 
+  async function refreshOperationData() {
+    if (!desktop) return;
+    try {
+      const [operations, removals] = await Promise.all([readModelOperations(), readModelRemovals()]);
+      setModelState((current) => current.status === "ready" ? { ...current, operations, removals } : current);
+    } catch {
+      // Keep the last catalog visible during a transient activity poll failure.
+    }
+  }
+
+  function nextOperationId(kind: "download" | "import" | "remove"): string {
+    operationCounter.current += 1;
+    return `model-${kind}-${Date.now().toString(36)}-${operationCounter.current}`;
+  }
+
+  async function launchOperation(request: ModelOperationRequest) {
+    if (!desktop) return;
+    setOperationStarting(true);
+    setOperationAction(request.operationId);
+    try {
+      const operation = await startModelOperation(request);
+      const subject = operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model";
+      setFeedback({
+        kind: operation.status === "completed" ? "success" : operation.status === "cancelled" ? "info" : "error",
+        message: `${subject}: ${modelOperationStatusLabel(operation.status).toLowerCase()}.`,
+      });
+    } catch (error: unknown) {
+      setFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The model operation could not be started.",
+      });
+    } finally {
+      await refreshModels();
+      setOperationStarting(false);
+      setOperationAction(null);
+    }
+  }
+
+  function showModelActionError(error: unknown) {
+    setFeedback({
+      kind: "error",
+      message: error instanceof Error ? error.message : "The model operation request is invalid.",
+    });
+  }
+
+  function handleDownload(model: ModelRecord) {
+    try {
+      void launchOperation(buildDownloadModelOperationRequest(nextOperationId("download"), model));
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  function handleImport() {
+    try {
+      const request = buildImportModelOperationRequest(nextOperationId("import"), managedGgufPath);
+      setManagedGgufPath(request.sourcePath);
+      void launchOperation(request);
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  function handleRemove(model: ModelRecord) {
+    if (!desktop || !window.confirm(
+      `Remove "${model.name}" from the app-managed model root? This deletes only the managed GGUF and records its SHA-256 audit evidence.`,
+    )) return;
+    try {
+      void launchOperation(buildRemoveModelOperationRequest(nextOperationId("remove"), model));
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  async function handleCancel(operationId: string) {
+    setCancellingOperation(operationId);
+    try {
+      await cancelModelOperation(operationId);
+      setFeedback({ kind: "info", message: "Cancellation requested for the model operation." });
+      await refreshOperationData();
+    } catch (error: unknown) {
+      setFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The model operation could not be cancelled.",
+      });
+    } finally {
+      setCancellingOperation(null);
+    }
+  }
+
+  function updateSourceEndpoint(backend: ModelBackend, endpoint: string) {
+    setSourceConfigs((current) => current.map((config) => (
+      config.backend === backend ? { ...config, endpoint } : config
+    )));
+    setFeedback(null);
+  }
+
   async function handleStartOllama() {
-    if (!isDesktopEnvironment() || ollamaStartInFlight.current) return;
+    if (!desktop || ollamaStartInFlight.current) return;
     ollamaStartInFlight.current = true;
     setOllamaStartState({ status: "starting" });
     try {
@@ -986,7 +1335,7 @@ function ModelsView() {
   }
 
   async function refreshHardware() {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setHardwareState({ status: "preview" });
       return;
     }
@@ -1002,7 +1351,7 @@ function ModelsView() {
   }
 
   useEffect(() => {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setProfileState({ status: "preview" });
       setModelState({ status: "preview" });
       return;
@@ -1011,6 +1360,17 @@ function ModelsView() {
     void refreshModels();
     void refreshHardware();
   }, []);
+
+  const hasActiveOperations = modelState.status === "ready"
+    && (operationStarting || modelState.operations.some(isActiveModelOperation));
+
+  useEffect(() => {
+    if (!desktop || !hasActiveOperations) return;
+    const timer = window.setInterval(() => { void refreshOperationData(); }, 1_000);
+    return () => window.clearInterval(timer);
+  }, [desktop, hasActiveOperations]);
+
+  const visibleModels = modelState.status === "ready" ? filterModelCatalog(modelState.catalog, query) : [];
 
   function updateThreshold(field: keyof RecommendationThresholds, value: string) {
     const parsed = Number(value);
@@ -1023,7 +1383,7 @@ function ModelsView() {
   }
 
   async function handleRegister() {
-    if (!isDesktopEnvironment()) {
+    if (!desktop) {
       setFeedback({ kind: "info", message: profilePreviewCopy() });
       return;
     }
@@ -1055,9 +1415,9 @@ function ModelsView() {
         <p className="eyebrow">Model library</p>
         <h2>Profiles and local models</h2>
         <p>
-          Register immutable local profile revisions and inspect installed Ollama models through the fixed
-          127.0.0.1:11434 boundary, alongside a read-only local hardware baseline. This slice has no endpoint field,
-          credentials, downloads, deletion, telemetry, or cloud provider.
+          Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp models through
+          explicit loopback endpoints. Import only app-managed relative GGUF paths, track persisted local operations,
+          and keep removal evidence alongside a read-only hardware baseline. No credentials, telemetry, or cloud provider.
         </p>
       </section>
 
@@ -1065,22 +1425,51 @@ function ModelsView() {
         <section className="panel model-list-panel" aria-live="polite">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Ollama / local only</p>
-              <h3>Installed models</h3>
+              <p className="eyebrow">Unified local catalog</p>
+              <h3>Models</h3>
             </div>
             <div className="model-actions">
-              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!isDesktopEnvironment() || busy}>
+              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!desktop || busy || operationStarting}>
                 Refresh
               </button>
               <button
                 className="text-button"
                 type="button"
                 onClick={() => void handleStartOllama()}
-                disabled={!isDesktopEnvironment() || busy || ollamaStartState.status === "starting"}
+                disabled={!desktop || busy || operationStarting || ollamaStartState.status === "starting"}
               >
                 {ollamaStartState.status === "starting" ? "Starting Ollama…" : "Start Ollama"}
               </button>
             </div>
+          </div>
+          <div className="profile-form form-section">
+            <p className="eyebrow">Loopback sources</p>
+            <div className="form-grid">
+              {sourceConfigs.map((config) => (
+                <FormInput
+                  key={config.backend}
+                  id={`model-endpoint-${config.backend}`}
+                  label={`${modelBackendLabel(config.backend)} endpoint`}
+                  value={config.endpoint ?? ""}
+                  onChange={(value) => updateSourceEndpoint(config.backend, value)}
+                />
+              ))}
+            </div>
+            <p className="field-help">Only HTTP endpoints on localhost, 127.0.0.1, or ::1 are accepted. Refresh applies the current source values.</p>
+            <FormInput id="model-search" label="Filter catalog" value={query} onChange={setQuery} />
+          </div>
+          <div className="profile-form form-section">
+            <p className="eyebrow">Managed GGUF</p>
+            <FormInput
+              id="managed-gguf-path"
+              label="Relative path under the managed model root"
+              value={managedGgufPath}
+              onChange={(value) => { setManagedGgufPath(value); setFeedback(null); }}
+            />
+            <p className="field-help">Import reads an existing relative .gguf file owned by the app. No arbitrary filesystem path or browser file operation is used.</p>
+            <button className="secondary-button" type="button" onClick={handleImport} disabled={!desktop || busy || operationStarting}>
+              Import managed GGUF
+            </button>
           </div>
           {ollamaStartState.status === "starting" && <p className="field-help" role="status">Starting Ollama…</p>}
           {ollamaStartState.status === "running" && <p className="field-help" role="status">Ollama running.</p>}
@@ -1093,45 +1482,192 @@ function ModelsView() {
             <StateMessage icon="◇" title="Browser preview" description={modelPreviewCopy()} />
           )}
           {modelState.status === "loading" && (
-            <StateMessage icon="…" title="Checking local Ollama" description="Reading installed model metadata from the fixed loopback runtime." />
+            <StateMessage icon="…" title="Checking local sources" description="Reading model metadata from the configured loopback runtimes and managed model root." />
           )}
           {modelState.status === "error" && (
-            <StateMessage icon="!" title="Ollama unavailable" description={modelState.message} error />
+            <StateMessage icon="!" title="Local model catalog unavailable" description={modelState.message} error />
           )}
-          {modelState.status === "ready" && modelState.models.length === 0 && (
-            <EmptyState title="No installed models" description={modelEmptyCopy()} />
-          )}
-          {modelState.status === "ready" && modelState.models.length > 0 && (
-            <div className="model-list">
-              {modelState.models.map((model) => (
-                <article className="model-row" key={`${model.name}-${model.digest ?? "unknown"}`}>
-                  <div>
-                    <h3>{model.name}</h3>
-                    <p className="model-meta">{modelMetadataLabel(model)}</p>
-                    <p className="model-meta">
-                      {model.digest ? `${model.digest.slice(0, 12)}…` : "Digest unavailable"}
-                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
-                    </p>
-                    {(() => {
-                      const recommendation = classifyModelRecommendation(
-                        model,
-                        hardwareState.status === "ready" ? hardwareState.snapshot : null,
-                        thresholds,
-                      );
-                      return (
-                        <div className="model-recommendation">
-                          <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
-                          <p className="model-meta">{recommendation.explanation}</p>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
-                </article>
-              ))}
+          {modelState.status === "ready" && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Source status</p>
+                  <h3>{modelState.catalog.sources.length} configured sources</h3>
+                </div>
+                <span className="run-status run-status-neutral">{modelState.catalog.models.length} records</span>
+              </div>
+              <div className="profile-record-list">
+                {modelState.catalog.sources.map((source) => (
+                  <article className="profile-record-row" key={source.sourceId}>
+                    <span>
+                      <strong>{source.label} · {modelBackendLabel(source.backend)}</strong>
+                      <small>{source.message ?? `${source.models.length} model${source.models.length === 1 ? "" : "s"} reported`}</small>
+                    </span>
+                    <span className={`run-status ${source.status === "error" ? "run-status-failure" : source.status === "unavailable" ? "run-status-neutral" : ""}`}>
+                      {modelSourceStatusLabel(source.status)}
+                    </span>
+                  </article>
+                ))}
+              </div>
             </div>
           )}
-          {!isDesktopEnvironment() && <p className="field-help">Desktop storage and a local Ollama runtime are required. Preview never invents model rows.</p>}
+          {modelState.status === "ready" && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Catalog relationships</p>
+                  <h3>Duplicate groups</h3>
+                </div>
+                <span className="run-status run-status-neutral">{modelState.catalog.duplicateGroups.length} groups</span>
+              </div>
+              {modelState.catalog.duplicateGroups.length === 0 ? (
+                <p className="field-help">No duplicate groups reported. Quantization-distinct records remain separate rows.</p>
+              ) : (
+                <div className="profile-record-list">
+                  {modelState.catalog.duplicateGroups.map((group) => (
+                    <article className="profile-record-row" key={group.groupId}>
+                      <span>
+                        <strong>{modelDuplicateGroupLabel(group, modelState.catalog.models)}</strong>
+                        <small>{modelDuplicateEvidenceLabel(group)} · {group.modelIds.length} records</small>
+                      </span>
+                      <span className="run-status run-status-neutral">duplicate</span>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {modelState.status === "ready" && visibleModels.length === 0 && (
+            <EmptyState
+              title={query.trim() ? "No matching models" : "No local models"}
+              description={modelEmptyCopy()}
+            />
+          )}
+          {modelState.status === "ready" && visibleModels.length > 0 && (
+            <div className="model-list">
+              {visibleModels.map((model) => {
+                const rowOperation = [...modelState.operations].reverse().find((operation) => (
+                  operation.modelId === model.modelId
+                  || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
+                ));
+                const recommendation = classifyModelRecommendation(
+                  model,
+                  hardwareState.status === "ready" ? hardwareState.snapshot : null,
+                  thresholds,
+                );
+                const canDownload = model.backend === "ollama";
+                const canRemove = model.backend === "llama_cpp" && model.managed && model.managedPath !== null;
+                return (
+                <article className="model-row" key={model.modelId}>
+                  <div>
+                    <h3>{model.name}</h3>
+                    <p className="model-meta">
+                      {modelBackendLabel(model.backend)} · {modelRecordMetadataLabel(model)} · {modelRecordQuantizationLabel(model)}
+                    </p>
+                    <p className="model-meta">
+                      {model.contentHash
+                        ? `SHA-256 ${model.contentHash.slice(0, 12)}…`
+                        : model.digest ? `Digest ${model.digest.slice(0, 12)}…` : "Digest unavailable"}
+                      {model.managedPath ? ` · managed/${model.managedPath}` : ""}
+                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
+                    </p>
+                    <p className="model-meta">
+                      Format: {modelRecordMetadataValue(model, "format")} · License: {modelRecordMetadataValue(model, "license")} · Source: {modelRecordMetadataValue(model, "source")} · Location: {modelRecordMetadataValue(model, "location")}
+                    </p>
+                    <div className="model-recommendation">
+                      <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
+                      <p className="model-meta">{recommendation.explanation}</p>
+                    </div>
+                    {rowOperation && (
+                      <p className="model-meta">
+                        Operation {modelOperationStatusLabel(rowOperation.status).toLowerCase()} · {modelOperationProgressLabel(rowOperation)}
+                        {rowOperation.message ? ` · ${rowOperation.message}` : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="model-actions">
+                    <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
+                    {canDownload && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => handleDownload(model)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {operationAction === rowOperation?.operationId ? "Starting…" : "Download"}
+                      </button>
+                    )}
+                    {canRemove && (
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={() => handleRemove(model)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
+                      </button>
+                    )}
+                  </div>
+                </article>
+                );
+              })}
+            </div>
+          )}
+          {!desktop && <p className="field-help">Desktop storage and local loopback runtimes are required. Preview never invents model rows.</p>}
+          {modelState.status === "ready" && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Persisted activity</p>
+                  <h3>Model operations</h3>
+                </div>
+              </div>
+              {modelState.operations.length === 0 ? (
+                <p className="field-help">No model operations are persisted locally.</p>
+              ) : (
+                <div className="profile-record-list">
+                  {[...modelState.operations].reverse().map((operation) => (
+                    <article className="profile-record-row" key={operation.operationId}>
+                      <span>
+                        <strong>{operation.kind} · {operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model"}</strong>
+                        <small>{modelBackendLabel(operation.backend)} · {modelOperationStatusLabel(operation.status)} · {modelOperationProgressLabel(operation)}{operation.message ? ` · ${operation.message}` : ""}</small>
+                      </span>
+                      {isActiveModelOperation(operation) ? (
+                        <button className="text-button" type="button" onClick={() => void handleCancel(operation.operationId)} disabled={cancellingOperation === operation.operationId}>
+                          {cancellingOperation === operation.operationId ? "Cancelling…" : "Cancel"}
+                        </button>
+                      ) : (
+                        <span className={`run-status ${operation.status === "failed" ? "run-status-failure" : operation.status === "cancelled" ? "run-status-neutral" : ""}`}>
+                          {modelOperationStatusLabel(operation.status)}
+                        </span>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {modelState.status === "ready" && modelState.removals.length > 0 && (
+            <div className="profile-records">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Removal audit</p>
+                  <h3>Managed model evidence</h3>
+                </div>
+              </div>
+              <div className="profile-record-list">
+                {[...modelState.removals].reverse().map((removal) => (
+                  <article className="profile-record-row" key={removal.removalId}>
+                    <span>
+                      <strong>{removal.modelId}</strong>
+                      <small>{removal.managedPath} · SHA-256 {removal.contentHash.slice(0, 12)}… · {removal.removedAt}</small>
+                    </span>
+                    <span className="run-status run-status-neutral">{removal.outcome}</span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="panel profile-panel" aria-live="polite">
@@ -1275,6 +1811,25 @@ function formatHardwareBytes(value: number): string {
   return formatByteCount(value);
 }
 
+function formatArenaMetric(value: number | null): string {
+  return value === null || !Number.isFinite(value) ? "Not recorded" : value.toFixed(2);
+}
+
+function summaryNumberText(summary: Record<string, unknown>, key: string): string {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "Not recorded";
+}
+
+function summaryPercentText(summary: Record<string, unknown>, key: string): string {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "Not recorded";
+}
+
+function summaryMetricText(summary: Record<string, unknown>, key: string): string {
+  const value = summary[key];
+  return typeof value === "number" && Number.isFinite(value) ? formatArenaMetric(value) : "Not recorded";
+}
+
 function formatModelSize(sizeBytes: number | null): string {
   if (sizeBytes === null) return "size unavailable";
   if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
@@ -1300,7 +1855,7 @@ type ArenaExecutionState =
   | { status: "error"; message: string }
   | { status: "terminal"; execution: PersistedExecution };
 
-function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
+function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [records, setRecords] = useState<ArenaRecordsState>(() => (
     isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
   ));
@@ -1669,6 +2224,428 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   );
 }
 
+type ArenaSessionState =
+  | { status: "idle" }
+  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress }
+  | { status: "error"; message: string }
+  | { status: "terminal"; request: ArenaExecutionRequest; results: ArenaExecution[] };
+
+type ArenaSummaryPersistenceState =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "saved"; record: ArenaSummaryRecord; saveOutcome: SaveOutcome }
+  | { status: "error"; message: string };
+
+type ArenaExecutionRequest = Parameters<typeof executeArena>[0];
+
+type ArenaResponseState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; responses: Record<string, AttemptResponse> }
+  | { status: "error"; message: string };
+
+void LegacyArenaView;
+
+function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
+  const [records, setRecords] = useState<ArenaRecordsState>(() => (
+    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+  ));
+  const [documentState, setDocumentState] = useState<ArenaDocumentState>({ status: "idle" });
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [selectedProfileRevisionIds, setSelectedProfileRevisionIds] = useState<string[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedCaseId, setSelectedCaseId] = useState("");
+  const [repetitions, setRepetitions] = useState<number>(1);
+  const [session, setSession] = useState<ArenaSessionState>({ status: "idle" });
+  const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
+  const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
+  const cancelRequestedRef = useRef(false);
+  const recordsRequestRef = useRef(0);
+
+  async function refreshRecords() {
+    const requestId = recordsRequestRef.current + 1;
+    recordsRequestRef.current = requestId;
+    if (!isDesktopEnvironment()) {
+      setRecords({ status: "preview" });
+      return;
+    }
+    setRecords({ status: "loading" });
+    setDocumentState({ status: "idle" });
+    try {
+      const [versions, profiles] = await Promise.all([readBenchmarkVersions(), readProfileRevisions()]);
+      if (requestId !== recordsRequestRef.current) return;
+      setRecords({ status: "ready", versions, profiles });
+    } catch (error: unknown) {
+      if (requestId !== recordsRequestRef.current) return;
+      setRecords({ status: "error", message: error instanceof Error ? error.message : "The Arena records are unavailable." });
+    }
+  }
+
+  useEffect(() => {
+    if (!isDesktopEnvironment()) {
+      setRecords({ status: "preview" });
+      return () => { recordsRequestRef.current += 1; };
+    }
+    void refreshRecords();
+    return () => { recordsRequestRef.current += 1; };
+  }, []);
+
+  useEffect(() => {
+    if (records.status !== "ready") return;
+    const versions = versionOptions(records.versions);
+    const profiles = profileOptions(records.profiles);
+    setSelectedVersionId((current) => versions.some((option) => option.value === current) ? current : versions[0]?.value ?? "");
+    setSelectedProfileRevisionIds((current) => {
+      const available = new Set(profiles.map((option) => option.value));
+      const retained = current.filter((id) => available.has(id));
+      if (retained.length >= 2) return retained.slice(0, MAX_ARENA_COMPETITORS);
+      return profiles.slice(0, Math.min(2, MAX_ARENA_COMPETITORS)).map((option) => option.value);
+    });
+  }, [records]);
+
+  useEffect(() => {
+    let current = true;
+    const selectedVersionIsAvailable = records.status === "ready"
+      && versionOptions(records.versions).some((option) => option.value === selectedVersionId);
+    if (records.status !== "ready" || !selectedVersionId || !selectedVersionIsAvailable || !isDesktopEnvironment()) {
+      setDocumentState({ status: "idle" });
+      return () => { current = false; };
+    }
+    setDocumentState({ status: "loading" });
+    void readBenchmarkVersion(selectedVersionId)
+      .then((version) => {
+        if (!current) return;
+        if (!version) {
+          setDocumentState({ status: "error", message: "The selected immutable version no longer exists locally." });
+          return;
+        }
+        try {
+          setDocumentState({ status: "ready", version, document: parseArenaDocument(version.documentJson) });
+        } catch (error: unknown) {
+          setDocumentState({ status: "malformed", message: error instanceof Error ? error.message : "The published document could not be read." });
+        }
+      })
+      .catch((error: unknown) => {
+        if (current) setDocumentState({ status: "error", message: error instanceof Error ? error.message : "The selected version could not be reached." });
+      });
+    return () => { current = false; };
+  }, [records, selectedVersionId]);
+
+  useEffect(() => {
+    if (documentState.status !== "ready") {
+      setSelectedTaskId("");
+      return;
+    }
+    const tasks = taskOptions(documentState.document);
+    setSelectedTaskId((current) => tasks.some((option) => option.value === current) ? current : tasks[0]?.value ?? "");
+  }, [documentState]);
+
+  useEffect(() => {
+    if (documentState.status !== "ready") {
+      setSelectedCaseId("");
+      return;
+    }
+    const cases = caseOptions(documentState.document, selectedTaskId);
+    setSelectedCaseId((current) => cases.some((option) => option.value === current) ? current : cases[0]?.value ?? "");
+  }, [documentState, selectedTaskId]);
+
+  useEffect(() => {
+    setSession({ status: "idle" });
+    setSummaryPersistence({ status: "idle" });
+    setResponseState({ status: "idle" });
+    cancelRequestedRef.current = false;
+  }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions]);
+
+  const selectedProfiles = records.status === "ready"
+    ? records.profiles.filter((profile) => selectedProfileRevisionIds.includes(profile.profileRevisionId))
+    : [];
+  const activeDocument = records.status === "ready"
+    && documentState.status === "ready"
+    && documentState.version.summary.versionId === selectedVersionId
+    ? documentState
+    : null;
+  const taskSelectionOptions = activeDocument ? taskOptions(activeDocument.document) : [];
+  const caseSelectionOptions = activeDocument ? caseOptions(activeDocument.document, selectedTaskId) : [];
+  const previewProfile = selectedProfiles[0];
+  let preview: ArenaPreview | null = null;
+  let previewError: string | null = null;
+  if (activeDocument && previewProfile && selectedTaskId && selectedCaseId) {
+    try {
+      preview = arenaPreviewFromPlan(buildRunPlan({
+        runId: "arena-preview",
+        version: activeDocument.version,
+        taskId: selectedTaskId,
+        caseId: selectedCaseId,
+        profileRevision: previewProfile,
+      }), selectedTaskId);
+    } catch (error: unknown) {
+      previewError = error instanceof Error ? error.message : "The selected Arena inputs are not runnable.";
+    }
+  }
+  const dockerExecutionBlocked = preview?.executionBoundary?.kind === "docker_required"
+    && preview.executionBoundary.status === "unavailable";
+
+  async function loadResponses(results: ArenaExecution[]) {
+    const completed = results.filter((item) => item.execution?.attempt.status === "completed");
+    if (completed.length === 0) {
+      setResponseState({ status: "ready", responses: {} });
+      return;
+    }
+    setResponseState({ status: "loading" });
+    try {
+      const entries = await Promise.all(completed.map(async (item) => {
+        const attempt = item.execution?.attempt;
+        if (!attempt) return null;
+        const response = await readAttemptResponse(item.runId, attempt.attemptId);
+        return response ? [`${item.runId}:${attempt.attemptId}`, response] as const : null;
+      }));
+      const responses: Record<string, AttemptResponse> = {};
+      for (const entry of entries) {
+        if (entry) responses[entry[0]] = entry[1];
+      }
+      setResponseState({ status: "ready", responses });
+    } catch (error: unknown) {
+      setResponseState({ status: "error", message: error instanceof Error ? error.message : "Some response artifacts could not be read." });
+    }
+  }
+
+  async function handleExecute() {
+    if (!isDesktopEnvironment()) {
+      setSession({ status: "error", message: arenaPreviewCopy() });
+      return;
+    }
+    if (!activeDocument || selectedProfiles.length < 2 || !selectedTaskId || !selectedCaseId) {
+      setSession({ status: "error", message: "Select a published benchmark, at least two competitors, task, and case." });
+      return;
+    }
+    const request: ArenaExecutionRequest = {
+      arenaId: `arena-${crypto.randomUUID()}`,
+      version: activeDocument.version,
+      taskId: selectedTaskId,
+      caseId: selectedCaseId,
+      profiles: selectedProfiles,
+      repetitions,
+    };
+    cancelRequestedRef.current = false;
+    setResponseState({ status: "idle" });
+    setSession({ status: "busy", request, progress: { completed: 0, total: selectedProfiles.length * repetitions, currentCompetitor: "Queued", repetition: 1 } });
+    try {
+      const results = await executeArena(request, executeRunOnce, (progress) => {
+        setSession((current) => current.status === "busy" ? { ...current, progress } : current);
+      }, () => !cancelRequestedRef.current);
+      setSummaryPersistence({ status: "saving" });
+      try {
+        const saved = await saveArenaSummary(buildArenaSummaryPayload(request, results));
+        setSummaryPersistence({
+          status: "saved",
+          record: saved.record,
+          saveOutcome: saved.saveOutcome,
+        });
+      } catch (error: unknown) {
+        setSummaryPersistence({
+          status: "error",
+          message: error instanceof Error ? error.message : "The Arena summary could not be saved.",
+        });
+      }
+      setSession({ status: "terminal", request, results });
+      void loadResponses(results);
+    } catch (error: unknown) {
+      setSummaryPersistence({ status: "idle" });
+      setSession({ status: "error", message: error instanceof Error ? error.message : "The Arena could not be started." });
+    }
+  }
+
+  const hasRecords = records.status === "ready" && records.versions.length > 0 && records.profiles.length >= 2;
+  const recordsAreEmpty = records.status === "ready" && (records.versions.length === 0 || records.profiles.length < 2);
+  const busy = session.status === "busy";
+
+  return (
+    <div className="view-stack">
+      <section className="panel page-intro">
+        <p className="eyebrow">Core Arena</p>
+        <h2>Compare multiple models in one reproducible Arena.</h2>
+        <p>Choose a published task, two or more immutable competitors, and repetitions. Runs execute sequentially for fair local speed metrics; a failed competitor stays visible without discarding the others.</p>
+      </section>
+
+      {records.status === "preview" && <section className="panel arena-state-panel"><StateMessage icon="◇" title="Browser preview / no writes" description={arenaPreviewCopy()} /></section>}
+      {records.status === "loading" && <section className="panel arena-state-panel"><StateMessage icon="…" title="Loading Arena records" description="Reading immutable versions and profile revisions from the local store." /></section>}
+      {records.status === "error" && <section className="panel arena-state-panel"><StateMessage icon="!" title="Arena records unavailable" description={records.message} error /></section>}
+      {recordsAreEmpty && <section className="panel arena-empty-grid"><EmptyState title={records.versions.length === 0 ? "No benchmark versions" : "Need two competitors"} description={records.versions.length === 0 ? arenaEmptyCopy("versions") : "Register at least two immutable profile revisions in Models before starting an Arena."} /></section>}
+
+      {hasRecords && (
+        <div className="arena-layout">
+          <section className="panel arena-selection-panel" aria-label="Arena builder">
+            <div className="section-heading compact-heading">
+              <div><p className="eyebrow">Arena builder</p><h3>Set up a fair comparison</h3></div>
+              <button className="text-button" type="button" onClick={() => void refreshRecords()} disabled={busy}>Refresh</button>
+            </div>
+            <div className="arena-selection-grid">
+              <ArenaSelect id="arena-version" label="Published benchmark version" value={selectedVersionId} options={versionOptions(records.versions)} placeholder="Select an existing version" disabled={busy} onChange={setSelectedVersionId} />
+              <ArenaSelect id="arena-task" label="Task" value={selectedTaskId} options={taskSelectionOptions} placeholder="Select a task" disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
+              <ArenaSelect id="arena-case" label="Case" value={selectedCaseId} options={caseSelectionOptions} placeholder="Select a case" disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
+              <label className="arena-select-control" htmlFor="arena-repetitions">
+                <span className="field-label">Repetitions</span>
+                <select className="font-select" id="arena-repetitions" value={repetitions} disabled={busy} onChange={(event) => setRepetitions(Number(event.currentTarget.value))}>
+                  {ARENA_REPETITION_OPTIONS.map((value) => <option key={value} value={value}>{value} {value === 1 ? "sample" : "samples per competitor"}</option>)}
+                </select>
+              </label>
+            </div>
+            <fieldset className="arena-competitor-picker">
+              <legend className="field-label">Competitors ({selectedProfiles.length}/{MAX_ARENA_COMPETITORS})</legend>
+              <p className="field-help">Each row is an immutable model/runtime/parameter revision. Select at least two.</p>
+              <div className="competitor-list">
+                {records.profiles.map((profile) => {
+                  const checked = selectedProfileRevisionIds.includes(profile.profileRevisionId);
+                  return (
+                    <label className={`competitor-option ${checked ? "is-selected" : ""}`} key={profile.profileRevisionId}>
+                      <input type="checkbox" checked={checked} disabled={busy || (!checked && selectedProfiles.length >= MAX_ARENA_COMPETITORS)} onChange={() => setSelectedProfileRevisionIds((current) => checked ? current.filter((id) => id !== profile.profileRevisionId) : [...current, profile.profileRevisionId])} />
+                      <span><strong>{profile.model}</strong><small>{profile.profileRevisionId} · {profile.runtime} · immutable revision {profile.revision}</small></span>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+            {documentState.status === "loading" && <StateMessage icon="…" title="Loading the selected version" description="Reading its stored canonical document without rewriting it." />}
+            {documentState.status === "malformed" && <StateMessage icon="!" title="Published document malformed" description={documentState.message} error />}
+            {documentState.status === "error" && <StateMessage icon="!" title="Version unavailable" description={documentState.message} error />}
+          </section>
+
+          <section className="panel arena-preview-panel" aria-live="polite">
+            <div className="section-heading compact-heading"><div><p className="eyebrow">Equivalent request preview</p><h3>What will be compared</h3></div><span className="section-index">P1</span></div>
+            {previewError && <StateMessage icon="!" title="Selection is not runnable" description={previewError} error />}
+            {!preview && !previewError && documentState.status !== "loading" && <StateMessage icon="◇" title="Select Arena inputs" description="Choose a published version, task, case, and at least two competitors." />}
+            {preview && (
+              <>
+                <div className="arena-preview-facts"><BoundaryRow label="Benchmark" value={preview.benchmarkVersionId} /><BoundaryRow label="Task / case" value={`${preview.taskId} / ${preview.caseId}`} /><BoundaryRow label="Competitors" value={String(selectedProfiles.length)} /><BoundaryRow label="Samples" value={String(selectedProfiles.length * repetitions)} /></div>
+                <div className="arena-prompt-block"><p className="eyebrow">Prompt sent to every competitor</p><pre className="arena-prompt">{preview.prompt}</pre></div>
+                <div className="arena-boundary"><BoundaryRow label="Runtime" value="Ollama · sequential fair mode" /><BoundaryRow label="Endpoint" value={preview.endpoint} /><BoundaryRow label="Failure policy" value="Isolate competitor" /><BoundaryRow label="Worker" value="App-owned one-shot" />{preview.executionBoundary && <BoundaryRow label="Execution boundary" value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
+                {dockerExecutionBlocked && <StateMessage icon="!" title="Docker execution blocked" description="This case requires Docker, which is unavailable in this build. Host execution is never used." error />}
+                <div className="arena-actions">
+                  <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}>Run Arena <span aria-hidden="true">→</span></button>
+                  {busy && <button className="secondary-button" type="button" onClick={() => { cancelRequestedRef.current = true; }}>Cancel queued work</button>}
+                  <button className="text-button" type="button" onClick={onOpenRuns}>View history <span aria-hidden="true">→</span></button>
+                </div>
+              </>
+            )}
+            {busy && <div className="arena-execution-status"><StateMessage icon="…" title={summaryPersistence.status === "saving" ? "Saving Arena summary" : `Running ${session.progress.completed}/${session.progress.total}`} description={summaryPersistence.status === "saving" ? "Writing the repetition statistics and per-sample evidence to immutable local storage." : `${session.progress.currentCompetitor} · repetition ${session.progress.repetition}. Results are persisted per competitor; queued work can be cancelled.`} /></div>}
+            {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title="Arena could not start" description={session.message} error /></div>}
+          </section>
+        </div>
+      )}
+
+      {session.status === "terminal" && <ArenaResultsSurface request={session.request} results={session.results} responseState={responseState} summaryPersistence={summaryPersistence} onOpenRuns={onOpenRuns} />}
+    </div>
+  );
+}
+
+function ArenaResultsSurface({
+  request,
+  results,
+  responseState,
+  summaryPersistence,
+  onOpenRuns,
+}: {
+  request: ArenaExecutionRequest;
+  results: ArenaExecution[];
+  responseState: ArenaResponseState;
+  summaryPersistence: ArenaSummaryPersistenceState;
+  onOpenRuns: () => void;
+}) {
+  const [blind, setBlind] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const [scores, setScores] = useState<Record<string, number>>({});
+  const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
+  const [lockMessage, setLockMessage] = useState<string | null>(null);
+  const summary = summarizeArenaExecutions(results);
+  const responseMap = responseState.status === "ready"
+    ? new Map(Object.entries(responseState.responses).map(([key, value]) => [key, value.text]))
+    : new Map<string, string>();
+  const cards = buildBlindArenaCards(results, responseMap);
+  const grouped = groupArenaExecutions(results);
+  const competitorSummaries = summarizeArenaCompetitors(results);
+  const ranking = lockState === "locked"
+    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.token] ?? 3] as const)))
+    : [];
+
+  async function lockEvaluation() {
+    if (cards.length === 0) return;
+    setLockState("busy");
+    setLockMessage(null);
+    try {
+      for (const card of cards) {
+        const [runId] = card.executionKey.split(":");
+        const preparation = await prepareBlindEvaluation(runId);
+        const prepared = preparation.responses.find((response) => response.text === card.text) ?? preparation.responses[0];
+        if (!prepared) continue;
+        await lockBlindEvaluation({
+          evaluationId: preparation.evaluationId,
+          runId,
+          scores: [{ token: prepared.token, overallScore: scores[card.token] ?? 3, criterionScores: {} }],
+          ranking: [[prepared.token]],
+        });
+      }
+      setLockState("locked");
+      setRevealed(true);
+    } catch (error: unknown) {
+      setLockState("error");
+      setLockMessage(error instanceof Error ? error.message : "The blind evaluation could not be locked.");
+    }
+  }
+
+  function download(kind: "json" | "markdown" | "csv") {
+    const content = kind === "json" ? arenaExportJson(request, results) : kind === "markdown" ? arenaExportMarkdown(request, results) : arenaExportCsv(results);
+    const type = kind === "json" ? "application/json" : kind === "markdown" ? "text/markdown" : "text/csv";
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `prompt-arena-${request.arenaId}.${kind === "markdown" ? "md" : kind}`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <section className="panel arena-results-panel" aria-live="polite">
+      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{summary.completed}/{summary.total} samples completed</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
+      <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>
+      {summaryPersistence.status === "error" && <StateMessage icon="!" title="Aggregate summary unavailable" description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
+      {summaryPersistence.status === "saved" && (
+        <div className="results-section">
+          <p className="eyebrow">Immutable Arena summary</p>
+          <div className="results-facts">
+            <BoundaryRow label="Saved outcome" value={summaryPersistence.saveOutcome} />
+            <BoundaryRow label="Content hash" value={summaryPersistence.record.contentHash} />
+            <BoundaryRow label="Timing uncertainty" value={`${formatArenaMetric(summary.uncertainty)} ms`} />
+            <BoundaryRow label="Timing tie margin" value={`${formatArenaMetric(summary.tieMargin)} ms`} />
+            <BoundaryRow label="Objective uncertainty" value={formatArenaMetric(summary.objectiveUncertainty)} />
+            <BoundaryRow label="Objective tie margin" value={formatArenaMetric(summary.objectiveTieMargin)} />
+            <BoundaryRow label="Per-sample evidence" value={String(summaryPersistence.record.evidence.length)} />
+          </div>
+        </div>
+      )}
+      {responseState.status === "loading" && <StateMessage icon="…" title="Reading verified response artifacts" description="Response text is loaded only from app-owned, hash-verified artifacts." />}
+      {responseState.status === "error" && <StateMessage icon="!" title="Some responses are unavailable" description={responseState.message} error />}
+      {blind && !revealed ? (
+        <div className="blind-arena-surface">
+          <div className="section-heading compact-heading"><div><p className="eyebrow">Blind evaluation</p><h4>Score anonymous responses before reveal</h4></div><span className="run-status run-status-neutral">Locked until submit</span></div>
+          <p className="field-help">Model, provider, runtime, timing, tokens, objective status, and rank are hidden until the evaluation lock is saved.</p>
+          {cards.length === 0 ? <EmptyState title="No completed responses" description="Only completed, verified responses can enter blind review." /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><label className="field-label" htmlFor={`score-${card.token}`}>Overall score (1–5)<select className="font-select" id={`score-${card.token}`} value={scores[card.token] ?? 3} onChange={(event) => setScores((current) => ({ ...current, [card.token]: Number(event.currentTarget.value) }))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></article>)}</div>}
+          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? "Saving evaluation…" : "Lock scores and reveal"}</button><button className="text-button" type="button" onClick={() => setBlind(false)}>Back to comparison</button></div>
+          {lockMessage && <p className="field-help" role="alert">{lockMessage}</p>}
+        </div>
+      ) : (
+        <>
+          <div className="section-heading compact-heading"><div><p className="eyebrow">Comparison</p><h4>Responses by competitor</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>Blind evaluate</button><button className="text-button" type="button" onClick={onOpenRuns}>Open history →</button></div></div>
+          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">Competitor</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} sample{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">No response text is available for this competitor. Inspect run history for verified evidence.</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`} {item.error ? `· ${item.error}` : ""}</li>; })}</ul></article>; })}</div>
+          {ranking.length > 0 && <div className="arena-ranking" aria-label="Arena ranking"><div className="section-heading compact-heading"><div><p className="eyebrow">Ranking</p><h4>Human scores after immutable lock</h4></div><span className="run-status arena-status-success">Revealed</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${entry.value.toFixed(2)}/5 average` : `${Math.round(entry.value * 100)}% objective pass rate`} · n={entry.sampleSize}</span></li>)}</ol></div>}
+          {revealed && lockState === "locked" && <p className="field-help" role="status">Blind scores are locked in immutable per-run evaluation records. Responses are now identified.</p>}
+          <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => download("json")}>Export JSON</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>Export Markdown</button><button className="secondary-button" type="button" onClick={() => download("csv")}>Export CSV</button></div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function ArenaSelect({
   id,
   label,
@@ -1754,7 +2731,7 @@ function arenaTerminalStatus(status: string): "success" | "failure" | "cancelled
 
 type RunsState =
   | { status: "loading" }
-  | { status: "ready"; runs: RunRecord[] }
+  | { status: "ready"; runs: RunRecord[]; summaries: ArenaSummaryRecord[] }
   | { status: "error"; message: string };
 
 type AttemptsState =
@@ -1777,9 +2754,9 @@ function RunsView() {
         current = false;
       };
     }
-    void readRuns()
-      .then((runs) => {
-        if (current) setState({ status: "ready", runs });
+    void Promise.all([readRuns(), readArenaSummaries()])
+      .then(([runs, summaries]) => {
+        if (current) setState({ status: "ready", runs, summaries });
       })
       .catch((error: unknown) => {
         if (current) {
@@ -1857,7 +2834,7 @@ function RunsView() {
             error
           />
         )}
-        {state.status === "ready" && state.runs.length === 0 && (
+        {state.status === "ready" && state.runs.length === 0 && state.summaries.length === 0 && (
           <EmptyState
             title="No run history"
             description="There are no local run records yet. No sample runs are bundled or invented in this view."
@@ -1925,7 +2902,132 @@ function RunsView() {
             </section>
           </div>
         )}
+        {state.status === "ready" && <ArenaSummaryHistory summaries={state.summaries} />}
       </section>
+    </div>
+  );
+}
+
+type ArenaSummaryDetailState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; record: ArenaSummaryRecord }
+  | { status: "error"; message: string };
+
+function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] }) {
+  const [selectedArenaId, setSelectedArenaId] = useState("");
+  const [detail, setDetail] = useState<ArenaSummaryDetailState>({ status: "idle" });
+
+  useEffect(() => {
+    if (!summaries.some((summary) => summary.arenaId === selectedArenaId)) {
+      setSelectedArenaId("");
+      setDetail({ status: "idle" });
+    }
+  }, [selectedArenaId, summaries]);
+
+  async function selectSummary(arenaId: string) {
+    setSelectedArenaId(arenaId);
+    setDetail({ status: "loading" });
+    try {
+      const record = await readArenaSummary(arenaId);
+      if (!record) {
+        setDetail({ status: "error", message: "The selected Arena summary no longer exists locally." });
+        return;
+      }
+      setDetail({ status: "ready", record });
+    } catch (error: unknown) {
+      setDetail({
+        status: "error",
+        message: error instanceof Error ? error.message : "The selected Arena summary is unavailable.",
+      });
+    }
+  }
+
+  return (
+    <section className="results-section" aria-live="polite" aria-label="Arena summary history">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Aggregate evidence</p>
+          <h3>Arena summaries</h3>
+        </div>
+        <span className="run-status run-status-neutral">immutable</span>
+      </div>
+      {summaries.length === 0 ? (
+        <p className="field-help">No aggregate Arena summaries have been saved yet.</p>
+      ) : (
+        <div className="runs-layout">
+          <div className="runs-list" aria-label="Arena summary records">
+            {summaries.map((summary) => (
+              <button
+                className={`benchmark-record-row ${selectedArenaId === summary.arenaId ? "is-selected" : ""}`}
+                key={summary.arenaId}
+                type="button"
+                onClick={() => void selectSummary(summary.arenaId)}
+              >
+                <span>
+                  <strong>{summary.arenaId}</strong>
+                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                </span>
+                <span aria-hidden="true">→</span>
+              </button>
+            ))}
+          </div>
+          <div className="attempts-panel">
+            {detail.status === "idle" && <StateMessage icon="◇" title="Select an Arena summary" description="Choose an immutable aggregate record to reload its statistics and sample evidence." />}
+            {detail.status === "loading" && <StateMessage icon="…" title="Loading Arena summary" description="Reading the selected immutable aggregate record." />}
+            {detail.status === "error" && <StateMessage icon="!" title="Arena summary unavailable" description={detail.message} error />}
+            {detail.status === "ready" && (
+              <ArenaSummaryHistoryDetail record={detail.record} />
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
+  const summary = record.summary;
+  return (
+    <div className="arena-summary-history-detail">
+      <div className="results-facts">
+        <BoundaryRow label="Arena" value={record.arenaId} />
+        <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
+        <BoundaryRow label="Content hash" value={record.contentHash} />
+        <BoundaryRow label="Samples" value={String(record.evidence.length)} />
+        <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
+        <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
+        <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
+        <BoundaryRow label="Tie margin" value={summaryMetricText(summary, "tieMargin")} />
+        <BoundaryRow label="Objective uncertainty" value={summaryMetricText(summary, "objectiveUncertainty")} />
+        <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
+      </div>
+      <div className="results-section">
+        <p className="eyebrow">Competitor summaries</p>
+        <ul className="arena-sample-list">
+          {record.competitors.map((competitor, index) => (
+            <li key={`${String(competitor.competitorId ?? index)}`}>
+              <strong>{String(competitor.competitorLabel ?? competitor.competitorId ?? `Competitor ${index + 1}`)}</strong>
+              {` · ${String(competitor.completed ?? 0)}/${String(competitor.total ?? 0)} completed`}
+              {` · uncertainty ${summaryMetricText(competitor, "uncertainty")}`}
+              {` · tie margin ${summaryMetricText(competitor, "tieMargin")}`}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="results-section">
+        <p className="eyebrow">Per-sample evidence</p>
+        <ul className="arena-sample-list">
+          {record.evidence.map((evidence) => (
+            <li key={`${evidence.runId}-${evidence.repetition}`}>
+              <strong>{evidence.competitorLabel} #{evidence.repetition}</strong>
+              {` · ${evidence.status} · ${evidence.durationMs === null ? "duration not recorded" : `${evidence.durationMs.toFixed(0)} ms`}`}
+              {evidence.completionTokens === null ? "" : ` · ${evidence.completionTokens} completion tokens`}
+              {evidence.objectivePassed === null ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`}
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -2535,40 +3637,610 @@ function Settings({
         </div>
       </section>
 
-      <section className="panel provider-panel" aria-labelledby="provider-foundation-heading">
-        <div className="section-heading compact-heading">
-          <div>
-            <p className="eyebrow">Phase F foundation</p>
-            <h3 id="provider-foundation-heading">External providers, clearly bounded</h3>
-          </div>
+      <ByokPanel desktop={desktop} />
+    </div>
+  );
+}
+
+type ByokMetadataState =
+  | { status: "loading" }
+  | { status: "unsupported" }
+  | { status: "ready"; providers: ExternalProviderMetadata[] }
+  | { status: "error"; message: string };
+
+type ByokAction =
+  | { kind: "configure" | "policy" | "remove" | "generate"; providerId: ExternalProviderId }
+  | null;
+
+type ByokNotice = { kind: "success" | "error"; message: string } | null;
+
+const EMPTY_BYOK_PRICE_DRAFT: ByokPriceSnapshotDraft = {
+  modelId: "",
+  capturedOn: "",
+  inputUsdPerMillionTokens: "",
+  outputUsdPerMillionTokens: "",
+};
+
+function ByokPanel({ desktop }: { desktop: boolean }) {
+  const [metadataState, setMetadataState] = useState<ByokMetadataState>(() => (
+    desktop ? { status: "loading" } : { status: "unsupported" }
+  ));
+  const [selectedProviderId, setSelectedProviderId] = useState<ExternalProviderId>("openai-compatible");
+  const [endpoint, setEndpoint] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [budgetDraft, setBudgetDraft] = useState<ByokBudgetDraft>({
+    confirmationThresholdUsd: "",
+    ceilingUsd: "",
+  });
+  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [maxOutputTokens, setMaxOutputTokens] = useState("256");
+  const [priceSnapshot, setPriceSnapshot] = useState<ByokPriceSnapshotDraft>({ ...EMPTY_BYOK_PRICE_DRAFT });
+  const [networkConsent, setNetworkConsent] = useState(false);
+  const [costConfirmed, setCostConfirmed] = useState(false);
+  const [generationSubmitted, setGenerationSubmitted] = useState(false);
+  const [action, setAction] = useState<ByokAction>(null);
+  const [notice, setNotice] = useState<ByokNotice>(null);
+  const [generationResult, setGenerationResult] = useState<ExternalGenerationResult | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    if (!desktop) {
+      setMetadataState({ status: "unsupported" });
+      return () => {
+        current = false;
+      };
+    }
+
+    setMetadataState({ status: "loading" });
+    void readExternalProviders()
+      .then((providers) => {
+        if (current) setMetadataState({ status: "ready", providers });
+      })
+      .catch((error: unknown) => {
+        if (current) setMetadataState({ status: "error", message: byokErrorMessage(error) });
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [desktop]);
+
+  const selectedMetadata = metadataState.status === "ready"
+    ? metadataState.providers.find((provider) => provider.providerId === selectedProviderId)
+    : undefined;
+  const savedPolicy: CostPolicy | null = selectedMetadata
+    ? {
+        confirmationThresholdUsd: selectedMetadata.confirmationThresholdUsd,
+        ceilingUsd: selectedMetadata.ceilingUsd,
+      }
+    : null;
+  const generationDraft: ByokGenerationDraft = {
+    prompt: generationPrompt,
+    maxOutputTokens,
+    priceSnapshot,
+    networkConsent,
+    costConfirmed,
+  };
+  const generationValidation = selectedMetadata?.configured
+    ? validateByokGeneration(selectedProviderId, selectedMetadata.model ?? model, savedPolicy, generationDraft)
+    : null;
+  const busy = action !== null;
+
+  useEffect(() => {
+    if (metadataState.status !== "ready") return;
+    const provider = metadataState.providers.find((item) => item.providerId === selectedProviderId);
+    if (!provider) {
+      const firstProvider = metadataState.providers[0];
+      if (firstProvider) setSelectedProviderId(firstProvider.providerId);
+      return;
+    }
+    setEndpoint(provider.endpoint ?? provider.defaultEndpoint);
+    setModel(provider.model ?? "");
+    setBudgetDraft({
+      confirmationThresholdUsd: provider.confirmationThresholdUsd === null ? "" : String(provider.confirmationThresholdUsd),
+      ceilingUsd: provider.ceilingUsd === null ? "" : String(provider.ceilingUsd),
+    });
+    setPriceSnapshot({
+      ...EMPTY_BYOK_PRICE_DRAFT,
+      modelId: provider.model ?? "",
+    });
+    setApiKey("");
+    setCostConfirmed(false);
+    setGenerationResult(null);
+    setGenerationSubmitted(false);
+  }, [metadataState, selectedProviderId]);
+
+  async function refreshMetadata() {
+    if (!desktop) {
+      setMetadataState({ status: "unsupported" });
+      return;
+    }
+    setMetadataState({ status: "loading" });
+    try {
+      setMetadataState({ status: "ready", providers: await readExternalProviders() });
+    } catch (error: unknown) {
+      setMetadataState({ status: "error", message: byokErrorMessage(error) });
+    }
+  }
+
+  function updateMetadata(next: ExternalProviderMetadata) {
+    setMetadataState((current) => {
+      if (current.status !== "ready") return current;
+      const found = current.providers.some((provider) => provider.providerId === next.providerId);
+      return {
+        ...current,
+        providers: found
+          ? current.providers.map((provider) => provider.providerId === next.providerId ? next : provider)
+          : [...current.providers, next],
+      };
+    });
+  }
+
+  function clearGenerationEvidence() {
+    setGenerationResult(null);
+    setGenerationSubmitted(false);
+    setCostConfirmed(false);
+  }
+
+  function updatePriceSnapshot(field: keyof ByokPriceSnapshotDraft, value: string) {
+    setPriceSnapshot((current) => ({ ...current, [field]: value }));
+    clearGenerationEvidence();
+  }
+
+  function handleProviderSelection(providerId: ExternalProviderId) {
+    setSelectedProviderId(providerId);
+    setNotice(null);
+  }
+
+  async function handleConfigure(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedMetadata) return;
+    setNotice(null);
+    const configuration = validateByokConfiguration({ endpoint, model, apiKey });
+    const policy = validateByokBudget(budgetDraft);
+    if (!configuration.valid) {
+      setNotice({ kind: "error", message: firstByokValidationError(configuration.errors) });
+      return;
+    }
+    if (!policy.valid || !policy.policy) {
+      setNotice({ kind: "error", message: firstByokValidationError(policy.errors) });
+      return;
+    }
+
+    setAction({ kind: "configure", providerId: selectedProviderId });
+    try {
+      const next = await configureExternalProvider({
+        providerId: selectedProviderId,
+        endpoint,
+        model,
+        apiKey,
+        costPolicy: policy.policy,
+      });
+      updateMetadata(next);
+      setNotice({ kind: "success", message: `${providerLabel(selectedProviderId)} configuration saved in OS secure storage.` });
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setApiKey("");
+      setAction(null);
+    }
+  }
+
+  async function handlePolicyUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedMetadata?.configured) return;
+    setNotice(null);
+    const policy = validateByokBudget(budgetDraft);
+    if (!policy.valid || !policy.policy) {
+      setNotice({ kind: "error", message: firstByokValidationError(policy.errors) });
+      return;
+    }
+
+    setAction({ kind: "policy", providerId: selectedProviderId });
+    try {
+      const next = await updateExternalCostPolicy({
+        providerId: selectedProviderId,
+        costPolicy: policy.policy,
+      });
+      updateMetadata(next);
+      setNotice({ kind: "success", message: "Cost policy updated. The hard ceiling remains enforced by the desktop boundary." });
+      clearGenerationEvidence();
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function handleRemove() {
+    if (!selectedMetadata?.configured || busy) return;
+    if (typeof window !== "undefined" && !window.confirm(`Remove the stored ${providerLabel(selectedProviderId)} configuration?`)) return;
+    setNotice(null);
+    setAction({ kind: "remove", providerId: selectedProviderId });
+    try {
+      const removed = await removeExternalProvider(selectedProviderId);
+      if (removed) {
+        setMetadataState((current) => {
+          if (current.status !== "ready") return current;
+          return {
+            ...current,
+            providers: current.providers.map((provider) => provider.providerId === selectedProviderId
+              ? {
+                  ...provider,
+                  configured: false,
+                  endpoint: null,
+                  model: null,
+                  credentialSource: "not_configured",
+                  identityConfidence: "unverified",
+                  connectTimeoutMs: null,
+                  readTimeoutMs: null,
+                  confirmationThresholdUsd: null,
+                  ceilingUsd: null,
+                }
+              : provider),
+          };
+        });
+        setNotice({ kind: "success", message: "Stored provider configuration removed. No key is displayed or exported." });
+        clearGenerationEvidence();
+      } else {
+        setNotice({ kind: "success", message: "No stored provider configuration was found." });
+      }
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setApiKey("");
+      setAction(null);
+    }
+  }
+
+  async function handleGeneration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setGenerationSubmitted(true);
+    setNotice(null);
+    if (
+      !selectedMetadata?.configured
+      || !generationValidation?.valid
+      || !generationValidation.snapshot
+      || generationValidation.maxOutputTokens === null
+    ) return;
+
+    setAction({ kind: "generate", providerId: selectedProviderId });
+    try {
+      const result = await executeExternalGeneration({
+        providerId: selectedProviderId,
+        prompt: generationPrompt,
+        maxOutputTokens: generationValidation.maxOutputTokens,
+        networkConsent,
+        costConfirmed,
+        priceSnapshot: generationValidation.snapshot,
+      });
+      setGenerationResult(result);
+      setNotice({ kind: "success", message: "Generation completed. Only sanitized usage, cost, and identity evidence is shown." });
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setAction(null);
+    }
+  }
+
+  return (
+    <section className="panel provider-panel byok-panel" aria-labelledby="provider-foundation-heading">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Bring your own key</p>
+          <h3 id="provider-foundation-heading">External providers, clearly bounded</h3>
+        </div>
+        <div className="byok-heading-actions">
+          <button className="text-button" type="button" onClick={() => void refreshMetadata()} disabled={!desktop || busy}>
+            Refresh
+          </button>
           <span className="section-index">C</span>
         </div>
-        <p className="provider-intro">
-          BYOK means a future adapter would use credentials owned by you. This read-only catalog documents the boundary;
-          it does not accept API keys, read environment variables, call a provider, or make external execution available.
-          Local Ollama remains the only executable runtime.
+      </div>
+      <p className="provider-intro">
+        Configure one of four supported provider adapters with a key you own. Desktop mode reads only redacted metadata
+        from OS secure storage; provider calls happen only after you submit a form with explicit network consent.
+      </p>
+
+      {notice && (
+        <p className={`form-feedback form-feedback-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
+          {notice.message}
         </p>
+      )}
 
-        <div className="provider-grid">
-          {PROVIDER_CATALOG.map((provider) => <ProviderStatusCard key={provider.id} provider={provider} />)}
-        </div>
+      {metadataState.status === "loading" && (
+        <StateMessage icon="…" title="Loading provider metadata" description="Reading configured status and redacted settings from the desktop secure-storage boundary." />
+      )}
 
-        <div className="provider-safety-note">
-          <p className="eyebrow">Future paid-work safety contract</p>
-          <p>
-            A later adapter must estimate from a dated price-table snapshot, ask for confirmation at a configured
-            threshold, and refuse new paid work past a budget ceiling. Missing or invalid prices fail closed. Actual
-            cost history, secure credential storage, user-selected network calls, and provider identity verification are
-            still pending.
+      {metadataState.status === "error" && (
+        <>
+          <StateMessage icon="!" title="Provider metadata unavailable" description={metadataState.message} error />
+          <button className="secondary-button" type="button" onClick={() => void refreshMetadata()} disabled={busy}>
+            Try again
+          </button>
+        </>
+      )}
+
+      {metadataState.status === "unsupported" && (
+        <>
+          <StateMessage icon="◇" title="Browser preview / no provider writes" description={providerPreviewCopy()} />
+          <div className="provider-grid">
+            {PROVIDER_CATALOG.map((provider) => <ProviderStatusCard key={provider.id} provider={provider} />)}
+          </div>
+          <p className="field-help provider-boundary-copy">
+            No API key field, secure-storage write, cost-policy update, removal, or provider generation is available in browser preview.
           </p>
-        </div>
+        </>
+      )}
 
-        <p className="field-help provider-boundary-copy">
-          {desktop
-            ? "Desktop mode is still local-only: providers are unconfigured, and no key, network, telemetry, or provider state is stored."
-            : providerPreviewCopy()}
+      {metadataState.status === "ready" && (
+        <>
+          <div className="provider-grid">
+            {PROVIDER_CATALOG.map((provider) => (
+              <ByokProviderCard
+                key={provider.id}
+                provider={provider}
+                metadata={metadataState.providers.find((item) => item.providerId === provider.id)}
+                selected={selectedProviderId === provider.id}
+                disabled={busy}
+                onSelect={() => handleProviderSelection(provider.id)}
+              />
+            ))}
+          </div>
+
+          {selectedMetadata ? (
+            <div className="byok-editor-grid">
+              <section className="byok-editor-card" aria-labelledby="byok-configuration-heading">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">{selectedMetadata.configured ? "Replace configuration" : "New configuration"}</p>
+                    <h4 id="byok-configuration-heading">{selectedMetadata.label}</h4>
+                  </div>
+                  <span className="provider-state">{selectedMetadata.configured ? "Configured" : "Not configured"}</span>
+                </div>
+
+                <form className="byok-form" onSubmit={(event) => void handleConfigure(event)}>
+                  <label className="form-control" htmlFor="byok-endpoint">
+                    <span className="field-label">HTTPS endpoint</span>
+                    <input id="byok-endpoint" type="url" value={endpoint} onChange={(event) => setEndpoint(event.currentTarget.value)} autoComplete="url" />
+                  </label>
+                  <label className="form-control" htmlFor="byok-model">
+                    <span className="field-label">Model ID</span>
+                    <input id="byok-model" type="text" value={model} onChange={(event) => setModel(event.currentTarget.value)} autoComplete="off" />
+                  </label>
+                  <label className="form-control" htmlFor="byok-api-key">
+                    <span className="field-label">API key</span>
+                    <input
+                      id="byok-api-key"
+                      type="password"
+                      value={apiKey}
+                      onChange={(event) => setApiKey(event.currentTarget.value)}
+                      autoComplete="new-password"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <p className="field-help byok-key-note">Password field only. The key is sent once to OS secure storage, then cleared immediately; it is never rendered, logged, exported, or written to localStorage.</p>
+                  <button className="primary-button" type="submit" disabled={busy}>
+                    {action?.kind === "configure" ? "Saving configuration…" : "Save configuration"} <span aria-hidden="true">→</span>
+                  </button>
+                </form>
+
+                <form className="byok-policy-form" onSubmit={(event) => void handlePolicyUpdate(event)}>
+                  <div className="section-heading compact-heading">
+                    <div>
+                      <p className="eyebrow">Paid-work guardrails</p>
+                      <h4>Cost policy</h4>
+                    </div>
+                  </div>
+                  <div className="byok-form-grid">
+                    <label className="form-control" htmlFor="byok-confirmation-threshold">
+                      <span className="field-label">Confirmation threshold (USD)</span>
+                      <input
+                        id="byok-confirmation-threshold"
+                        type="number"
+                        min="0"
+                        max="1000000000"
+                        step="0.000001"
+                        value={budgetDraft.confirmationThresholdUsd}
+                        onChange={(event) => setBudgetDraft((current) => ({ ...current, confirmationThresholdUsd: event.currentTarget.value }))}
+                      />
+                    </label>
+                    <label className="form-control" htmlFor="byok-ceiling">
+                      <span className="field-label">Hard ceiling (USD)</span>
+                      <input
+                        id="byok-ceiling"
+                        type="number"
+                        min="0"
+                        max="1000000000"
+                        step="0.000001"
+                        value={budgetDraft.ceilingUsd}
+                        onChange={(event) => setBudgetDraft((current) => ({ ...current, ceilingUsd: event.currentTarget.value }))}
+                      />
+                    </label>
+                  </div>
+                  <p className="field-help">Blank means no threshold. The desktop boundary refuses invalid policy values and work above the hard ceiling.</p>
+                  <button className="secondary-button" type="submit" disabled={busy || !selectedMetadata.configured}>
+                    {action?.kind === "policy" ? "Updating policy…" : "Update cost policy"}
+                  </button>
+                </form>
+
+                <button className="text-button byok-remove-button" type="button" onClick={() => void handleRemove()} disabled={busy || !selectedMetadata.configured}>
+                  Remove stored configuration
+                </button>
+              </section>
+
+              <section className="byok-generation-card" aria-labelledby="byok-generation-heading">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">Explicit test action</p>
+                    <h4 id="byok-generation-heading">Test provider generation</h4>
+                  </div>
+                  <span className="section-index">D</span>
+                </div>
+                <p className="field-help byok-generation-intro">Nothing is sent automatically. This form requires a dated USD price snapshot and an explicit consent checkbox before the provider call.</p>
+
+                {!selectedMetadata.configured ? (
+                  <StateMessage icon="◇" title="Configure a provider first" description="The generation form appears after this provider has a stored configuration." />
+                ) : (
+                  <form className="byok-form" onSubmit={(event) => void handleGeneration(event)}>
+                    <label className="form-control" htmlFor="byok-prompt">
+                      <span className="field-label">Prompt</span>
+                      <textarea
+                        id="byok-prompt"
+                        value={generationPrompt}
+                        onChange={(event) => { setGenerationPrompt(event.currentTarget.value); clearGenerationEvidence(); }}
+                        placeholder="Enter a small prompt for the explicit provider test."
+                      />
+                    </label>
+                    <label className="form-control byok-max-token-control" htmlFor="byok-max-output-tokens">
+                      <span className="field-label">Maximum output tokens</span>
+                      <input id="byok-max-output-tokens" type="number" min="1" max="100000000" step="1" value={maxOutputTokens} onChange={(event) => { setMaxOutputTokens(event.currentTarget.value); clearGenerationEvidence(); }} />
+                    </label>
+
+                    <fieldset className="form-section byok-price-section">
+                      <legend>Dated price snapshot (USD)</legend>
+                      <div className="byok-form-grid">
+                        <label className="form-control" htmlFor="byok-price-model">
+                          <span className="field-label">Snapshot model ID</span>
+                          <input id="byok-price-model" type="text" value={priceSnapshot.modelId} onChange={(event) => updatePriceSnapshot("modelId", event.currentTarget.value)} />
+                        </label>
+                        <label className="form-control" htmlFor="byok-price-date">
+                          <span className="field-label">Captured on</span>
+                          <input id="byok-price-date" type="date" value={priceSnapshot.capturedOn} onChange={(event) => updatePriceSnapshot("capturedOn", event.currentTarget.value)} />
+                        </label>
+                        <label className="form-control" htmlFor="byok-input-rate">
+                          <span className="field-label">Input USD / 1M tokens</span>
+                          <input id="byok-input-rate" type="number" min="0" max="1000000" step="0.000001" value={priceSnapshot.inputUsdPerMillionTokens} onChange={(event) => updatePriceSnapshot("inputUsdPerMillionTokens", event.currentTarget.value)} />
+                        </label>
+                        <label className="form-control" htmlFor="byok-output-rate">
+                          <span className="field-label">Output USD / 1M tokens</span>
+                          <input id="byok-output-rate" type="number" min="0" max="1000000" step="0.000001" value={priceSnapshot.outputUsdPerMillionTokens} onChange={(event) => updatePriceSnapshot("outputUsdPerMillionTokens", event.currentTarget.value)} />
+                        </label>
+                      </div>
+                      <p className="field-help">The snapshot model must match the configured model. Missing or invalid prices fail closed. Currency is fixed to USD at the boundary.</p>
+                    </fieldset>
+
+                    {generationValidation?.estimate?.status === "estimated" && (
+                      <div className="byok-cost-preview" aria-live="polite">
+                        <p className="eyebrow">Preflight cost evidence</p>
+                        <div className="results-facts">
+                          <BoundaryRow label="Input estimate" value={`${formatByokTokens(generationValidation.inputTokens)} tokens · ${formatByokMoney(generationValidation.estimate.inputCostUsd)}`} />
+                          <BoundaryRow label="Output cap" value={`${formatByokTokens(generationValidation.maxOutputTokens)} tokens · ${formatByokMoney(generationValidation.estimate.outputCostUsd)}`} />
+                          <BoundaryRow label="Estimated total" value={formatByokMoney(generationValidation.estimate.totalCostUsd)} />
+                          <BoundaryRow label="Budget decision" value={formatByokDecision(generationValidation.budgetDecision?.decision)} />
+                        </div>
+                      </div>
+                    )}
+
+                    {generationValidation?.budgetDecision?.decision === "confirm" && (
+                      <label className="byok-consent-label">
+                        <input type="checkbox" checked={costConfirmed} onChange={(event) => setCostConfirmed(event.currentTarget.checked)} />
+                        <span><strong>Confirm this estimated cost</strong><small>The configured threshold was reached. This confirmation applies only to this submitted generation.</small></span>
+                      </label>
+                    )}
+
+                    <label className="byok-consent-label">
+                      <input type="checkbox" checked={networkConsent} onChange={(event) => { setNetworkConsent(event.currentTarget.checked); clearGenerationEvidence(); }} />
+                      <span><strong>Allow one external network call</strong><small>Nothing is sent until this explicit consent is checked and the form is submitted.</small></span>
+                    </label>
+
+                    {generationSubmitted && generationValidation && !generationValidation.valid && (
+                      <p className="form-feedback form-feedback-error" role="alert">{firstByokValidationError(generationValidation.errors)}</p>
+                    )}
+
+                    <button className="primary-button" type="submit" disabled={busy}>
+                      {action?.kind === "generate" ? "Calling provider…" : "Test provider generation"} <span aria-hidden="true">→</span>
+                    </button>
+                  </form>
+                )}
+
+                {generationResult && <ByokGenerationSuccess result={generationResult} />}
+              </section>
+            </div>
+          ) : (
+            <StateMessage icon="!" title="Provider metadata incomplete" description="The desktop bridge did not return a usable record for the selected provider." error />
+          )}
+        </>
+      )}
+
+      <div className="provider-safety-note byok-safety-note">
+        <p className="eyebrow">No-secret boundary</p>
+        <p>
+          API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Generation results are
+          shown in memory with sanitized usage, cost, and identity evidence only; this panel does not export or persist them.
         </p>
-      </section>
+      </div>
+    </section>
+  );
+}
+
+function ByokProviderCard({
+  provider,
+  metadata,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  provider: ProviderCatalogEntry;
+  metadata: ExternalProviderMetadata | undefined;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  const configured = metadata?.configured ?? false;
+  const kindLabel = provider.kind === "generic_openai_compatible" ? "Generic compatibility adapter" : "Native adapter";
+  return (
+    <article className={`provider-card byok-provider-card ${selected ? "is-selected" : ""}`} data-provider={provider.id}>
+      <div className="provider-card-heading">
+        <div>
+          <p className="eyebrow">{kindLabel}</p>
+          <h4>{metadata?.label ?? provider.label}</h4>
+        </div>
+        <span className="provider-state">{configured ? "Configured" : "Not configured"}</span>
+      </div>
+      <div className="provider-facts">
+        <div><span>Configured</span><strong>{configured ? "Yes" : "No"}</strong></div>
+        <div><span>Storage</span><strong>{formatStorageStatus(metadata?.storageStatus)}</strong></div>
+        <div><span>Credentials</span><strong>{formatCredentialSource(metadata?.credentialSource)}</strong></div>
+        <div><span>Endpoint</span><strong>{metadata?.endpoint ?? "Not configured"}</strong></div>
+        <div><span>Model</span><strong>{metadata?.model ?? "Not configured"}</strong></div>
+        <div><span>Identity</span><strong>{formatIdentityConfidence(metadata?.identityConfidence)}</strong></div>
+      </div>
+      <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata} aria-pressed={selected}>
+        {selected ? "Selected" : "Manage provider"}
+      </button>
+    </article>
+  );
+}
+
+function ByokGenerationSuccess({ result }: { result: ExternalGenerationResult }) {
+  return (
+    <div className="byok-success" role="status" aria-live="polite">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Sanitized result</p>
+          <h4>Provider generation completed</h4>
+        </div>
+        <span className="run-status arena-status-success">Success</span>
+      </div>
+      <div className="results-facts">
+        <BoundaryRow label="Provider" value={providerLabel(result.providerId)} />
+        <BoundaryRow label="Requested model" value={result.requestedModel} />
+        <BoundaryRow label="Provider model" value={result.providerModel} />
+        <BoundaryRow label="Identity confidence" value={formatIdentityConfidence(result.identityConfidence)} />
+        <BoundaryRow label="Network used" value={result.networkUsed ? "Yes · consented" : "No"} />
+        <BoundaryRow label="Usage" value={`${formatByokTokens(result.usage.inputTokens)} input · ${formatByokTokens(result.usage.outputTokens)} output · ${formatByokTokens(result.usage.totalTokens)} total`} />
+        <BoundaryRow label="Estimated cost" value={formatByokMoney(result.cost.estimated.totalCostUsd)} />
+        <BoundaryRow label="Actual cost" value={formatByokMoney(result.cost.actual.totalCostUsd)} />
+        <BoundaryRow label="Final decision" value={formatByokDecision(result.cost.finalDecision)} />
+        <BoundaryRow label="Price snapshot" value={`${result.cost.priceSnapshot.modelId} · ${result.cost.priceSnapshot.capturedOn} · ${result.cost.priceSnapshot.currency}`} />
+      </div>
+      <div className="byok-response-block">
+        <p className="eyebrow">Returned text</p>
+        <pre className="byok-response">{result.text}</pre>
+      </div>
+      <p className="field-help">This result and its evidence are displayed in memory only. They are not exported, stored in localStorage, or added to run history.</p>
     </div>
   );
 }
