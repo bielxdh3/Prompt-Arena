@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod domain;
 pub mod evaluation;
+pub mod external_providers;
 pub mod hardware;
 pub mod model_library;
 pub mod official_packs;
@@ -19,6 +20,10 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::validate_benchmark_document,
+            commands::list_external_providers,
+            commands::configure_external_provider,
+            commands::update_external_cost_policy,
+            commands::remove_external_provider,
             commands::list_official_packs,
             commands::get_official_pack,
             commands::materialize_official_pack,

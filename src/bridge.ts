@@ -10,6 +10,49 @@ export type AppStatus = {
   supportedPlatform: "windows" | "linux" | "unsupported";
 };
 
+export type ExternalProviderId = "openai-compatible" | "openai" | "anthropic" | "gemini";
+export type ProviderKind = "generic_openai_compatible" | "native";
+export type SecureStorageStatus = "available" | "unsupported" | "error";
+export type CredentialSource = "not_configured" | "os_secure_storage" | "unavailable";
+export type IdentityConfidence = "unverified" | "provider_reported";
+
+export type ExternalProviderMetadata = {
+  providerId: ExternalProviderId;
+  label: string;
+  kind: ProviderKind;
+  defaultEndpoint: string;
+  configured: boolean;
+  endpoint: string | null;
+  model: string | null;
+  credentialSource: CredentialSource;
+  storageStatus: SecureStorageStatus;
+  identityConfidence: IdentityConfidence;
+  connectTimeoutMs: number | null;
+  readTimeoutMs: number | null;
+  confirmationThresholdUsd: number | null;
+  ceilingUsd: number | null;
+};
+
+export type CostPolicy = {
+  confirmationThresholdUsd: number | null;
+  ceilingUsd: number | null;
+};
+
+export type ConfigureProviderRequest = {
+  providerId: ExternalProviderId;
+  endpoint: string;
+  model: string;
+  apiKey: string;
+  connectTimeoutMs?: number | null;
+  readTimeoutMs?: number | null;
+  costPolicy?: CostPolicy | null;
+};
+
+export type UpdateProviderCostPolicyRequest = {
+  providerId: ExternalProviderId;
+  costPolicy: CostPolicy;
+};
+
 export type RunRecord = {
   runId: string;
   benchmarkVersionId: string;
@@ -521,6 +564,41 @@ async function invokeDesktop<T>(command: string, fallback: string, args?: Record
 
 export async function readAppStatus(): Promise<AppStatus> {
   return invokeDesktop<AppStatus>("app_status", "The local app status command could not be reached.");
+}
+
+export async function readExternalProviders(): Promise<ExternalProviderMetadata[]> {
+  return invokeDesktop<ExternalProviderMetadata[]>(
+    "list_external_providers",
+    "The external provider metadata could not be reached.",
+  );
+}
+
+export async function configureExternalProvider(
+  request: ConfigureProviderRequest,
+): Promise<ExternalProviderMetadata> {
+  return invokeDesktop<ExternalProviderMetadata>(
+    "configure_external_provider",
+    "The external provider could not be configured.",
+    { request },
+  );
+}
+
+export async function updateExternalCostPolicy(
+  request: UpdateProviderCostPolicyRequest,
+): Promise<ExternalProviderMetadata> {
+  return invokeDesktop<ExternalProviderMetadata>(
+    "update_external_cost_policy",
+    "The external provider cost policy could not be updated.",
+    { request },
+  );
+}
+
+export async function removeExternalProvider(providerId: ExternalProviderId): Promise<boolean> {
+  return invokeDesktop<boolean>(
+    "remove_external_provider",
+    "The external provider could not be removed.",
+    { providerId },
+  );
 }
 
 export async function readRuns(): Promise<RunRecord[]> {
