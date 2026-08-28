@@ -4,6 +4,7 @@ import {
   buildArenaRankings,
   calculateCalibrationMetrics,
   compareArenaRegression,
+  resolveTournamentOutcomes,
   scheduleTournament,
   validateAiJudgeScoreInput,
 } from "./advanced-arena";
@@ -118,6 +119,23 @@ describe("Advanced Arena user-facing helpers", () => {
     expect(elimination.byeCompetitorIds).toEqual(["gamma@1"]);
     expect(() => scheduleTournament({ competitors, mode: "1v1" })).toThrow("exactly two");
     expect(() => scheduleTournament({ competitors, mode: "round_robin", maxMatches: 2 })).toThrow("match bound");
+  });
+
+  it("resolves tournament standings only from selected immutable evidence", () => {
+    const source = summary("tournament-source", 100, 10);
+    const schedule = scheduleTournament({
+      competitors: [
+        { competitorId: "alpha@1", competitorLabel: "Alpha" },
+        { competitorId: "beta@1", competitorLabel: "Beta" },
+      ],
+      mode: "1v1",
+    });
+    const result = resolveTournamentOutcomes(source, schedule, { metric: "duration_ms" });
+
+    expect(result.status).toBe("ready");
+    expect(result.matches[0]).toMatchObject({ outcome: "completed", winnerId: "alpha@1", evidenceSampleCount: 4 });
+    expect(result.standings[0]).toMatchObject({ competitorId: "alpha@1", wins: 1, points: 1, tied: false });
+    expect(result.note).toContain("immutable Arena evidence");
   });
 
   it("calculates calibration agreement, bias, disagreement, and unmatched samples", () => {

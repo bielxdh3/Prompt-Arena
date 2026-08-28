@@ -56,8 +56,10 @@ use crate::{
     runtime::{ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
-        BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary, StorageError,
-        StorageService, MAX_DRAFT_REQUEST_BYTES, MAX_PROFILE_REQUEST_BYTES,
+        BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
+        CalibrationBenchmarkPayload, CalibrationBenchmarkRecord, CalibrationResultPayload,
+        CalibrationResultRecord, StorageError, StorageService, TournamentResultPayload,
+        TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES, MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -159,6 +161,9 @@ impl From<StorageError> for CommandError {
             StorageError::BenchmarkInvalid(_) => "benchmark_invalid",
             StorageError::InvalidProfileRevision => "profile_revision_invalid",
             StorageError::ProfileRequestTooLarge => "profile_request_too_large",
+            StorageError::AdvancedArtifactInvalid => "advanced_artifact_invalid",
+            StorageError::AdvancedSourceNotFound => "advanced_source_not_found",
+            StorageError::AdvancedSourceMismatch => "advanced_source_mismatch",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
@@ -378,6 +383,123 @@ pub fn get_arena_summary(
 ) -> Result<Option<ArenaSummaryRecord>, CommandError> {
     storage_for(&app)?
         .get_arena_summary(&arena_id)
+        .map_err(Into::into)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedCalibrationBenchmark {
+    pub record: CalibrationBenchmarkRecord,
+    pub save_outcome: crate::storage::SaveOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedCalibrationResult {
+    pub record: CalibrationResultRecord,
+    pub save_outcome: crate::storage::SaveOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTournamentResult {
+    pub record: TournamentResultRecord,
+    pub save_outcome: crate::storage::SaveOutcome,
+}
+
+#[tauri::command]
+pub fn save_calibration_benchmark(
+    app: AppHandle,
+    benchmark: CalibrationBenchmarkPayload,
+) -> Result<SavedCalibrationBenchmark, CommandError> {
+    let (record, save_outcome) =
+        storage_for(&app)?.save_calibration_benchmark(&benchmark, &now_marker())?;
+    Ok(SavedCalibrationBenchmark {
+        record,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_calibration_benchmarks(
+    app: AppHandle,
+) -> Result<Vec<CalibrationBenchmarkRecord>, CommandError> {
+    storage_for(&app)?
+        .list_calibration_benchmarks()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_calibration_benchmark(
+    app: AppHandle,
+    calibration_id: String,
+) -> Result<Option<CalibrationBenchmarkRecord>, CommandError> {
+    storage_for(&app)?
+        .get_calibration_benchmark(&calibration_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn save_calibration_result(
+    app: AppHandle,
+    result: CalibrationResultPayload,
+) -> Result<SavedCalibrationResult, CommandError> {
+    let (record, save_outcome) =
+        storage_for(&app)?.save_calibration_result(&result, &now_marker())?;
+    Ok(SavedCalibrationResult {
+        record,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_calibration_results(
+    app: AppHandle,
+) -> Result<Vec<CalibrationResultRecord>, CommandError> {
+    storage_for(&app)?
+        .list_calibration_results()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_calibration_result(
+    app: AppHandle,
+    result_id: String,
+) -> Result<Option<CalibrationResultRecord>, CommandError> {
+    storage_for(&app)?
+        .get_calibration_result(&result_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn save_tournament_result(
+    app: AppHandle,
+    result: TournamentResultPayload,
+) -> Result<SavedTournamentResult, CommandError> {
+    let (record, save_outcome) =
+        storage_for(&app)?.save_tournament_result(&result, &now_marker())?;
+    Ok(SavedTournamentResult {
+        record,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_tournament_results(
+    app: AppHandle,
+) -> Result<Vec<TournamentResultRecord>, CommandError> {
+    storage_for(&app)?
+        .list_tournament_results()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_tournament_result(
+    app: AppHandle,
+    tournament_id: String,
+) -> Result<Option<TournamentResultRecord>, CommandError> {
+    storage_for(&app)?
+        .get_tournament_result(&tournament_id)
         .map_err(Into::into)
 }
 
