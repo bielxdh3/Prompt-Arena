@@ -1,6 +1,8 @@
 import { DEFAULT_FONT_ID, getFontOption } from "./font-options";
 
 export const APPEARANCE_STORAGE_KEY = "prompt-arena.appearance.v1";
+export const APPEARANCE_PAYLOAD_VERSION = 1;
+export const MAX_APPEARANCE_PAYLOAD_BYTES = 8 * 1024;
 export const FONT_SCALE_MIN = 90;
 export const FONT_SCALE_MAX = 115;
 export const FONT_SCALE_STEP = 5;
@@ -35,6 +37,11 @@ export type AppearancePreferences = {
   reducedMotion: boolean;
 };
 
+export type AppearancePreferencePayload = {
+  schemaVersion: typeof APPEARANCE_PAYLOAD_VERSION;
+  preferences: AppearancePreferences;
+};
+
 export const DEFAULT_APPEARANCE: AppearancePreferences = {
   fontId: DEFAULT_FONT_ID,
   fontScale: 100,
@@ -48,6 +55,14 @@ function optionId<T extends { id: string }>(options: readonly T[], value: unknow
   return options.find((option) => option.id === value)?.id ?? fallback;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
 export function normalizeFontScale(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_APPEARANCE.fontScale;
   const stepped = Math.round(value / FONT_SCALE_STEP) * FONT_SCALE_STEP;
@@ -55,7 +70,7 @@ export function normalizeFontScale(value: unknown): number {
 }
 
 export function normalizeAppearance(input: unknown): AppearancePreferences {
-  const source = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const source = isRecord(input) ? input : {};
   return {
     fontId: typeof source.fontId === "string" ? getFontOption(source.fontId).id : DEFAULT_APPEARANCE.fontId,
     fontScale: normalizeFontScale(source.fontScale),
@@ -68,13 +83,44 @@ export function normalizeAppearance(input: unknown): AppearancePreferences {
 
 export function parseAppearancePreferences(serialized: string | null): AppearancePreferences {
   if (!serialized) return normalizeAppearance(null);
+  if (utf8ByteLength(serialized) > MAX_APPEARANCE_PAYLOAD_BYTES) return normalizeAppearance(null);
   try {
-    return normalizeAppearance(JSON.parse(serialized));
+    const parsed: unknown = JSON.parse(serialized);
+    if (isRecord(parsed) && parsed.schemaVersion !== undefined) {
+      return parsed.schemaVersion === APPEARANCE_PAYLOAD_VERSION
+        ? normalizeAppearance(parsed.preferences)
+        : normalizeAppearance(null);
+    }
+    return normalizeAppearance(parsed);
   } catch {
     return normalizeAppearance(null);
   }
 }
 
 export function serializeAppearancePreferences(input: unknown): string {
-  return JSON.stringify(normalizeAppearance(input));
+  const payload: AppearancePreferencePayload = {
+    schemaVersion: APPEARANCE_PAYLOAD_VERSION,
+    preferences: normalizeAppearance(input),
+  };
+  const serialized = JSON.stringify(payload);
+  if (utf8ByteLength(serialized) > MAX_APPEARANCE_PAYLOAD_BYTES) {
+    throw new Error("Appearance preferences exceed the local 8 KiB limit.");
+  }
+  return serialized;
+}
+
+export function importAppearancePreferences(serialized: string): AppearancePreferences {
+  if (utf8ByteLength(serialized) > MAX_APPEARANCE_PAYLOAD_BYTES) {
+    throw new Error("Appearance preference files must be 8 KiB or smaller.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new Error("Appearance preference file is not valid JSON.");
+  }
+  if (!isRecord(parsed) || parsed.schemaVersion !== APPEARANCE_PAYLOAD_VERSION || !isRecord(parsed.preferences)) {
+    throw new Error("Appearance preference file has an unsupported format.");
+  }
+  return normalizeAppearance(parsed.preferences);
 }

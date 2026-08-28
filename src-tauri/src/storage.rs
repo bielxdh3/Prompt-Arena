@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -58,6 +58,9 @@ pub const MAX_MODEL_PATH_BYTES: usize = 512;
 pub const MAX_MODEL_NAME_BYTES: usize = 256;
 pub const MAX_MODEL_METADATA_BYTES: usize = 256 * 1024;
 pub const MAX_MODEL_RECORD_COUNT: usize = 512;
+pub const RETENTION_MIN_AGE_DAYS: u32 = 1;
+pub const RETENTION_MAX_AGE_DAYS: u32 = 3650;
+pub const RETENTION_MAX_DELETE_RECORDS: u32 = 256;
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -461,6 +464,41 @@ pub struct BenchmarkDraftInput {
     pub document_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionTablePreview {
+    pub table: String,
+    pub eligible_records: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageRetentionPreview {
+    pub older_than_days: u32,
+    pub cutoff_at: String,
+    pub eligible_records: u32,
+    pub tables: Vec<RetentionTablePreview>,
+    pub protected_tables: Vec<String>,
+    pub max_delete_records: u32,
+    pub confirmation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageRetentionRequest {
+    pub older_than_days: u32,
+    pub cutoff_at: String,
+    pub expected_records: u32,
+    pub confirmation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageRetentionResult {
+    pub preview: StorageRetentionPreview,
+    pub deleted_records: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
     IoFailure,
@@ -492,6 +530,10 @@ pub enum StorageError {
     AdvancedSourceNotFound,
     AdvancedSourceMismatch,
     InvalidExternalGenerationEvidence,
+    InvalidRetentionRequest,
+    RetentionTooBroad,
+    RetentionConfirmationRequired,
+    RetentionPreviewStale,
 }
 
 impl std::fmt::Display for StorageError {
@@ -531,6 +573,10 @@ impl std::fmt::Display for StorageError {
                 "advanced Arena source evidence does not match its content hash"
             }
             Self::InvalidExternalGenerationEvidence => "external generation evidence is invalid",
+            Self::InvalidRetentionRequest => "storage retention request is invalid",
+            Self::RetentionTooBroad => "storage retention request exceeds the deletion limit",
+            Self::RetentionConfirmationRequired => "storage retention confirmation is required",
+            Self::RetentionPreviewStale => "storage retention preview is stale",
         };
         formatter.write_str(message)
     }
@@ -1604,6 +1650,76 @@ impl StorageService {
         .collect()
     }
 
+    pub fn preview_storage_retention(
+        &self,
+        older_than_days: u32,
+    ) -> Result<StorageRetentionPreview, StorageError> {
+        validate_retention_age(older_than_days)?;
+        let cutoff_at = retention_cutoff_at(older_than_days);
+        self.preview_storage_retention_at(older_than_days, &cutoff_at)
+    }
+
+    fn preview_storage_retention_at(
+        &self,
+        older_than_days: u32,
+        cutoff_at: &str,
+    ) -> Result<StorageRetentionPreview, StorageError> {
+        validate_retention_age(older_than_days)?;
+        validate_retention_cutoff(cutoff_at)?;
+        preview_storage_retention_connection(&self.connection()?, older_than_days, cutoff_at)
+    }
+
+    pub fn cleanup_storage_retention(
+        &self,
+        request: &StorageRetentionRequest,
+    ) -> Result<StorageRetentionResult, StorageError> {
+        validate_retention_age(request.older_than_days)?;
+        validate_retention_cutoff(&request.cutoff_at)?;
+        validate_retention_cutoff_age(request.older_than_days, &request.cutoff_at)?;
+        if request.expected_records > RETENTION_MAX_DELETE_RECORDS {
+            return Err(StorageError::RetentionTooBroad);
+        }
+
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let preview = preview_storage_retention_connection(
+            &transaction,
+            request.older_than_days,
+            &request.cutoff_at,
+        )?;
+        if preview.eligible_records > RETENTION_MAX_DELETE_RECORDS {
+            return Err(StorageError::RetentionTooBroad);
+        }
+        if preview.eligible_records != request.expected_records {
+            return Err(StorageError::RetentionPreviewStale);
+        }
+        if request.confirmation != preview.confirmation {
+            return Err(StorageError::RetentionConfirmationRequired);
+        }
+
+        let mut deleted_records = 0u32;
+        for table in RETENTION_DELETE_TABLES {
+            let deleted = transaction
+                .execute(table.delete_sql, params![request.cutoff_at])
+                .map_err(|_| StorageError::DatabaseFailure)?;
+            deleted_records = deleted_records
+                .checked_add(u32::try_from(deleted).map_err(|_| StorageError::DatabaseFailure)?)
+                .ok_or(StorageError::DatabaseFailure)?;
+        }
+        if deleted_records != request.expected_records {
+            return Err(StorageError::RetentionPreviewStale);
+        }
+        transaction
+            .commit()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        Ok(StorageRetentionResult {
+            preview,
+            deleted_records,
+        })
+    }
+
     pub fn save_attempt_and_result(
         &self,
         attempt: &Attempt,
@@ -1956,6 +2072,142 @@ impl StorageService {
             .map_err(|_| StorageError::DatabaseFailure)?;
         Ok(connection)
     }
+}
+
+struct RetentionTableSql {
+    name: &'static str,
+    count_sql: &'static str,
+    delete_sql: &'static str,
+}
+
+const RETENTION_DELETE_TABLES: &[RetentionTableSql] = &[
+    RetentionTableSql {
+        name: "attempts",
+        count_sql: "SELECT COUNT(*) FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id)",
+        delete_sql: "DELETE FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id)",
+    },
+    RetentionTableSql {
+        name: "result_records",
+        count_sql: "SELECT COUNT(*) FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+        delete_sql: "DELETE FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+    },
+    RetentionTableSql {
+        name: "runs",
+        count_sql: "SELECT COUNT(*) FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)",
+        delete_sql: "DELETE FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)",
+    },
+    RetentionTableSql {
+        name: "blind_evaluations",
+        count_sql: "SELECT COUNT(*) FROM blind_evaluations WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+        delete_sql: "DELETE FROM blind_evaluations WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+    },
+    RetentionTableSql {
+        name: "arena_summaries",
+        count_sql: "SELECT COUNT(*) FROM arena_summaries WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+        delete_sql: "DELETE FROM arena_summaries WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+    },
+    RetentionTableSql {
+        name: "calibration_results",
+        count_sql: "SELECT COUNT(*) FROM calibration_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+        delete_sql: "DELETE FROM calibration_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+    },
+    RetentionTableSql {
+        name: "tournament_results",
+        count_sql: "SELECT COUNT(*) FROM tournament_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+        delete_sql: "DELETE FROM tournament_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+    },
+];
+
+const RETENTION_PROTECTED_TABLES: &[&str] = &[
+    "packs",
+    "benchmark_versions",
+    "profile_revisions",
+    "official_pack_materializations",
+    "calibration_benchmarks",
+    "model_records",
+    "model_operations",
+    "model_operation_events",
+    "model_removals",
+    "external_generation_evidence",
+    "artifact_records",
+];
+
+fn validate_retention_age(older_than_days: u32) -> Result<(), StorageError> {
+    if !(RETENTION_MIN_AGE_DAYS..=RETENTION_MAX_AGE_DAYS).contains(&older_than_days) {
+        return Err(StorageError::InvalidRetentionRequest);
+    }
+    Ok(())
+}
+
+fn validate_retention_cutoff(cutoff_at: &str) -> Result<(), StorageError> {
+    validate_timestamp(cutoff_at)?;
+    cutoff_at
+        .parse::<u64>()
+        .map_err(|_| StorageError::InvalidRetentionRequest)?;
+    Ok(())
+}
+
+fn validate_retention_cutoff_age(
+    older_than_days: u32,
+    cutoff_at: &str,
+) -> Result<(), StorageError> {
+    let requested_cutoff = cutoff_at
+        .parse::<u64>()
+        .map_err(|_| StorageError::InvalidRetentionRequest)?;
+    let current_cutoff = retention_cutoff_at(older_than_days)
+        .parse::<u64>()
+        .map_err(|_| StorageError::InvalidRetentionRequest)?;
+    if requested_cutoff > current_cutoff {
+        return Err(StorageError::RetentionPreviewStale);
+    }
+    Ok(())
+}
+
+fn retention_cutoff_at(older_than_days: u32) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(u64::from(older_than_days) * 86_400)
+        .to_string()
+}
+
+fn retention_confirmation(record_count: u32) -> String {
+    format!("DELETE {record_count} LOCAL RECORDS")
+}
+
+fn preview_storage_retention_connection(
+    connection: &Connection,
+    older_than_days: u32,
+    cutoff_at: &str,
+) -> Result<StorageRetentionPreview, StorageError> {
+    let mut eligible_records = 0u32;
+    let mut tables = Vec::with_capacity(RETENTION_DELETE_TABLES.len());
+    for table in RETENTION_DELETE_TABLES {
+        let count: i64 = connection
+            .query_row(table.count_sql, params![cutoff_at], |row| row.get(0))
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let count = u32::try_from(count).map_err(|_| StorageError::DatabaseFailure)?;
+        eligible_records = eligible_records
+            .checked_add(count)
+            .ok_or(StorageError::DatabaseFailure)?;
+        tables.push(RetentionTablePreview {
+            table: table.name.to_owned(),
+            eligible_records: count,
+        });
+    }
+    Ok(StorageRetentionPreview {
+        older_than_days,
+        cutoff_at: cutoff_at.to_owned(),
+        eligible_records,
+        tables,
+        protected_tables: RETENTION_PROTECTED_TABLES
+            .iter()
+            .map(|table| (*table).to_owned())
+            .collect(),
+        max_delete_records: RETENTION_MAX_DELETE_RECORDS,
+        confirmation: retention_confirmation(eligible_records),
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3229,9 +3481,9 @@ mod tests {
         AiJudgePanel, ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
         BenchmarkDraftInput, CalibrationBenchmarkPayload, CalibrationMetricsRecord,
         CalibrationResultPayload, CalibrationScore, FrozenAiJudge, SaveOutcome, StorageError,
-        StorageLayout, StorageService, TournamentMatchResult, TournamentResultPayload,
-        TournamentStanding, ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION,
-        BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
+        StorageLayout, StorageRetentionRequest, StorageService, TournamentMatchResult,
+        TournamentResultPayload, TournamentStanding, ADVANCED_ARENA_MIGRATION,
+        ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
         EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
         MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES, MAX_PROFILE_MODEL_BYTES,
         MAX_PROFILE_REQUEST_BYTES,
@@ -3459,6 +3711,118 @@ mod tests {
         assert_eq!(
             service.get_external_generation_evidence(&evidence.generation_id),
             Err(StorageError::DatabaseFailure)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retention_is_previewed_bounded_and_protects_sources() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let connection =
+            Connection::open(service.layout().database_path()).expect("database opens");
+        connection
+            .execute("INSERT INTO runs (record_id, content_hash, document_json, created_at) VALUES ('old-run', 'run-hash', '{}', '100'), ('new-run', 'new-run-hash', '{}', '300')", [])
+            .expect("run fixtures insert");
+        connection
+            .execute("INSERT INTO attempts (record_id, content_hash, document_json, created_at) VALUES ('old-attempt', 'attempt-hash', '{}', '100'), ('linked-attempt', 'linked-attempt-hash', '{}', '100')", [])
+            .expect("attempt fixtures insert");
+        connection
+            .execute("INSERT INTO result_records (result_id, attempt_id, content_hash, document_json, created_at) VALUES ('old-result', 'linked-attempt', 'result-hash', '{}', '100')", [])
+            .expect("result fixture inserts");
+        connection
+            .execute("INSERT INTO arena_summaries (record_id, content_hash, document_json, created_at) VALUES ('old-summary', 'summary-hash', '{}', '100')", [])
+            .expect("summary fixture inserts");
+        connection
+            .execute("INSERT INTO external_generation_evidence (record_id, content_hash, document_json, created_at) VALUES ('old-external', 'external-hash', '{}', '100')", [])
+            .expect("external fixture inserts");
+        connection
+            .execute("INSERT INTO benchmark_versions (version_id, benchmark_id, version_number, content_hash, document_json, created_at) VALUES ('source-version', 'source', 1, 'source-hash', '{}', '100')", [])
+            .expect("source fixture inserts");
+
+        let preview = service
+            .preview_storage_retention_at(30, "200")
+            .expect("retention previews");
+        assert_eq!(preview.eligible_records, 4);
+        assert_eq!(preview.confirmation, "DELETE 4 LOCAL RECORDS");
+        assert!(preview
+            .protected_tables
+            .iter()
+            .any(|table| table == "benchmark_versions"));
+        assert_eq!(
+            service.cleanup_storage_retention(&StorageRetentionRequest {
+                older_than_days: 30,
+                cutoff_at: "200".to_owned(),
+                expected_records: 4,
+                confirmation: "DELETE 3 LOCAL RECORDS".to_owned(),
+            }),
+            Err(StorageError::RetentionConfirmationRequired)
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM runs", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            2
+        );
+
+        let result = service
+            .cleanup_storage_retention(&StorageRetentionRequest {
+                older_than_days: 30,
+                cutoff_at: "200".to_owned(),
+                expected_records: 4,
+                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
+            })
+            .expect("retention cleans eligible history");
+        assert_eq!(result.deleted_records, 4);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM runs WHERE record_id = 'old-run'",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM runs WHERE record_id = 'new-run'",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM attempts WHERE record_id = 'linked-attempt'",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM benchmark_versions WHERE version_id = 'source-version'",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM external_generation_evidence WHERE record_id = 'old-external'",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            1
         );
         let _ = fs::remove_dir_all(root);
     }
