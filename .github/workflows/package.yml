@@ -66,7 +66,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential curl file wget libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgtk-3-dev libglib2.0-dev
+          sudo apt-get install --yes build-essential curl file wget xvfb libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgtk-3-dev libglib2.0-dev
 
       - name: Rust validation
         run: |
@@ -80,6 +80,7 @@ jobs:
 
       - name: Attempt Windows MSI installer
         if: runner.os == 'Windows'
+        id: msi
         continue-on-error: true
         run: npm run tauri:build -- --bundles msi
 
@@ -87,42 +88,51 @@ jobs:
         if: runner.os == 'Linux'
         run: npm run tauri:build -- --bundles deb,appimage
 
-      - name: Hash Windows installers
+      - name: Record Windows MSI build evidence
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          MSI_OUTCOME: ${{ steps.msi.outcome }}
         run: |
           New-Item -ItemType Directory -Force package-artifacts | Out-Null
-          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
-          $exe = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File | Select-Object -First 1
-          if ($null -eq $exe) { throw 'No NSIS installer was produced.' }
-          Copy-Item $exe.FullName (Join-Path $PWD "package-artifacts/Prompt Arena Setup $version.exe")
-          $msi = Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -ne $msi) { Copy-Item $msi.FullName (Join-Path $PWD "package-artifacts/Prompt Arena $version.msi") }
-          $files = Get-ChildItem -Path package-artifacts -File
-          if ($files.Count -eq 0) { throw 'No Windows installers were produced.' }
-          $files | ForEach-Object {
-            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash
-            "$hash  package-artifacts/$($_.Name)"
-          } | Set-Content checksums-sha256.txt
+          $msi = @(Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+          $lines = @(
+            'MSI build command: npm run tauri:build -- --bundles msi'
+            "MSI step outcome: $env:MSI_OUTCOME"
+            "MSI artifacts found: $($msi.Count)"
+          )
+          if ($msi.Count -eq 0) {
+            $lines += 'MSI result: unavailable or failed; no MSI artifact was produced. NSIS remains mandatory.'
+          } elseif ($env:MSI_OUTCOME -eq 'success') {
+            $lines += 'MSI result: produced; the normalized artifact will be checksum-verified below.'
+          } else {
+            $lines += 'MSI result: command failed after producing an artifact; the normalized artifact will still be checksum-verified below.'
+          }
+          $lines | Set-Content package-artifacts/msi-build-evidence.txt
 
-      - name: Hash Linux packages
+      - name: Normalize Linux packages and write checksums
         if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          mkdir -p package-artifacts
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          find src-tauri/target/release/bundle -type f \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} package-artifacts/ \;
-          mapfile -t files < <(find package-artifacts -type f \( -name '*.deb' -o -name '*.AppImage' \) -print)
-          test "${#files[@]}" -gt 0
-          sha256sum "${files[@]}" > checksums-sha256.txt
+        run: npm run package:artifacts -- --platform linux
+
+      - name: Normalize Windows installers and write checksums
+        if: runner.os == 'Windows'
+        run: npm run package:artifacts -- --platform windows
+
+      - name: Verify Windows packages and run clean-install smoke
+        if: runner.os == 'Windows'
+        run: npm run verify:package -- --platform windows --smoke
+
+      - name: Verify Linux packages and run package/app smoke
+        if: runner.os == 'Linux'
+        run: npm run verify:package -- --platform linux --smoke
 
       - name: Upload unsigned installers and checksums
         uses: actions/upload-artifact@v4
         with:
           name: prompt-arena-${{ matrix.platform }}-${{ github.sha }}
           path: |
-            src-tauri/target/release/bundle/
             package-artifacts/
             checksums-sha256.txt
+            package-verification.txt
           if-no-files-found: error
           retention-days: 14

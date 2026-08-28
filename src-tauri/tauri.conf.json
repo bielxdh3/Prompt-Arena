@@ -3,6 +3,7 @@
   "productName": "Prompt Arena",
   "version": "0.1.0",
   "identifier": "com.promptarena.desktop",
+  "mainBinaryName": "prompt-arena",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -30,6 +31,21 @@
     "active": true,
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "targets": ["nsis", "msi", "deb", "appimage"],
-    "externalBin": ["binaries/prompt-arena-worker"]
+    "externalBin": ["binaries/prompt-arena-worker"],
+    "publisher": "Prompt Arena contributors",
+    "category": "DeveloperTool",
+    "shortDescription": "Local-first model comparison laboratory",
+    "longDescription": "Prompt Arena is a local-first desktop workspace for repeatable model comparisons and auditable evidence.",
+    "copyright": "Copyright © 2026 Prompt Arena contributors",
+    "windows": {
+      "allowDowngrades": false,
+      "nsis": {
+        "installMode": "currentUser",
+        "startMenuFolder": "Prompt Arena"
+      },
+      "wix": {
+        "upgradeCode": "8f8b4c7d-3f0a-4f76-9c2e-6a5c9d2b1e40"
+      }
+    }
   }
 }
