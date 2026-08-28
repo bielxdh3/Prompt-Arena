@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  configureExternalProvider,
+  executeExternalGeneration,
   executeRunOnce,
   isDesktopEnvironment,
   lockBlindEvaluation,
@@ -28,8 +30,11 @@ import {
   readBenchmarkDrafts,
   readBenchmarkVersions,
   readRuns,
+  readExternalProviders,
+  removeExternalProvider,
   saveArenaSummary,
   saveBenchmarkDraft,
+  updateExternalCostPolicy,
   validateBenchmarkDocument,
   readAppStatus,
   type AppStatus,
@@ -43,6 +48,10 @@ import {
   type BenchmarkDraftSummary,
   type BenchmarkVersion,
   type BenchmarkVersionSummary,
+  type CostPolicy,
+  type ExternalGenerationResult,
+  type ExternalProviderId,
+  type ExternalProviderMetadata,
   type HardwareMetric,
   type HardwareSnapshot,
   type OfficialPackDocument,
@@ -61,6 +70,23 @@ import {
   type RunRecord,
   type SaveOutcome,
 } from "./bridge";
+import {
+  byokErrorMessage,
+  firstByokValidationError,
+  formatByokDecision,
+  formatByokMoney,
+  formatByokTokens,
+  formatCredentialSource,
+  formatIdentityConfidence,
+  formatStorageStatus,
+  providerLabel,
+  validateByokBudget,
+  validateByokConfiguration,
+  validateByokGeneration,
+  type ByokBudgetDraft,
+  type ByokGenerationDraft,
+  type ByokPriceSnapshotDraft,
+} from "./byok-ui";
 import {
   attemptStatusLabel,
   attemptStatusTone,
@@ -3611,40 +3637,610 @@ function Settings({
         </div>
       </section>
 
-      <section className="panel provider-panel" aria-labelledby="provider-foundation-heading">
-        <div className="section-heading compact-heading">
-          <div>
-            <p className="eyebrow">Phase F foundation</p>
-            <h3 id="provider-foundation-heading">External providers, clearly bounded</h3>
-          </div>
+      <ByokPanel desktop={desktop} />
+    </div>
+  );
+}
+
+type ByokMetadataState =
+  | { status: "loading" }
+  | { status: "unsupported" }
+  | { status: "ready"; providers: ExternalProviderMetadata[] }
+  | { status: "error"; message: string };
+
+type ByokAction =
+  | { kind: "configure" | "policy" | "remove" | "generate"; providerId: ExternalProviderId }
+  | null;
+
+type ByokNotice = { kind: "success" | "error"; message: string } | null;
+
+const EMPTY_BYOK_PRICE_DRAFT: ByokPriceSnapshotDraft = {
+  modelId: "",
+  capturedOn: "",
+  inputUsdPerMillionTokens: "",
+  outputUsdPerMillionTokens: "",
+};
+
+function ByokPanel({ desktop }: { desktop: boolean }) {
+  const [metadataState, setMetadataState] = useState<ByokMetadataState>(() => (
+    desktop ? { status: "loading" } : { status: "unsupported" }
+  ));
+  const [selectedProviderId, setSelectedProviderId] = useState<ExternalProviderId>("openai-compatible");
+  const [endpoint, setEndpoint] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [budgetDraft, setBudgetDraft] = useState<ByokBudgetDraft>({
+    confirmationThresholdUsd: "",
+    ceilingUsd: "",
+  });
+  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [maxOutputTokens, setMaxOutputTokens] = useState("256");
+  const [priceSnapshot, setPriceSnapshot] = useState<ByokPriceSnapshotDraft>({ ...EMPTY_BYOK_PRICE_DRAFT });
+  const [networkConsent, setNetworkConsent] = useState(false);
+  const [costConfirmed, setCostConfirmed] = useState(false);
+  const [generationSubmitted, setGenerationSubmitted] = useState(false);
+  const [action, setAction] = useState<ByokAction>(null);
+  const [notice, setNotice] = useState<ByokNotice>(null);
+  const [generationResult, setGenerationResult] = useState<ExternalGenerationResult | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    if (!desktop) {
+      setMetadataState({ status: "unsupported" });
+      return () => {
+        current = false;
+      };
+    }
+
+    setMetadataState({ status: "loading" });
+    void readExternalProviders()
+      .then((providers) => {
+        if (current) setMetadataState({ status: "ready", providers });
+      })
+      .catch((error: unknown) => {
+        if (current) setMetadataState({ status: "error", message: byokErrorMessage(error) });
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [desktop]);
+
+  const selectedMetadata = metadataState.status === "ready"
+    ? metadataState.providers.find((provider) => provider.providerId === selectedProviderId)
+    : undefined;
+  const savedPolicy: CostPolicy | null = selectedMetadata
+    ? {
+        confirmationThresholdUsd: selectedMetadata.confirmationThresholdUsd,
+        ceilingUsd: selectedMetadata.ceilingUsd,
+      }
+    : null;
+  const generationDraft: ByokGenerationDraft = {
+    prompt: generationPrompt,
+    maxOutputTokens,
+    priceSnapshot,
+    networkConsent,
+    costConfirmed,
+  };
+  const generationValidation = selectedMetadata?.configured
+    ? validateByokGeneration(selectedProviderId, selectedMetadata.model ?? model, savedPolicy, generationDraft)
+    : null;
+  const busy = action !== null;
+
+  useEffect(() => {
+    if (metadataState.status !== "ready") return;
+    const provider = metadataState.providers.find((item) => item.providerId === selectedProviderId);
+    if (!provider) {
+      const firstProvider = metadataState.providers[0];
+      if (firstProvider) setSelectedProviderId(firstProvider.providerId);
+      return;
+    }
+    setEndpoint(provider.endpoint ?? provider.defaultEndpoint);
+    setModel(provider.model ?? "");
+    setBudgetDraft({
+      confirmationThresholdUsd: provider.confirmationThresholdUsd === null ? "" : String(provider.confirmationThresholdUsd),
+      ceilingUsd: provider.ceilingUsd === null ? "" : String(provider.ceilingUsd),
+    });
+    setPriceSnapshot({
+      ...EMPTY_BYOK_PRICE_DRAFT,
+      modelId: provider.model ?? "",
+    });
+    setApiKey("");
+    setCostConfirmed(false);
+    setGenerationResult(null);
+    setGenerationSubmitted(false);
+  }, [metadataState, selectedProviderId]);
+
+  async function refreshMetadata() {
+    if (!desktop) {
+      setMetadataState({ status: "unsupported" });
+      return;
+    }
+    setMetadataState({ status: "loading" });
+    try {
+      setMetadataState({ status: "ready", providers: await readExternalProviders() });
+    } catch (error: unknown) {
+      setMetadataState({ status: "error", message: byokErrorMessage(error) });
+    }
+  }
+
+  function updateMetadata(next: ExternalProviderMetadata) {
+    setMetadataState((current) => {
+      if (current.status !== "ready") return current;
+      const found = current.providers.some((provider) => provider.providerId === next.providerId);
+      return {
+        ...current,
+        providers: found
+          ? current.providers.map((provider) => provider.providerId === next.providerId ? next : provider)
+          : [...current.providers, next],
+      };
+    });
+  }
+
+  function clearGenerationEvidence() {
+    setGenerationResult(null);
+    setGenerationSubmitted(false);
+    setCostConfirmed(false);
+  }
+
+  function updatePriceSnapshot(field: keyof ByokPriceSnapshotDraft, value: string) {
+    setPriceSnapshot((current) => ({ ...current, [field]: value }));
+    clearGenerationEvidence();
+  }
+
+  function handleProviderSelection(providerId: ExternalProviderId) {
+    setSelectedProviderId(providerId);
+    setNotice(null);
+  }
+
+  async function handleConfigure(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedMetadata) return;
+    setNotice(null);
+    const configuration = validateByokConfiguration({ endpoint, model, apiKey });
+    const policy = validateByokBudget(budgetDraft);
+    if (!configuration.valid) {
+      setNotice({ kind: "error", message: firstByokValidationError(configuration.errors) });
+      return;
+    }
+    if (!policy.valid || !policy.policy) {
+      setNotice({ kind: "error", message: firstByokValidationError(policy.errors) });
+      return;
+    }
+
+    setAction({ kind: "configure", providerId: selectedProviderId });
+    try {
+      const next = await configureExternalProvider({
+        providerId: selectedProviderId,
+        endpoint,
+        model,
+        apiKey,
+        costPolicy: policy.policy,
+      });
+      updateMetadata(next);
+      setNotice({ kind: "success", message: `${providerLabel(selectedProviderId)} configuration saved in OS secure storage.` });
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setApiKey("");
+      setAction(null);
+    }
+  }
+
+  async function handlePolicyUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedMetadata?.configured) return;
+    setNotice(null);
+    const policy = validateByokBudget(budgetDraft);
+    if (!policy.valid || !policy.policy) {
+      setNotice({ kind: "error", message: firstByokValidationError(policy.errors) });
+      return;
+    }
+
+    setAction({ kind: "policy", providerId: selectedProviderId });
+    try {
+      const next = await updateExternalCostPolicy({
+        providerId: selectedProviderId,
+        costPolicy: policy.policy,
+      });
+      updateMetadata(next);
+      setNotice({ kind: "success", message: "Cost policy updated. The hard ceiling remains enforced by the desktop boundary." });
+      clearGenerationEvidence();
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function handleRemove() {
+    if (!selectedMetadata?.configured || busy) return;
+    if (typeof window !== "undefined" && !window.confirm(`Remove the stored ${providerLabel(selectedProviderId)} configuration?`)) return;
+    setNotice(null);
+    setAction({ kind: "remove", providerId: selectedProviderId });
+    try {
+      const removed = await removeExternalProvider(selectedProviderId);
+      if (removed) {
+        setMetadataState((current) => {
+          if (current.status !== "ready") return current;
+          return {
+            ...current,
+            providers: current.providers.map((provider) => provider.providerId === selectedProviderId
+              ? {
+                  ...provider,
+                  configured: false,
+                  endpoint: null,
+                  model: null,
+                  credentialSource: "not_configured",
+                  identityConfidence: "unverified",
+                  connectTimeoutMs: null,
+                  readTimeoutMs: null,
+                  confirmationThresholdUsd: null,
+                  ceilingUsd: null,
+                }
+              : provider),
+          };
+        });
+        setNotice({ kind: "success", message: "Stored provider configuration removed. No key is displayed or exported." });
+        clearGenerationEvidence();
+      } else {
+        setNotice({ kind: "success", message: "No stored provider configuration was found." });
+      }
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setApiKey("");
+      setAction(null);
+    }
+  }
+
+  async function handleGeneration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setGenerationSubmitted(true);
+    setNotice(null);
+    if (
+      !selectedMetadata?.configured
+      || !generationValidation?.valid
+      || !generationValidation.snapshot
+      || generationValidation.maxOutputTokens === null
+    ) return;
+
+    setAction({ kind: "generate", providerId: selectedProviderId });
+    try {
+      const result = await executeExternalGeneration({
+        providerId: selectedProviderId,
+        prompt: generationPrompt,
+        maxOutputTokens: generationValidation.maxOutputTokens,
+        networkConsent,
+        costConfirmed,
+        priceSnapshot: generationValidation.snapshot,
+      });
+      setGenerationResult(result);
+      setNotice({ kind: "success", message: "Generation completed. Only sanitized usage, cost, and identity evidence is shown." });
+    } catch (error: unknown) {
+      setNotice({ kind: "error", message: byokErrorMessage(error) });
+    } finally {
+      setAction(null);
+    }
+  }
+
+  return (
+    <section className="panel provider-panel byok-panel" aria-labelledby="provider-foundation-heading">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Bring your own key</p>
+          <h3 id="provider-foundation-heading">External providers, clearly bounded</h3>
+        </div>
+        <div className="byok-heading-actions">
+          <button className="text-button" type="button" onClick={() => void refreshMetadata()} disabled={!desktop || busy}>
+            Refresh
+          </button>
           <span className="section-index">C</span>
         </div>
-        <p className="provider-intro">
-          BYOK means a future adapter would use credentials owned by you. This read-only catalog documents the boundary;
-          it does not accept API keys, read environment variables, call a provider, or make external execution available.
-          Local Ollama remains the only executable runtime.
+      </div>
+      <p className="provider-intro">
+        Configure one of four supported provider adapters with a key you own. Desktop mode reads only redacted metadata
+        from OS secure storage; provider calls happen only after you submit a form with explicit network consent.
+      </p>
+
+      {notice && (
+        <p className={`form-feedback form-feedback-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
+          {notice.message}
         </p>
+      )}
 
-        <div className="provider-grid">
-          {PROVIDER_CATALOG.map((provider) => <ProviderStatusCard key={provider.id} provider={provider} />)}
-        </div>
+      {metadataState.status === "loading" && (
+        <StateMessage icon="…" title="Loading provider metadata" description="Reading configured status and redacted settings from the desktop secure-storage boundary." />
+      )}
 
-        <div className="provider-safety-note">
-          <p className="eyebrow">Future paid-work safety contract</p>
-          <p>
-            A later adapter must estimate from a dated price-table snapshot, ask for confirmation at a configured
-            threshold, and refuse new paid work past a budget ceiling. Missing or invalid prices fail closed. Actual
-            cost history, secure credential storage, user-selected network calls, and provider identity verification are
-            still pending.
+      {metadataState.status === "error" && (
+        <>
+          <StateMessage icon="!" title="Provider metadata unavailable" description={metadataState.message} error />
+          <button className="secondary-button" type="button" onClick={() => void refreshMetadata()} disabled={busy}>
+            Try again
+          </button>
+        </>
+      )}
+
+      {metadataState.status === "unsupported" && (
+        <>
+          <StateMessage icon="◇" title="Browser preview / no provider writes" description={providerPreviewCopy()} />
+          <div className="provider-grid">
+            {PROVIDER_CATALOG.map((provider) => <ProviderStatusCard key={provider.id} provider={provider} />)}
+          </div>
+          <p className="field-help provider-boundary-copy">
+            No API key field, secure-storage write, cost-policy update, removal, or provider generation is available in browser preview.
           </p>
-        </div>
+        </>
+      )}
 
-        <p className="field-help provider-boundary-copy">
-          {desktop
-            ? "Desktop mode is still local-only: providers are unconfigured, and no key, network, telemetry, or provider state is stored."
-            : providerPreviewCopy()}
+      {metadataState.status === "ready" && (
+        <>
+          <div className="provider-grid">
+            {PROVIDER_CATALOG.map((provider) => (
+              <ByokProviderCard
+                key={provider.id}
+                provider={provider}
+                metadata={metadataState.providers.find((item) => item.providerId === provider.id)}
+                selected={selectedProviderId === provider.id}
+                disabled={busy}
+                onSelect={() => handleProviderSelection(provider.id)}
+              />
+            ))}
+          </div>
+
+          {selectedMetadata ? (
+            <div className="byok-editor-grid">
+              <section className="byok-editor-card" aria-labelledby="byok-configuration-heading">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">{selectedMetadata.configured ? "Replace configuration" : "New configuration"}</p>
+                    <h4 id="byok-configuration-heading">{selectedMetadata.label}</h4>
+                  </div>
+                  <span className="provider-state">{selectedMetadata.configured ? "Configured" : "Not configured"}</span>
+                </div>
+
+                <form className="byok-form" onSubmit={(event) => void handleConfigure(event)}>
+                  <label className="form-control" htmlFor="byok-endpoint">
+                    <span className="field-label">HTTPS endpoint</span>
+                    <input id="byok-endpoint" type="url" value={endpoint} onChange={(event) => setEndpoint(event.currentTarget.value)} autoComplete="url" />
+                  </label>
+                  <label className="form-control" htmlFor="byok-model">
+                    <span className="field-label">Model ID</span>
+                    <input id="byok-model" type="text" value={model} onChange={(event) => setModel(event.currentTarget.value)} autoComplete="off" />
+                  </label>
+                  <label className="form-control" htmlFor="byok-api-key">
+                    <span className="field-label">API key</span>
+                    <input
+                      id="byok-api-key"
+                      type="password"
+                      value={apiKey}
+                      onChange={(event) => setApiKey(event.currentTarget.value)}
+                      autoComplete="new-password"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <p className="field-help byok-key-note">Password field only. The key is sent once to OS secure storage, then cleared immediately; it is never rendered, logged, exported, or written to localStorage.</p>
+                  <button className="primary-button" type="submit" disabled={busy}>
+                    {action?.kind === "configure" ? "Saving configuration…" : "Save configuration"} <span aria-hidden="true">→</span>
+                  </button>
+                </form>
+
+                <form className="byok-policy-form" onSubmit={(event) => void handlePolicyUpdate(event)}>
+                  <div className="section-heading compact-heading">
+                    <div>
+                      <p className="eyebrow">Paid-work guardrails</p>
+                      <h4>Cost policy</h4>
+                    </div>
+                  </div>
+                  <div className="byok-form-grid">
+                    <label className="form-control" htmlFor="byok-confirmation-threshold">
+                      <span className="field-label">Confirmation threshold (USD)</span>
+                      <input
+                        id="byok-confirmation-threshold"
+                        type="number"
+                        min="0"
+                        max="1000000000"
+                        step="0.000001"
+                        value={budgetDraft.confirmationThresholdUsd}
+                        onChange={(event) => setBudgetDraft((current) => ({ ...current, confirmationThresholdUsd: event.currentTarget.value }))}
+                      />
+                    </label>
+                    <label className="form-control" htmlFor="byok-ceiling">
+                      <span className="field-label">Hard ceiling (USD)</span>
+                      <input
+                        id="byok-ceiling"
+                        type="number"
+                        min="0"
+                        max="1000000000"
+                        step="0.000001"
+                        value={budgetDraft.ceilingUsd}
+                        onChange={(event) => setBudgetDraft((current) => ({ ...current, ceilingUsd: event.currentTarget.value }))}
+                      />
+                    </label>
+                  </div>
+                  <p className="field-help">Blank means no threshold. The desktop boundary refuses invalid policy values and work above the hard ceiling.</p>
+                  <button className="secondary-button" type="submit" disabled={busy || !selectedMetadata.configured}>
+                    {action?.kind === "policy" ? "Updating policy…" : "Update cost policy"}
+                  </button>
+                </form>
+
+                <button className="text-button byok-remove-button" type="button" onClick={() => void handleRemove()} disabled={busy || !selectedMetadata.configured}>
+                  Remove stored configuration
+                </button>
+              </section>
+
+              <section className="byok-generation-card" aria-labelledby="byok-generation-heading">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">Explicit test action</p>
+                    <h4 id="byok-generation-heading">Test provider generation</h4>
+                  </div>
+                  <span className="section-index">D</span>
+                </div>
+                <p className="field-help byok-generation-intro">Nothing is sent automatically. This form requires a dated USD price snapshot and an explicit consent checkbox before the provider call.</p>
+
+                {!selectedMetadata.configured ? (
+                  <StateMessage icon="◇" title="Configure a provider first" description="The generation form appears after this provider has a stored configuration." />
+                ) : (
+                  <form className="byok-form" onSubmit={(event) => void handleGeneration(event)}>
+                    <label className="form-control" htmlFor="byok-prompt">
+                      <span className="field-label">Prompt</span>
+                      <textarea
+                        id="byok-prompt"
+                        value={generationPrompt}
+                        onChange={(event) => { setGenerationPrompt(event.currentTarget.value); clearGenerationEvidence(); }}
+                        placeholder="Enter a small prompt for the explicit provider test."
+                      />
+                    </label>
+                    <label className="form-control byok-max-token-control" htmlFor="byok-max-output-tokens">
+                      <span className="field-label">Maximum output tokens</span>
+                      <input id="byok-max-output-tokens" type="number" min="1" max="100000000" step="1" value={maxOutputTokens} onChange={(event) => { setMaxOutputTokens(event.currentTarget.value); clearGenerationEvidence(); }} />
+                    </label>
+
+                    <fieldset className="form-section byok-price-section">
+                      <legend>Dated price snapshot (USD)</legend>
+                      <div className="byok-form-grid">
+                        <label className="form-control" htmlFor="byok-price-model">
+                          <span className="field-label">Snapshot model ID</span>
+                          <input id="byok-price-model" type="text" value={priceSnapshot.modelId} onChange={(event) => updatePriceSnapshot("modelId", event.currentTarget.value)} />
+                        </label>
+                        <label className="form-control" htmlFor="byok-price-date">
+                          <span className="field-label">Captured on</span>
+                          <input id="byok-price-date" type="date" value={priceSnapshot.capturedOn} onChange={(event) => updatePriceSnapshot("capturedOn", event.currentTarget.value)} />
+                        </label>
+                        <label className="form-control" htmlFor="byok-input-rate">
+                          <span className="field-label">Input USD / 1M tokens</span>
+                          <input id="byok-input-rate" type="number" min="0" max="1000000" step="0.000001" value={priceSnapshot.inputUsdPerMillionTokens} onChange={(event) => updatePriceSnapshot("inputUsdPerMillionTokens", event.currentTarget.value)} />
+                        </label>
+                        <label className="form-control" htmlFor="byok-output-rate">
+                          <span className="field-label">Output USD / 1M tokens</span>
+                          <input id="byok-output-rate" type="number" min="0" max="1000000" step="0.000001" value={priceSnapshot.outputUsdPerMillionTokens} onChange={(event) => updatePriceSnapshot("outputUsdPerMillionTokens", event.currentTarget.value)} />
+                        </label>
+                      </div>
+                      <p className="field-help">The snapshot model must match the configured model. Missing or invalid prices fail closed. Currency is fixed to USD at the boundary.</p>
+                    </fieldset>
+
+                    {generationValidation?.estimate?.status === "estimated" && (
+                      <div className="byok-cost-preview" aria-live="polite">
+                        <p className="eyebrow">Preflight cost evidence</p>
+                        <div className="results-facts">
+                          <BoundaryRow label="Input estimate" value={`${formatByokTokens(generationValidation.inputTokens)} tokens · ${formatByokMoney(generationValidation.estimate.inputCostUsd)}`} />
+                          <BoundaryRow label="Output cap" value={`${formatByokTokens(generationValidation.maxOutputTokens)} tokens · ${formatByokMoney(generationValidation.estimate.outputCostUsd)}`} />
+                          <BoundaryRow label="Estimated total" value={formatByokMoney(generationValidation.estimate.totalCostUsd)} />
+                          <BoundaryRow label="Budget decision" value={formatByokDecision(generationValidation.budgetDecision?.decision)} />
+                        </div>
+                      </div>
+                    )}
+
+                    {generationValidation?.budgetDecision?.decision === "confirm" && (
+                      <label className="byok-consent-label">
+                        <input type="checkbox" checked={costConfirmed} onChange={(event) => setCostConfirmed(event.currentTarget.checked)} />
+                        <span><strong>Confirm this estimated cost</strong><small>The configured threshold was reached. This confirmation applies only to this submitted generation.</small></span>
+                      </label>
+                    )}
+
+                    <label className="byok-consent-label">
+                      <input type="checkbox" checked={networkConsent} onChange={(event) => { setNetworkConsent(event.currentTarget.checked); clearGenerationEvidence(); }} />
+                      <span><strong>Allow one external network call</strong><small>Nothing is sent until this explicit consent is checked and the form is submitted.</small></span>
+                    </label>
+
+                    {generationSubmitted && generationValidation && !generationValidation.valid && (
+                      <p className="form-feedback form-feedback-error" role="alert">{firstByokValidationError(generationValidation.errors)}</p>
+                    )}
+
+                    <button className="primary-button" type="submit" disabled={busy}>
+                      {action?.kind === "generate" ? "Calling provider…" : "Test provider generation"} <span aria-hidden="true">→</span>
+                    </button>
+                  </form>
+                )}
+
+                {generationResult && <ByokGenerationSuccess result={generationResult} />}
+              </section>
+            </div>
+          ) : (
+            <StateMessage icon="!" title="Provider metadata incomplete" description="The desktop bridge did not return a usable record for the selected provider." error />
+          )}
+        </>
+      )}
+
+      <div className="provider-safety-note byok-safety-note">
+        <p className="eyebrow">No-secret boundary</p>
+        <p>
+          API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Generation results are
+          shown in memory with sanitized usage, cost, and identity evidence only; this panel does not export or persist them.
         </p>
-      </section>
+      </div>
+    </section>
+  );
+}
+
+function ByokProviderCard({
+  provider,
+  metadata,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  provider: ProviderCatalogEntry;
+  metadata: ExternalProviderMetadata | undefined;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  const configured = metadata?.configured ?? false;
+  const kindLabel = provider.kind === "generic_openai_compatible" ? "Generic compatibility adapter" : "Native adapter";
+  return (
+    <article className={`provider-card byok-provider-card ${selected ? "is-selected" : ""}`} data-provider={provider.id}>
+      <div className="provider-card-heading">
+        <div>
+          <p className="eyebrow">{kindLabel}</p>
+          <h4>{metadata?.label ?? provider.label}</h4>
+        </div>
+        <span className="provider-state">{configured ? "Configured" : "Not configured"}</span>
+      </div>
+      <div className="provider-facts">
+        <div><span>Configured</span><strong>{configured ? "Yes" : "No"}</strong></div>
+        <div><span>Storage</span><strong>{formatStorageStatus(metadata?.storageStatus)}</strong></div>
+        <div><span>Credentials</span><strong>{formatCredentialSource(metadata?.credentialSource)}</strong></div>
+        <div><span>Endpoint</span><strong>{metadata?.endpoint ?? "Not configured"}</strong></div>
+        <div><span>Model</span><strong>{metadata?.model ?? "Not configured"}</strong></div>
+        <div><span>Identity</span><strong>{formatIdentityConfidence(metadata?.identityConfidence)}</strong></div>
+      </div>
+      <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata} aria-pressed={selected}>
+        {selected ? "Selected" : "Manage provider"}
+      </button>
+    </article>
+  );
+}
+
+function ByokGenerationSuccess({ result }: { result: ExternalGenerationResult }) {
+  return (
+    <div className="byok-success" role="status" aria-live="polite">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Sanitized result</p>
+          <h4>Provider generation completed</h4>
+        </div>
+        <span className="run-status arena-status-success">Success</span>
+      </div>
+      <div className="results-facts">
+        <BoundaryRow label="Provider" value={providerLabel(result.providerId)} />
+        <BoundaryRow label="Requested model" value={result.requestedModel} />
+        <BoundaryRow label="Provider model" value={result.providerModel} />
+        <BoundaryRow label="Identity confidence" value={formatIdentityConfidence(result.identityConfidence)} />
+        <BoundaryRow label="Network used" value={result.networkUsed ? "Yes · consented" : "No"} />
+        <BoundaryRow label="Usage" value={`${formatByokTokens(result.usage.inputTokens)} input · ${formatByokTokens(result.usage.outputTokens)} output · ${formatByokTokens(result.usage.totalTokens)} total`} />
+        <BoundaryRow label="Estimated cost" value={formatByokMoney(result.cost.estimated.totalCostUsd)} />
+        <BoundaryRow label="Actual cost" value={formatByokMoney(result.cost.actual.totalCostUsd)} />
+        <BoundaryRow label="Final decision" value={formatByokDecision(result.cost.finalDecision)} />
+        <BoundaryRow label="Price snapshot" value={`${result.cost.priceSnapshot.modelId} · ${result.cost.priceSnapshot.capturedOn} · ${result.cost.priceSnapshot.currency}`} />
+      </div>
+      <div className="byok-response-block">
+        <p className="eyebrow">Returned text</p>
+        <pre className="byok-response">{result.text}</pre>
+      </div>
+      <p className="field-help">This result and its evidence are displayed in memory only. They are not exported, stored in localStorage, or added to run history.</p>
     </div>
   );
 }
