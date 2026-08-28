@@ -2591,6 +2591,52 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
     {
         return Err(StorageError::InvalidProfileRevision);
     }
+    if !matches!(
+        revision.runtime.as_str(),
+        "local" | "ollama" | "lm_studio" | "llama_cpp"
+    ) {
+        return Err(StorageError::InvalidProfileRevision);
+    }
+    for key in ["modelId", "sourceId", "backend", "quantizationLevel"] {
+        if let Some(value) = revision.extra.get(key) {
+            if value.is_null() {
+                continue;
+            }
+            let Some(value) = value.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            validate_model_text(value, MAX_MODEL_PATH_BYTES)?;
+        }
+    }
+    if let Some(backend) = revision.extra.get("backend").and_then(Value::as_str) {
+        if backend != revision.runtime {
+            return Err(StorageError::InvalidProfileRevision);
+        }
+    }
+    if let Some(endpoint) = revision.extra.get("endpoint") {
+        if endpoint.is_null() {
+            // A discovered GGUF record has no network endpoint.
+        } else {
+            let Some(endpoint) = endpoint.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            crate::ollama::OllamaEndpoint::parse(endpoint)
+                .map_err(|_| StorageError::InvalidProfileRevision)?;
+        }
+    }
+    if let Some(path) = revision.extra.get("path") {
+        if path.is_null() {
+            // A loopback runtime record has no managed GGUF path.
+        } else {
+            let Some(path) = path.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            if revision.runtime != "llama_cpp" {
+                return Err(StorageError::InvalidProfileRevision);
+            }
+            validate_managed_model_path(path)?;
+        }
+    }
     let request_bytes = serde_json::to_vec(revision).map_err(|_| StorageError::DatabaseFailure)?;
     if request_bytes.len() > MAX_PROFILE_REQUEST_BYTES {
         return Err(StorageError::ProfileRequestTooLarge);

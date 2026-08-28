@@ -386,6 +386,20 @@ fn prepare_operation(
                     "model record identity does not match the request".to_owned(),
                 ));
             }
+            if storage.list_model_operations()?.iter().any(|operation| {
+                matches!(
+                    operation.status,
+                    ModelOperationStatus::Queued | ModelOperationStatus::Running
+                ) && (operation.model_id.as_deref() == Some(record.model_id.as_str())
+                    || record
+                        .managed_path
+                        .as_deref()
+                        .is_some_and(|path| operation.managed_path.as_deref() == Some(path)))
+            }) {
+                return Err(ModelLibraryError::InvalidRequest(
+                    "model cannot be removed while a model operation is active".to_owned(),
+                ));
+            }
             Ok(PreparedOperation {
                 operation: queued_operation(
                     operation_id,
@@ -1857,6 +1871,76 @@ mod tests {
         assert_eq!(removals[0].outcome, "removed");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removal_fails_closed_while_the_model_path_has_an_active_operation() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/active-model.gguf";
+        let bytes = minimal_gguf("active-model");
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &bytes).unwrap();
+
+        let imported = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "active-import-1".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let record = storage
+            .get_model_record(imported.model_id.as_deref().unwrap())
+            .unwrap()
+            .unwrap();
+        let active = queued_operation(
+            "active-operation-1",
+            ModelOperationKind::Import,
+            ModelBackend::LlamaCpp,
+            Some(record.source_id.clone()),
+            None,
+            None,
+            record.managed_path.clone(),
+            "200".to_owned(),
+        );
+        storage.save_model_operation(&active).unwrap();
+
+        let error = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Remove {
+                operation_id: "active-remove-1".to_owned(),
+                model_id: record.model_id.clone(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect_err("active model paths must not be removed");
+        assert!(error.to_string().contains("active"));
+        assert!(path.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_validation_rejects_non_loopback_endpoints_and_unsafe_paths() {
+        for endpoint in ["https://127.0.0.1:1234", "http://192.168.1.10:1234"] {
+            assert!(validated_source_parts(&source(ModelBackend::LmStudio, endpoint)).is_err());
+        }
+        for path in ["../model.gguf", "C:/model.gguf", "nested\\model.gguf"] {
+            assert!(validated_source_parts(&ModelSourceConfig {
+                backend: ModelBackend::LlamaCpp,
+                label: None,
+                endpoint: None,
+                path: Some(path.to_owned()),
+            })
+            .is_err());
+        }
+        assert!(
+            validated_source_parts(&source(ModelBackend::LmStudio, "http://127.0.0.1:1234"))
+                .is_ok()
+        );
     }
 
     #[test]

@@ -186,6 +186,7 @@ import {
   modelBackendLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
+  modelDownloadCapabilityLabel,
   modelEmptyCopy,
   modelOperationProgressLabel,
   modelOperationStatusLabel,
@@ -193,6 +194,7 @@ import {
   modelRecordMetadataLabel,
   modelRecordMetadataValue,
   modelRecordQuantizationLabel,
+  modelRemovalCapabilityLabel,
   modelSourceStatusLabel,
   profileEmptyCopy,
   profilePreviewCopy,
@@ -1303,6 +1305,7 @@ function ModelsView() {
   ));
   const [thresholds, setThresholds] = useState<RecommendationThresholds>(DEFAULT_RECOMMENDATION_THRESHOLDS);
   const [form, setForm] = useState<ProfileFormState>(EMPTY_PROFILE_FORM);
+  const [selectedProfileModelId, setSelectedProfileModelId] = useState("");
   const [sourceConfigs, setSourceConfigs] = useState<ModelSourceConfig[]>(() => (
     DEFAULT_MODEL_SOURCE_CONFIGS.map((config) => ({ ...config }))
   ));
@@ -1515,6 +1518,15 @@ function ModelsView() {
     void refreshHardware();
   }, []);
 
+  useEffect(() => {
+    if (modelState.status !== "ready") {
+      setSelectedProfileModelId("");
+      return;
+    }
+    const available = new Set(modelState.catalog.models.map((model) => model.modelId));
+    setSelectedProfileModelId((current) => available.has(current) ? current : "");
+  }, [modelState]);
+
   const hasActiveOperations = modelState.status === "ready"
     && (operationStarting || modelState.operations.some(isActiveModelOperation));
 
@@ -1525,6 +1537,9 @@ function ModelsView() {
   }, [desktop, hasActiveOperations]);
 
   const visibleModels = modelState.status === "ready" ? filterModelCatalog(modelState.catalog, query) : [];
+  const selectedProfileModel = modelState.status === "ready"
+    ? modelState.catalog.models.find((model) => model.modelId === selectedProfileModelId)
+    : undefined;
 
   function updateThreshold(field: keyof RecommendationThresholds, value: string) {
     const parsed = Number(value);
@@ -1543,7 +1558,7 @@ function ModelsView() {
     }
     setBusy(true);
     try {
-      const revision = profileRevisionFromForm(form);
+      const revision = profileRevisionFromForm(form, selectedProfileModel);
       const result = await registerProfileRevision(revision);
       setFeedback({
         kind: "success",
@@ -1711,6 +1726,7 @@ function ModelsView() {
                 );
                 const canDownload = model.backend === "ollama";
                 const canRemove = model.backend === "llama_cpp" && model.managed && model.managedPath !== null;
+                const modelOperationActive = rowOperation ? isActiveModelOperation(rowOperation) : false;
                 return (
                 <article className="model-row" key={model.modelId}>
                   <div>
@@ -1756,11 +1772,13 @@ function ModelsView() {
                         className="text-button"
                         type="button"
                         onClick={() => handleRemove(model)}
-                        disabled={!desktop || busy || operationStarting}
+                        disabled={!desktop || busy || operationStarting || modelOperationActive}
                       >
-                        {operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
+                        {modelOperationActive ? "Removal blocked" : operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
                       </button>
                     )}
+                    <span className="field-help">{modelDownloadCapabilityLabel(model)}</span>
+                    <span className="field-help">{modelRemovalCapabilityLabel(model)}</span>
                   </div>
                 </article>
                 );
@@ -1836,8 +1854,32 @@ function ModelsView() {
           <div className="profile-form form-section">
             <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
-            <FormInput id="profile-model" label="Ollama model" value={form.model} onChange={(value) => updateField("model", value)} />
-            <p className="field-help">Runtime is fixed to local Ollama. Derived immutable ID: <strong>{profileRevisionIdPreview(form)}</strong></p>
+            <label className="advanced-field" htmlFor="profile-discovered-model">
+              <span className="field-label">Discovered local model (optional)</span>
+              <select
+                className="font-select"
+                id="profile-discovered-model"
+                value={selectedProfileModelId}
+                onChange={(event) => {
+                  const modelId = event.currentTarget.value;
+                  setSelectedProfileModelId(modelId);
+                  const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
+                  if (model) updateField("model", model.name);
+                }}
+              >
+                <option value="">Manual Ollama model</option>
+                {modelState.status === "ready" && modelState.catalog.models.map((model) => (
+                  <option key={model.modelId} value={model.modelId}>{model.name} · {modelBackendLabel(model.backend)} · {modelRecordQuantizationLabel(model)}</option>
+                ))}
+              </select>
+            </label>
+            <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
+            <p className="field-help">
+              {selectedProfileModel
+                ? `Runtime: ${modelBackendLabel(selectedProfileModel.backend)} · source: ${selectedProfileModel.sourceId} · immutable model identity is preserved.`
+                : "Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity."}
+              {" "}Derived immutable ID: <strong>{profileRevisionIdPreview(form)}</strong>
+            </p>
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>
               Register immutable revision
             </button>
