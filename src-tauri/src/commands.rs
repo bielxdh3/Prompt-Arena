@@ -23,6 +23,14 @@ use crate::{
         lock_blind_evaluation as lock_blind_evaluation_record,
         prepare_blind_evaluation as prepare_blind_evaluation_record, BlindEvaluationError,
     },
+    external_providers::{
+        configure_external_provider as configure_external_provider_record,
+        list_external_providers as list_external_provider_records,
+        remove_external_provider as remove_external_provider_record,
+        update_external_cost_policy as update_external_cost_policy_record,
+        ConfigureProviderRequest, ExternalProviderError, ExternalProviderId,
+        ExternalProviderMetadata, OsCredentialBackend, UpdateProviderCostPolicyRequest,
+    },
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
     model_library::{
         discover_local_models as discover_local_models_backend,
@@ -252,12 +260,68 @@ impl From<OfficialPackError> for CommandError {
     }
 }
 
+impl From<ExternalProviderError> for CommandError {
+    fn from(error: ExternalProviderError) -> Self {
+        let code = match error {
+            ExternalProviderError::UnsupportedPlatform => "provider_storage_unsupported",
+            ExternalProviderError::SecureStorageUnavailable => "provider_storage_unavailable",
+            ExternalProviderError::SecureStorageError => "provider_storage_error",
+            ExternalProviderError::NotConfigured => "provider_not_configured",
+            ExternalProviderError::InvalidConfiguration => "provider_configuration_invalid",
+            ExternalProviderError::InvalidCredential => "provider_credential_invalid",
+            ExternalProviderError::NetworkConsentRequired => "provider_network_consent_required",
+            ExternalProviderError::RequestTooLarge => "provider_request_too_large",
+            ExternalProviderError::ResponseTooLarge => "provider_response_too_large",
+            ExternalProviderError::Timeout => "provider_timeout",
+            ExternalProviderError::Transport => "provider_transport",
+            ExternalProviderError::Authentication => "provider_authentication",
+            ExternalProviderError::Remote { .. } => "provider_remote",
+            ExternalProviderError::MalformedResponse => "provider_malformed_response",
+            ExternalProviderError::UnsupportedParameter => "provider_unsupported_parameter",
+            ExternalProviderError::MissingUsage => "provider_missing_usage",
+            ExternalProviderError::InvalidUsage => "provider_invalid_usage",
+            ExternalProviderError::MissingPrice => "provider_missing_price",
+            ExternalProviderError::InvalidPrice => "provider_invalid_price",
+            ExternalProviderError::ConfirmationRequired => "provider_confirmation_required",
+            ExternalProviderError::BudgetCeilingExceeded => "provider_budget_ceiling_exceeded",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn validate_benchmark_document(
     document: String,
 ) -> Result<BenchmarkValidationSummary, CommandError> {
     let validated = validate_document(&document)?;
     Ok(validation_summary(&validated))
+}
+
+#[tauri::command]
+pub fn list_external_providers() -> Vec<ExternalProviderMetadata> {
+    list_external_provider_records(&OsCredentialBackend)
+}
+
+#[tauri::command]
+pub fn configure_external_provider(
+    request: ConfigureProviderRequest,
+) -> Result<ExternalProviderMetadata, CommandError> {
+    configure_external_provider_record(&OsCredentialBackend, request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn update_external_cost_policy(
+    request: UpdateProviderCostPolicyRequest,
+) -> Result<ExternalProviderMetadata, CommandError> {
+    update_external_cost_policy_record(&OsCredentialBackend, request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn remove_external_provider(provider_id: ExternalProviderId) -> Result<bool, CommandError> {
+    remove_external_provider_record(&OsCredentialBackend, provider_id).map_err(Into::into)
 }
 
 #[tauri::command]
