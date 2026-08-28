@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   isDesktopEnvironment,
+  readBenchmarkVersion,
+  readCalibrationResults,
   readArenaSummaries,
+  saveCalibrationBenchmark,
+  saveCalibrationResult,
+  saveTournamentResult,
+  readTournamentResults,
+  type CalibrationResultRecord,
   type ArenaSummaryRecord,
+  type TournamentResultPayload,
+  type TournamentResultRecord,
 } from "./bridge";
 import {
   MAX_ADVANCED_COMPETITORS,
@@ -13,6 +22,7 @@ import {
   compareArenaRegression,
   normalizeArenaEvidence,
   scheduleTournament,
+  resolveTournamentOutcomes,
   validateAiJudgeScoreInput,
   type AdvancedArenaMetric,
   type AdvancedRanking,
@@ -22,6 +32,7 @@ import {
   type ArenaRegressionComparison,
   type ScoreSource,
   type TournamentSchedule,
+  type TournamentEvidenceResult,
 } from "./advanced-arena";
 import {
   formatAdvancedValue,
@@ -44,6 +55,8 @@ type EvidenceState = {
 type ScoreState = {
   humanScores: Map<string, number>;
   aiJudgeScores: Map<string, number>;
+  humanEntries: Array<{ executionKey: string; score: number }>;
+  aiJudgeEntries: Array<{ executionKey: string; score: number }>;
   aiJudgeBoundary: AiJudgeScoreBoundary;
   error: string | null;
 };
@@ -52,7 +65,17 @@ type TournamentModeChoice = "1v1" | "blind_ranking" | "round_robin" | "single_el
 
 type TournamentResult =
   | { kind: "schedule"; schedule: TournamentSchedule }
-  | { kind: "blind"; aggregation: BlindRankingAggregation };
+  | { kind: "outcome"; schedule: TournamentSchedule; result: TournamentEvidenceResult }
+  | { kind: "blind"; aggregation: BlindRankingAggregation }
+  | { kind: "saved"; record: TournamentResultRecord };
+
+type ArtifactHistoryState =
+  | { status: "loading" }
+  | { status: "ready"; calibrationResults: CalibrationResultRecord[]; tournamentResults: TournamentResultRecord[] }
+  | { status: "preview" }
+  | { status: "error"; message: string };
+
+type JudgePanelSize = "none" | "3" | "5";
 
 const REGRESSION_METRICS: readonly AdvancedArenaMetric[] = [
   "objective_pass_rate",
@@ -64,6 +87,9 @@ export function AdvancedArenaView() {
   const [summaryState, setSummaryState] = useState<SummaryState>(() => (
     isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
   ));
+  const [artifactHistory, setArtifactHistory] = useState<ArtifactHistoryState>(() => (
+    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+  ));
   const [selectedSummaryId, setSelectedSummaryId] = useState("");
   const [baselineId, setBaselineId] = useState("");
   const [candidateId, setCandidateId] = useState("");
@@ -72,8 +98,21 @@ export function AdvancedArenaView() {
   const [scoreSource, setScoreSource] = useState<ScoreSource>("human");
   const [humanScoreText, setHumanScoreText] = useState("");
   const [aiJudgeScoreText, setAiJudgeScoreText] = useState("");
-  const [aiJudgeId, setAiJudgeId] = useState("");
+  const [aiJudgeId, setAiJudgeId] = useState("local-judge-v1");
+  const [aiJudgeVersion, setAiJudgeVersion] = useState("1");
+  const [aiJudgeRubricId, setAiJudgeRubricId] = useState("default-rubric");
+  const [aiJudgeRubricVersion, setAiJudgeRubricVersion] = useState("1");
+  const [aiJudgePrompt, setAiJudgePrompt] = useState("Score the anonymized response against the frozen benchmark rubric.");
+  const [aiJudgePanelSize, setAiJudgePanelSize] = useState<JudgePanelSize>("none");
+  const [aiJudgePanelIds, setAiJudgePanelIds] = useState("");
+  const [calibrationId, setCalibrationId] = useState("");
+  const [calibrationSaveMessage, setCalibrationSaveMessage] = useState("");
+  const [selectedCalibrationResultId, setSelectedCalibrationResultId] = useState("");
   const [tournamentMode, setTournamentMode] = useState<TournamentModeChoice>("round_robin");
+  const [tournamentMetric, setTournamentMetric] = useState<AdvancedArenaMetric>("objective_pass_rate");
+  const [tournamentId, setTournamentId] = useState("");
+  const [tournamentSaveMessage, setTournamentSaveMessage] = useState("");
+  const [selectedTournamentResultId, setSelectedTournamentResultId] = useState("");
   const [tournamentCompetitorIds, setTournamentCompetitorIds] = useState<string[]>([]);
   const [maxMatches, setMaxMatches] = useState(MAX_ADVANCED_MATCHES);
   const [blindRankingText, setBlindRankingText] = useState("");
@@ -83,16 +122,26 @@ export function AdvancedArenaView() {
   async function refreshSummaries() {
     if (!isDesktopEnvironment()) {
       setSummaryState({ status: "preview" });
+      setArtifactHistory({ status: "preview" });
       return;
     }
     setSummaryState({ status: "loading" });
+    setArtifactHistory({ status: "loading" });
     try {
-      setSummaryState({ status: "ready", summaries: await readArenaSummaries() });
+      const [summaries, calibrationResults, tournamentResults] = await Promise.all([
+        readArenaSummaries(),
+        readCalibrationResults(),
+        readTournamentResults(),
+      ]);
+      setSummaryState({ status: "ready", summaries });
+      setArtifactHistory({ status: "ready", calibrationResults, tournamentResults });
     } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "The saved Advanced Arena artifacts are unavailable.";
       setSummaryState({
         status: "error",
-        message: error instanceof Error ? error.message : "The saved Arena summaries are unavailable.",
+        message,
       });
+      setArtifactHistory({ status: "error", message });
     }
   }
 
@@ -105,6 +154,8 @@ export function AdvancedArenaView() {
     const ids = summaryState.summaries.map((summary) => summary.arenaId);
     setSelectedSummaryId((current) => ids.includes(current) ? current : ids[0] ?? "");
     setBaselineId((current) => ids.includes(current) ? current : ids[0] ?? "");
+    setCalibrationId((current) => current || `calibration-${ids[0] ?? "arena"}`);
+    setTournamentId((current) => current || `tournament-${ids[0] ?? "arena"}`);
   }, [summaryState]);
 
   useEffect(() => {
@@ -150,7 +201,7 @@ export function AdvancedArenaView() {
   useEffect(() => {
     setTournamentResult(null);
     setTournamentError(null);
-  }, [selectedSummaryId, tournamentMode, tournamentCompetitorIds.join("|"), maxMatches]);
+  }, [selectedSummaryId, tournamentMode, tournamentCompetitorIds.join("|"), maxMatches, tournamentMetric]);
 
   const scoreState = useMemo(() => parseScoreState(humanScoreText, aiJudgeScoreText, aiJudgeId), [humanScoreText, aiJudgeScoreText, aiJudgeId]);
 
@@ -226,6 +277,7 @@ export function AdvancedArenaView() {
   function buildTournament() {
     setTournamentError(null);
     setTournamentResult(null);
+    setTournamentSaveMessage("");
     try {
       if (!selectedSummary) throw new Error("Select a saved Arena summary before building a tournament.");
       if (selectedTournamentCompetitors.length < 2) throw new Error("Select at least two competitors for the tournament.");
@@ -243,10 +295,150 @@ export function AdvancedArenaView() {
         mode: tournamentMode,
         maxMatches,
       });
-      setTournamentResult({ kind: "schedule", schedule });
+      setTournamentResult({
+        kind: "outcome",
+        schedule,
+        result: resolveTournamentOutcomes(selectedSummary, schedule, {
+          metric: tournamentMetric,
+          humanScores: scoreState.humanScores,
+          aiJudgeScores: scoreState.aiJudgeScores,
+          scoreSource,
+        }),
+      });
     } catch (error: unknown) {
       setTournamentError(error instanceof Error ? error.message : "The tournament request is invalid.");
     }
+  }
+
+  async function saveCalibrationArtifacts() {
+    setCalibrationSaveMessage("Saving immutable calibration benchmark and result…");
+    try {
+      if (!selectedSummary) throw new Error("Select a saved Arena summary before saving calibration.");
+      if (scoreState.error) throw new Error("Fix the score entries before saving calibration.");
+      const benchmark = await readBenchmarkVersion(selectedSummary.benchmarkVersionId);
+      if (!benchmark || benchmark.summary.contentHash === "") throw new Error("The source benchmark version is unavailable.");
+      const judge = await buildFrozenJudge({
+        judgeId: aiJudgeId,
+        version: aiJudgeVersion,
+        rubricId: aiJudgeRubricId,
+        rubricVersion: aiJudgeRubricVersion,
+        prompt: aiJudgePrompt,
+        panelSize: aiJudgePanelSize,
+        panelIds: aiJudgePanelIds,
+      });
+      const sampleIds = evidenceState.samples.map(executionKeyForSample);
+      const calibrationPayload = {
+        calibrationId,
+        benchmarkVersionId: benchmark.summary.versionId,
+        benchmarkContentHash: benchmark.summary.contentHash,
+        name: `Calibration for ${selectedSummary.arenaId}`,
+        sampleIds,
+        judge,
+      };
+      await saveCalibrationBenchmark(calibrationPayload);
+      const saved = await saveCalibrationResult({
+        resultId: `${calibrationId}-result`,
+        calibrationId,
+        sourceArenaId: selectedSummary.arenaId,
+        sourceContentHash: selectedSummary.contentHash,
+        judge,
+        humanScores: scoreState.humanEntries,
+        aiJudgeScores: scoreState.aiJudgeEntries,
+        metrics: {
+          status: calibration.status,
+          sampleSize: calibration.sampleSize,
+          agreementTolerance: calibration.agreementTolerance,
+          agreementCount: calibration.agreementCount,
+          disagreementCount: calibration.disagreementCount,
+          agreementRate: calibration.agreementRate,
+          meanAbsoluteError: calibration.meanAbsoluteError,
+          maximumAbsoluteError: calibration.maximumAbsoluteError,
+          bias: calibration.bias,
+          uncertainty: calibration.uncertainty,
+          unmatchedHumanCount: calibration.unmatchedHumanCount,
+          unmatchedAiJudgeCount: calibration.unmatchedAiJudgeCount,
+          disagreementSampleIds: calibration.disagreementSampleIds,
+        },
+      });
+      setSelectedCalibrationResultId(saved.record.resultId);
+      setCalibrationSaveMessage(`Calibration ${saved.saveOutcome === "already_present" ? "reopened" : "saved"}: ${saved.record.resultId}.`);
+      await refreshSummaries();
+    } catch (error: unknown) {
+      setCalibrationSaveMessage(error instanceof Error ? error.message : "The calibration artifact could not be saved.");
+    }
+  }
+
+  function reopenCalibrationResult() {
+    if (artifactHistory.status !== "ready") return;
+    const record = artifactHistory.calibrationResults.find((item) => item.resultId === selectedCalibrationResultId);
+    if (!record) return;
+    setCalibrationId(record.calibrationId);
+    setAiJudgeId(record.judge.judgeId);
+    setAiJudgeVersion(record.judge.version);
+    setAiJudgeRubricId(record.judge.rubricId);
+    setAiJudgeRubricVersion(record.judge.rubricVersion);
+    setAiJudgePrompt(record.judge.prompt);
+    setAiJudgePanelSize(record.judge.panel ? String(record.judge.panel.judgeIds.length) as JudgePanelSize : "none");
+    setAiJudgePanelIds(record.judge.panel?.judgeIds.join(", ") ?? "");
+    setHumanScoreText(formatCalibrationScores(record.humanScores));
+    setAiJudgeScoreText(formatCalibrationScores(record.aiJudgeScores));
+    setCalibrationSaveMessage(`Reopened immutable calibration result ${record.resultId}.`);
+  }
+
+  async function saveTournamentArtifact() {
+    setTournamentSaveMessage("Saving immutable tournament result…");
+    try {
+      if (!selectedSummary || !tournamentResult || (tournamentResult.kind !== "outcome" && tournamentResult.kind !== "blind")) {
+        throw new Error("Build a tournament outcome before saving it.");
+      }
+      const payload: TournamentResultPayload = tournamentResult.kind === "outcome"
+        ? {
+          tournamentId,
+          sourceArenaId: selectedSummary.arenaId,
+          sourceContentHash: selectedSummary.contentHash,
+          mode: tournamentResult.schedule.mode,
+          metric: tournamentResult.result.metric,
+          evidenceSampleCount: tournamentResult.result.evidenceSampleCount,
+          matches: tournamentResult.result.matches,
+          standings: tournamentResult.result.standings,
+        }
+        : {
+          tournamentId,
+          sourceArenaId: selectedSummary.arenaId,
+          sourceContentHash: selectedSummary.contentHash,
+          mode: "blind_ranking",
+          metric: "borda_points",
+          evidenceSampleCount: evidenceState.samples.length,
+          matches: [],
+          standings: tournamentResult.aggregation.entries.map((entry) => ({
+            rank: entry.rank,
+            competitorId: entry.competitorId,
+            competitorLabel: competitorOptions.find((item) => item.competitorId === entry.competitorId)?.competitorLabel ?? entry.competitorId,
+            wins: 0,
+            losses: 0,
+            ties: entry.tied ? 1 : 0,
+            points: entry.averagePoints ?? 0,
+            metricValue: entry.averagePoints,
+            tied: entry.tied,
+          })),
+        };
+      const saved = await saveTournamentResult(payload);
+      setSelectedTournamentResultId(saved.record.tournamentId);
+      setTournamentResult({ kind: "saved", record: saved.record });
+      setTournamentSaveMessage(`Tournament ${saved.saveOutcome === "already_present" ? "reopened" : "saved"}: ${saved.record.tournamentId}.`);
+      await refreshSummaries();
+    } catch (error: unknown) {
+      setTournamentSaveMessage(error instanceof Error ? error.message : "The tournament result could not be saved.");
+    }
+  }
+
+  function reopenTournamentResult() {
+    if (artifactHistory.status !== "ready") return;
+    const record = artifactHistory.tournamentResults.find((item) => item.tournamentId === selectedTournamentResultId);
+    if (!record) return;
+    setTournamentId(record.tournamentId);
+    setTournamentSaveMessage(`Reopened immutable tournament result ${record.tournamentId}.`);
+    setTournamentResult({ kind: "saved", record });
   }
 
   return (
@@ -255,8 +447,8 @@ export function AdvancedArenaView() {
         <p className="eyebrow">Advanced Arena</p>
         <h2>Read deeper signals from saved Arena evidence.</h2>
         <p>
-          Advanced Arena reads immutable local summaries and evidence for descriptive rankings, regressions, and tournament planning.
-          Manual human and AI-judge entries stay in this view only; no advanced result is written and no network call is made.
+          Advanced Arena reads immutable local summaries and evidence for rankings, regression, tournaments, and judge calibration.
+          Saved artifacts freeze their source hashes and judge metadata; no network call is made.
         </p>
       </section>
 
@@ -305,7 +497,7 @@ export function AdvancedArenaView() {
               <div className="advanced-source-facts">
                 <AdvancedBoundary label="Evidence source" value={selectedSummary ? "App-owned immutable summary" : "Not selected"} />
                 <AdvancedBoundary label="Network used" value="No" />
-                <AdvancedBoundary label="Manual result storage" value="Not persisted" />
+                <AdvancedBoundary label="Advanced artifacts" value="Immutable local storage" />
                 <AdvancedBoundary label="Evidence samples" value={String(evidenceState.samples.length)} />
               </div>
             </div>
@@ -317,6 +509,40 @@ export function AdvancedArenaView() {
             )}
             {evidenceState.error && <p className="form-feedback form-feedback-error" role="alert">{evidenceState.error}</p>}
           </section>
+
+          {artifactHistory.status === "ready" && (
+            <section className="panel advanced-history-panel" aria-labelledby="advanced-history-heading">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Saved advanced artifacts</p>
+                  <h3 id="advanced-history-heading">Reopen calibration and tournament results</h3>
+                </div>
+                <button className="text-button" type="button" onClick={() => void refreshSummaries()}>Refresh</button>
+              </div>
+              <div className="advanced-selection-grid">
+                <div className="advanced-field">
+                  <label className="field-label" htmlFor="advanced-calibration-history">Calibration result</label>
+                  <select className="font-select" id="advanced-calibration-history" value={selectedCalibrationResultId} onChange={(event) => setSelectedCalibrationResultId(event.currentTarget.value)}>
+                    <option value="">No saved result selected</option>
+                    {artifactHistory.calibrationResults.map((record) => <option key={record.resultId} value={record.resultId}>{record.resultId} · {record.createdAt}</option>)}
+                  </select>
+                  <button className="secondary-button" type="button" disabled={!selectedCalibrationResultId} onClick={reopenCalibrationResult}>Reopen calibration</button>
+                </div>
+                <div className="advanced-field">
+                  <label className="field-label" htmlFor="advanced-tournament-history">Tournament result</label>
+                  <select className="font-select" id="advanced-tournament-history" value={selectedTournamentResultId} onChange={(event) => setSelectedTournamentResultId(event.currentTarget.value)}>
+                    <option value="">No saved result selected</option>
+                    {artifactHistory.tournamentResults.map((record) => <option key={record.tournamentId} value={record.tournamentId}>{record.tournamentId} · {record.mode}</option>)}
+                  </select>
+                  <button className="secondary-button" type="button" disabled={!selectedTournamentResultId} onClick={reopenTournamentResult}>Reopen tournament</button>
+                </div>
+              </div>
+              {selectedCalibrationResultId && (() => {
+                const record = artifactHistory.calibrationResults.find((item) => item.resultId === selectedCalibrationResultId);
+                return record ? <SavedCalibrationDetails record={record} /> : null;
+              })()}
+            </section>
+          )}
 
           {selectedSummary && (
             <>
@@ -335,14 +561,42 @@ export function AdvancedArenaView() {
                     <textarea className="advanced-textarea" id="advanced-human-scores" value={humanScoreText} onChange={(event) => setHumanScoreText(event.currentTarget.value)} placeholder="arena-run-1:attempt-1=4" spellCheck={false} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-judge-id">
-                    <span className="field-label">AI-judge ID (optional)</span>
+                    <span className="field-label">Frozen AI-judge ID</span>
                     <input className="advanced-input" id="advanced-ai-judge-id" value={aiJudgeId} onChange={(event) => setAiJudgeId(event.currentTarget.value)} placeholder="local-judge-v1" />
-                    <span className="field-help">This is provenance metadata only; it does not select or contact a service.</span>
+                    <span className="field-help">Identity is stored with the calibration result; it never selects or contacts a service.</span>
                   </label>
                   <label className="advanced-field advanced-field-wide" htmlFor="advanced-ai-scores">
                     <span className="field-label">AI-judge scores · manual/offline only</span>
                     <textarea className="advanced-textarea" id="advanced-ai-scores" value={aiJudgeScoreText} onChange={(event) => setAiJudgeScoreText(event.currentTarget.value)} placeholder="arena-run-1:attempt-1=3.5" spellCheck={false} />
                   </label>
+                  <label className="advanced-field" htmlFor="advanced-ai-judge-version">
+                    <span className="field-label">Judge version</span>
+                    <input className="advanced-input" id="advanced-ai-judge-version" value={aiJudgeVersion} onChange={(event) => setAiJudgeVersion(event.currentTarget.value)} />
+                  </label>
+                  <label className="advanced-field" htmlFor="advanced-ai-rubric-id">
+                    <span className="field-label">Rubric ID / version</span>
+                    <input className="advanced-input" id="advanced-ai-rubric-id" value={aiJudgeRubricId} onChange={(event) => setAiJudgeRubricId(event.currentTarget.value)} />
+                    <input className="advanced-input" aria-label="Rubric version" value={aiJudgeRubricVersion} onChange={(event) => setAiJudgeRubricVersion(event.currentTarget.value)} />
+                  </label>
+                  <label className="advanced-field advanced-field-wide" htmlFor="advanced-ai-judge-prompt">
+                    <span className="field-label">Frozen judge prompt</span>
+                    <textarea className="advanced-textarea" id="advanced-ai-judge-prompt" value={aiJudgePrompt} onChange={(event) => setAiJudgePrompt(event.currentTarget.value)} spellCheck={false} />
+                  </label>
+                  <label className="advanced-field" htmlFor="advanced-ai-judge-panel">
+                    <span className="field-label">Official judge panel</span>
+                    <select className="font-select" id="advanced-ai-judge-panel" value={aiJudgePanelSize} onChange={(event) => setAiJudgePanelSize(event.currentTarget.value as JudgePanelSize)}>
+                      <option value="none">No panel</option>
+                      <option value="3">Official panel · 3 judges</option>
+                      <option value="5">Official panel · 5 judges</option>
+                    </select>
+                  </label>
+                  {aiJudgePanelSize !== "none" && (
+                    <label className="advanced-field" htmlFor="advanced-ai-judge-panel-ids">
+                      <span className="field-label">Panel judge IDs</span>
+                      <input className="advanced-input" id="advanced-ai-judge-panel-ids" value={aiJudgePanelIds} onChange={(event) => setAiJudgePanelIds(event.currentTarget.value)} placeholder="judge-a, judge-b, judge-c" />
+                      <span className="field-help">Enter exactly {aiJudgePanelSize} unique IDs. The panel is metadata only.</span>
+                    </label>
+                  )}
                 </div>
                 <div className="advanced-boundary-grid" aria-label="AI judge provenance">
                   <AdvancedBoundary label="Source" value={scoreState.aiJudgeBoundary.status === "provided" ? "ai_judge · caller-supplied" : "ai_judge · not provided"} />
@@ -351,7 +605,15 @@ export function AdvancedArenaView() {
                   <AdvancedBoundary label="Invalid scores" value={scoreState.error ? "Visible below" : "None"} />
                 </div>
                 {scoreState.error && <p className="form-feedback form-feedback-error" role="alert">{scoreState.error}</p>}
-                <p className="field-help" role="status">AI-judge boundary: optional, manual, offline, and never fabricated. No network call is made.</p>
+                <div className="arena-actions">
+                  <label className="advanced-field" htmlFor="advanced-calibration-id">
+                    <span className="field-label">Calibration ID</span>
+                    <input className="advanced-input" id="advanced-calibration-id" value={calibrationId} onChange={(event) => setCalibrationId(event.currentTarget.value)} />
+                  </label>
+                  <button className="primary-button" type="button" onClick={() => void saveCalibrationArtifacts()}>Save calibration</button>
+                </div>
+                {calibrationSaveMessage && <p className="field-help" role="status">{calibrationSaveMessage}</p>}
+                <p className="field-help" role="status">AI-judge boundary: optional, frozen, manual/offline, and never fabricated. No network call is made.</p>
               </section>
 
               <section className="panel advanced-rankings-panel" aria-labelledby="advanced-rankings-heading" aria-live="polite">
@@ -420,6 +682,19 @@ export function AdvancedArenaView() {
                     <input className="advanced-input" id="advanced-max-matches" type="number" min="1" max={MAX_ADVANCED_MATCHES} step="1" value={maxMatches} onChange={(event) => setMaxMatches(Number(event.currentTarget.value))} />
                     <span className="field-help">Bounded from 1 to {MAX_ADVANCED_MATCHES}.</span>
                   </label>
+                  <label className="advanced-field" htmlFor="advanced-tournament-metric">
+                    <span className="field-label">Evidence metric</span>
+                    <select className="font-select" id="advanced-tournament-metric" value={tournamentMetric} onChange={(event) => setTournamentMetric(event.currentTarget.value as AdvancedArenaMetric)}>
+                      <option value="objective_pass_rate">Objective pass rate</option>
+                      <option value="duration_ms">Duration</option>
+                      <option value="tokens_per_second">Tokens / second</option>
+                      <option value="human_score">Human / AI-judge score</option>
+                    </select>
+                  </label>
+                  <label className="advanced-field" htmlFor="advanced-tournament-id">
+                    <span className="field-label">Tournament ID</span>
+                    <input className="advanced-input" id="advanced-tournament-id" value={tournamentId} onChange={(event) => setTournamentId(event.currentTarget.value)} />
+                  </label>
                 </div>
                 <fieldset className="advanced-competitor-picker">
                   <legend className="field-label">Tournament competitors ({selectedTournamentCompetitors.length}/{MAX_ADVANCED_COMPETITORS})</legend>
@@ -449,6 +724,14 @@ export function AdvancedArenaView() {
                 {tournamentError && <p className="form-feedback form-feedback-error" role="alert">{tournamentError}</p>}
                 {tournamentResult?.kind === "schedule" && <TournamentScheduleResult schedule={tournamentResult.schedule} labels={new Map(competitorOptions.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
                 {tournamentResult?.kind === "blind" && <BlindRankingResult aggregation={tournamentResult.aggregation} />}
+                {tournamentResult?.kind === "outcome" && <TournamentOutcomeResult result={tournamentResult.result} />}
+                {tournamentResult?.kind === "saved" && <SavedTournamentDetails record={tournamentResult.record} />}
+                {(tournamentResult?.kind === "outcome" || tournamentResult?.kind === "blind") && (
+                  <div className="arena-actions">
+                    <button className="secondary-button" type="button" onClick={() => void saveTournamentArtifact()}>Save tournament result</button>
+                  </div>
+                )}
+                {tournamentSaveMessage && <p className="field-help" role="status">{tournamentSaveMessage}</p>}
               </section>
 
               <section className="panel advanced-calibration-panel" aria-labelledby="advanced-calibration-heading" aria-live="polite">
@@ -497,10 +780,13 @@ function parseScoreState(humanText: string, aiText: string, aiJudgeId: string): 
   const errors: string[] = [];
   let humanScores = new Map<string, number>();
   let aiJudgeScores = new Map<string, number>();
+  let humanEntries: Array<{ executionKey: string; score: number }> = [];
+  let aiJudgeEntries: Array<{ executionKey: string; score: number }> = [];
   let aiJudgeBoundary = validateAiJudgeScoreInput(undefined);
   try {
     const validation = validateAiJudgeScoreInput(parseAdvancedScoreEntries(humanText));
     humanScores = scoreLookupFromEntries(validation.entries);
+    humanEntries = validation.entries.map(({ executionKey, score }) => ({ executionKey, score }));
   } catch (error: unknown) {
     errors.push(`Human scores: ${error instanceof Error ? error.message : "invalid input."}`);
   }
@@ -509,11 +795,62 @@ function parseScoreState(humanText: string, aiText: string, aiJudgeId: string): 
     if (entries.length > 0) {
       aiJudgeBoundary = validateAiJudgeScoreInput(entries);
       aiJudgeScores = scoreLookupFromEntries(aiJudgeBoundary.entries);
+      aiJudgeEntries = aiJudgeBoundary.entries.map(({ executionKey, score }) => ({ executionKey, score }));
     }
   } catch (error: unknown) {
     errors.push(`AI-judge scores: ${error instanceof Error ? error.message : "invalid input."}`);
   }
-  return { humanScores, aiJudgeScores, aiJudgeBoundary, error: errors.length === 0 ? null : errors.join(" ") };
+  return { humanScores, aiJudgeScores, humanEntries, aiJudgeEntries, aiJudgeBoundary, error: errors.length === 0 ? null : errors.join(" ") };
+}
+
+function executionKeyForSample(sample: ArenaEvidenceSample): string {
+  return `${sample.runId}:${sample.attemptId ?? ""}`;
+}
+
+function formatCalibrationScores(scores: readonly { executionKey: string; score: number }[]): string {
+  return scores.map((score) => `${score.executionKey}=${score.score}`).join("\n");
+}
+
+async function buildFrozenJudge(input: {
+  judgeId: string;
+  version: string;
+  rubricId: string;
+  rubricVersion: string;
+  prompt: string;
+  panelSize: JudgePanelSize;
+  panelIds: string;
+}): Promise<{
+  judgeId: string;
+  version: string;
+  rubricId: string;
+  rubricVersion: string;
+  prompt: string;
+  promptSha256: string;
+  panel: { judgeIds: string[]; official: boolean } | null;
+}> {
+  const judgeId = input.judgeId.trim();
+  const version = input.version.trim();
+  const rubricId = input.rubricId.trim();
+  const rubricVersion = input.rubricVersion.trim();
+  const prompt = input.prompt;
+  if (!judgeId || !version || !rubricId || !rubricVersion || !prompt) throw new Error("Judge identity, version, rubric, and prompt are required.");
+  const panelIds = input.panelIds.split(",").map((value) => value.trim()).filter(Boolean);
+  const expectedPanelSize = input.panelSize === "none" ? 0 : Number(input.panelSize);
+  if (panelIds.length !== expectedPanelSize || new Set(panelIds).size !== panelIds.length) {
+    throw new Error(`Official judge panel requires exactly ${expectedPanelSize} unique judge IDs.`);
+  }
+  if (!globalThis.crypto?.subtle) throw new Error("The desktop cryptographic digest is unavailable; judge provenance cannot be frozen.");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(prompt));
+  const promptSha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return {
+    judgeId,
+    version,
+    rubricId,
+    rubricVersion,
+    prompt,
+    promptSha256,
+    panel: expectedPanelSize === 0 ? null : { judgeIds: panelIds, official: true },
+  };
 }
 
 function competitorOptionsFromSamples(samples: readonly ArenaEvidenceSample[]): Array<{ competitorId: string; competitorLabel: string }> {
@@ -620,6 +957,77 @@ function RegressionResults({ comparison }: { comparison: ArenaRegressionComparis
         </table>
       </div>
       <p className="field-help">{comparison.note}</p>
+    </div>
+  );
+}
+
+function SavedCalibrationDetails({ record }: { record: CalibrationResultRecord }) {
+  return (
+    <div className="advanced-tournament-result" role="status">
+      <div className="advanced-boundary-grid">
+        <AdvancedBoundary label="Source Arena" value={record.sourceArenaId} />
+        <AdvancedBoundary label="Judge" value={`${record.judge.judgeId} v${record.judge.version}`} />
+        <AdvancedBoundary label="Rubric" value={`${record.judge.rubricId} v${record.judge.rubricVersion}`} />
+        <AdvancedBoundary label="Panel" value={record.judge.panel ? `${record.judge.panel.judgeIds.length} official judges` : "None"} />
+        <AdvancedBoundary label="Content hash" value={record.contentHash} />
+      </div>
+      {record.metrics.disagreementSampleIds.length > 0 ? (
+        <p className="field-help">Disagreement samples: {record.metrics.disagreementSampleIds.join(", ")}</p>
+      ) : (
+        <p className="field-help">No saved samples exceeded the calibration tolerance.</p>
+      )}
+    </div>
+  );
+}
+
+function SavedTournamentDetails({ record }: { record: TournamentResultRecord }) {
+  return (
+    <div className="advanced-tournament-result" role="status">
+      <div className="advanced-boundary-grid">
+        <AdvancedBoundary label="Source Arena" value={record.sourceArenaId} />
+        <AdvancedBoundary label="Mode" value={record.mode} />
+        <AdvancedBoundary label="Metric" value={record.metric} />
+        <AdvancedBoundary label="Evidence samples" value={String(record.evidenceSampleCount)} />
+        <AdvancedBoundary label="Content hash" value={record.contentHash} />
+      </div>
+      <TournamentStandingsTable standings={record.standings} />
+    </div>
+  );
+}
+
+function TournamentOutcomeResult({ result }: { result: TournamentEvidenceResult }) {
+  return (
+    <div className="advanced-tournament-result" role="status">
+      <div className="advanced-boundary-grid">
+        <AdvancedBoundary label="Status" value={result.status === "ready" ? "Ready" : "Insufficient data"} />
+        <AdvancedBoundary label="Metric" value={result.metric} />
+        <AdvancedBoundary label="Evidence samples" value={String(result.evidenceSampleCount)} />
+        <AdvancedBoundary label="Resolved matches" value={String(result.matches.filter((match) => match.outcome !== "insufficient_data").length)} />
+      </div>
+      <TournamentStandingsTable standings={result.standings} />
+      <p className="field-help">{result.note}</p>
+    </div>
+  );
+}
+
+function TournamentStandingsTable({ standings }: { standings: readonly { rank: number | null; competitorId: string; competitorLabel: string; wins: number; losses: number; ties: number; points: number; metricValue: number | null; tied: boolean }[] }) {
+  return (
+    <div className="advanced-table-wrap">
+      <table className="advanced-table">
+        <caption>Tournament standings from immutable Arena evidence</caption>
+        <thead><tr><th scope="col">Rank</th><th scope="col">Competitor</th><th scope="col">W-L-T</th><th scope="col">Points</th><th scope="col">Metric</th></tr></thead>
+        <tbody>
+          {standings.map((standing) => (
+            <tr key={standing.competitorId}>
+              <th scope="row">{standing.rank === null ? "—" : `#${standing.rank}`}{standing.tied ? " · tie" : ""}</th>
+              <td>{standing.competitorLabel}<small>{standing.competitorId}</small></td>
+              <td>{standing.wins}-{standing.losses}-{standing.ties}</td>
+              <td>{standing.points.toFixed(2)}</td>
+              <td>{standing.metricValue === null ? "Insufficient data" : standing.metricValue.toFixed(3)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

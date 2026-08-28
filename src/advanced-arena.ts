@@ -170,6 +170,48 @@ export type TournamentSchedule = {
   maxMatches: number;
 };
 
+export type TournamentMatchOutcome = {
+  matchId: string;
+  round: number;
+  matchNumber: number;
+  competitorAId: string | null;
+  competitorBId: string | null;
+  winnerId: string | null;
+  outcome: "completed" | "tie" | "insufficient_data";
+  scoreA: number | null;
+  scoreB: number | null;
+  sourceMatchIds: string[];
+  evidenceSampleCount: number;
+};
+
+export type TournamentStanding = {
+  rank: number | null;
+  competitorId: string;
+  competitorLabel: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  points: number;
+  metricValue: number | null;
+  tied: boolean;
+};
+
+export type TournamentEvidenceResult = {
+  status: "ready" | "insufficient_data";
+  metric: AdvancedArenaMetric;
+  matches: TournamentMatchOutcome[];
+  standings: TournamentStanding[];
+  evidenceSampleCount: number;
+  note: string;
+};
+
+export type TournamentOutcomeOptions = {
+  metric?: AdvancedArenaMetric;
+  humanScores?: ArenaScoreLookup;
+  aiJudgeScores?: ArenaScoreLookup;
+  scoreSource?: ScoreSource;
+};
+
 export type BlindRankingBallot = {
   ballotId: string;
   ranking: readonly (readonly string[])[];
@@ -494,6 +536,100 @@ export function scheduleTournament(
 }
 
 export const createTournamentSchedule = scheduleTournament;
+
+export function resolveTournamentOutcomes(
+  source: ArenaEvidenceSource,
+  schedule: TournamentSchedule,
+  options: TournamentOutcomeOptions = {},
+): TournamentEvidenceResult {
+  const metric = options.metric ?? "objective_pass_rate";
+  const ranking = rankArenaEvidence(source, { ...options, metric });
+  const values = new Map(ranking.entries.map((entry) => [entry.competitorId, entry.value]));
+  const sampleSizes = new Map(ranking.entries.map((entry) => [entry.competitorId, entry.sampleSize]));
+  const winners = new Map<string, string | null>();
+  const matches: TournamentMatchOutcome[] = [];
+  const standings = new Map(schedule.competitors.map((competitor) => [competitor.competitorId, {
+    competitorId: competitor.competitorId,
+    competitorLabel: competitor.competitorLabel,
+    wins: 0,
+    losses: 0,
+    ties: 0,
+    points: 0,
+    metricValue: values.get(competitor.competitorId) ?? null,
+  }]));
+
+  for (const match of schedule.matches) {
+    const competitorAId = match.competitorAId ?? (match.sourceMatchIds[0] ? winners.get(match.sourceMatchIds[0]) ?? null : null);
+    const competitorBId = match.competitorBId ?? (match.sourceMatchIds[1] ? winners.get(match.sourceMatchIds[1]) ?? null : null);
+    const scoreA = competitorAId === null ? null : values.get(competitorAId) ?? null;
+    const scoreB = competitorBId === null ? null : values.get(competitorBId) ?? null;
+    const evidenceSampleCount = (competitorAId === null ? 0 : sampleSizes.get(competitorAId) ?? 0)
+      + (competitorBId === null ? 0 : sampleSizes.get(competitorBId) ?? 0);
+    let outcome: TournamentMatchOutcome["outcome"] = "insufficient_data";
+    let winnerId: string | null = null;
+    if (scoreA !== null && scoreB !== null) {
+      outcome = scoreA === scoreB ? "tie" : "completed";
+      winnerId = scoreA === scoreB ? null : compareMetricValues(scoreA, scoreB, ranking.direction) < 0 ? competitorAId : competitorBId;
+    }
+    winners.set(match.matchId, winnerId);
+    if (outcome === "completed" && winnerId !== null) {
+      const loserId = winnerId === competitorAId ? competitorBId : competitorAId;
+      const winner = standings.get(winnerId);
+      if (winner) {
+        winner.wins += 1;
+        winner.points += 1;
+      }
+      if (loserId !== null) {
+        const loser = standings.get(loserId);
+        if (loser) loser.losses += 1;
+      }
+    } else if (outcome === "tie") {
+      for (const competitorId of [competitorAId, competitorBId]) {
+        if (competitorId === null) continue;
+        const standing = standings.get(competitorId);
+        if (standing) {
+          standing.ties += 1;
+          standing.points += 0.5;
+        }
+      }
+    }
+    matches.push({
+      matchId: match.matchId,
+      round: match.round,
+      matchNumber: match.matchNumber,
+      competitorAId,
+      competitorBId,
+      winnerId,
+      outcome,
+      scoreA,
+      scoreB,
+      sourceMatchIds: [...match.sourceMatchIds],
+      evidenceSampleCount,
+    });
+  }
+
+  const ordered = [...standings.values()].sort((left, right) => right.points - left.points
+    || (left.metricValue === null ? 1 : right.metricValue === null ? -1 : compareMetricValues(left.metricValue, right.metricValue, ranking.direction))
+    || compareIds(left.competitorId, right.competitorId));
+  const completedMatches = matches.filter((match) => match.outcome !== "insufficient_data").length;
+  const resultStandings = ordered.map((standing, index) => {
+    const tied = ordered.some((candidate, candidateIndex) => candidateIndex < index && candidate.points === standing.points);
+    const tieRank = ordered.findIndex((candidate) => candidate.points === standing.points) + 1;
+    return {
+      ...standing,
+      rank: standing.points === 0 && completedMatches === 0 ? null : tieRank,
+      tied,
+    };
+  });
+  return {
+    status: completedMatches === 0 ? "insufficient_data" : "ready",
+    metric,
+    matches,
+    standings: resultStandings,
+    evidenceSampleCount: normalizeArenaEvidence(source).length,
+    note: "Tournament outcomes are deterministic comparisons of the selected immutable Arena evidence; insufficient samples never produce a winner.",
+  };
+}
 
 export function blindRankingBallotFromRecord(
   record: BlindEvaluationRecord,
