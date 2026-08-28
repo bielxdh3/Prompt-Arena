@@ -106,6 +106,23 @@ export type ExternalGenerationResult = {
   cost: ExternalCostEvidence;
 };
 
+export type ExternalGenerationEvidenceRecord = {
+  generationId: string;
+  providerId: ExternalProviderId;
+  requestedModel: string;
+  providerModel: string;
+  identityConfidence: IdentityConfidence;
+  networkUsed: boolean;
+  usage: ExternalUsage;
+  estimated: CostBreakdown;
+  actual: CostBreakdown;
+  preflightDecision: CostDecision;
+  finalDecision: CostDecision;
+  priceSnapshot: PriceSnapshot;
+  contentHash: string;
+  createdAt: string;
+};
+
 export type RunRecord = {
   runId: string;
   benchmarkVersionId: string;
@@ -773,6 +790,13 @@ export async function executeExternalGeneration(
     "execute_external_generation",
     "The external provider generation could not be executed.",
     { request },
+  );
+}
+
+export async function readExternalGenerationEvidence(): Promise<ExternalGenerationEvidenceRecord[]> {
+  return invokeDesktop<ExternalGenerationEvidenceRecord[]>(
+    "list_external_generation_evidence",
+    "The external generation history could not be reached.",
   );
 }
 

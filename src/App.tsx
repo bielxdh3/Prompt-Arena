@@ -31,6 +31,7 @@ import {
   readBenchmarkVersions,
   readRuns,
   readExternalProviders,
+  readExternalGenerationEvidence,
   removeExternalProvider,
   saveArenaSummary,
   saveBenchmarkDraft,
@@ -50,6 +51,7 @@ import {
   type BenchmarkVersionSummary,
   type CostPolicy,
   type ExternalGenerationResult,
+  type ExternalGenerationEvidenceRecord,
   type ExternalProviderId,
   type ExternalProviderMetadata,
   type HardwareMetric,
@@ -4044,6 +4046,12 @@ type ByokMetadataState =
   | { status: "ready"; providers: ExternalProviderMetadata[] }
   | { status: "error"; message: string };
 
+type ByokHistoryState =
+  | { status: "loading" }
+  | { status: "unsupported" }
+  | { status: "ready"; records: ExternalGenerationEvidenceRecord[] }
+  | { status: "error"; message: string };
+
 type ByokAction =
   | { kind: "configure" | "policy" | "remove" | "generate"; providerId: ExternalProviderId }
   | null;
@@ -4078,6 +4086,9 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
   const [action, setAction] = useState<ByokAction>(null);
   const [notice, setNotice] = useState<ByokNotice>(null);
   const [generationResult, setGenerationResult] = useState<ExternalGenerationResult | null>(null);
+  const [historyState, setHistoryState] = useState<ByokHistoryState>(() => (
+    desktop ? { status: "loading" } : { status: "unsupported" }
+  ));
 
   useEffect(() => {
     let current = true;
@@ -4095,6 +4106,29 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
       })
       .catch((error: unknown) => {
         if (current) setMetadataState({ status: "error", message: byokErrorMessage(error) });
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [desktop]);
+
+  useEffect(() => {
+    let current = true;
+    if (!desktop) {
+      setHistoryState({ status: "unsupported" });
+      return () => {
+        current = false;
+      };
+    }
+
+    setHistoryState({ status: "loading" });
+    void readExternalGenerationEvidence()
+      .then((records) => {
+        if (current) setHistoryState({ status: "ready", records });
+      })
+      .catch((error: unknown) => {
+        if (current) setHistoryState({ status: "error", message: byokErrorMessage(error) });
       });
 
     return () => {
@@ -4152,11 +4186,25 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
       setMetadataState({ status: "unsupported" });
       return;
     }
+    void refreshHistory();
     setMetadataState({ status: "loading" });
     try {
       setMetadataState({ status: "ready", providers: await readExternalProviders() });
     } catch (error: unknown) {
       setMetadataState({ status: "error", message: byokErrorMessage(error) });
+    }
+  }
+
+  async function refreshHistory() {
+    if (!desktop) {
+      setHistoryState({ status: "unsupported" });
+      return;
+    }
+    setHistoryState({ status: "loading" });
+    try {
+      setHistoryState({ status: "ready", records: await readExternalGenerationEvidence() });
+    } catch (error: unknown) {
+      setHistoryState({ status: "error", message: byokErrorMessage(error) });
     }
   }
 
@@ -4312,6 +4360,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         priceSnapshot: generationValidation.snapshot,
       });
       setGenerationResult(result);
+      void refreshHistory();
       setNotice({ kind: "success", message: "Generation completed. Only sanitized usage, cost, and identity evidence is shown." });
     } catch (error: unknown) {
       setNotice({ kind: "error", message: byokErrorMessage(error) });
@@ -4560,11 +4609,36 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         </>
       )}
 
+      <section className="panel byok-history-card" aria-labelledby="byok-history-heading">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Immutable local history</p>
+            <h4 id="byok-history-heading">External generation evidence</h4>
+          </div>
+          <button className="text-button" type="button" onClick={() => void refreshHistory()} disabled={!desktop || busy}>
+            Refresh history
+          </button>
+        </div>
+        <p className="field-help">History stores sanitized provider, model, identity, usage, cost, dated-price, budget, and network evidence only. Prompt text, returned text, API keys, credential blobs, and headers are never stored or exported.</p>
+        {historyState.status === "loading" && <StateMessage icon="…" title="Loading external history" description="Reading sanitized evidence from local app storage." />}
+        {historyState.status === "unsupported" && <StateMessage icon="◇" title="Browser preview / no history writes" description="External generation history is available only in the local desktop workspace." />}
+        {historyState.status === "error" && <StateMessage icon="!" title="External history unavailable" description={historyState.message} error />}
+        {historyState.status === "ready" && historyState.records.length === 0 && (
+          <p className="field-help">No successful external generations have been recorded.</p>
+        )}
+        {historyState.status === "ready" && historyState.records.length > 0 && (
+          <div className="byok-history-list">
+            {[...historyState.records].reverse().map((record) => <ByokEvidenceHistoryEntry key={record.generationId} record={record} />)}
+          </div>
+        )}
+      </section>
+
       <div className="provider-safety-note byok-safety-note">
         <p className="eyebrow">No-secret boundary</p>
         <p>
-          API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Generation results are
-          shown in memory with sanitized usage, cost, and identity evidence only; this panel does not export or persist them.
+          API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Returned text is shown
+          in memory only; local history persists sanitized usage, cost, identity, price, and network evidence without
+          prompt or response text.
         </p>
       </div>
     </section>
@@ -4636,8 +4710,34 @@ function ByokGenerationSuccess({ result }: { result: ExternalGenerationResult })
         <p className="eyebrow">Returned text</p>
         <pre className="byok-response">{result.text}</pre>
       </div>
-      <p className="field-help">This result and its evidence are displayed in memory only. They are not exported, stored in localStorage, or added to run history.</p>
+      <p className="field-help">Returned text is displayed in memory only. Sanitized evidence is saved to immutable local history; prompt text, response text, API keys, and headers are never stored or exported.</p>
     </div>
+  );
+}
+
+function ByokEvidenceHistoryEntry({ record }: { record: ExternalGenerationEvidenceRecord }) {
+  return (
+    <article className="byok-success" data-generation-id={record.generationId}>
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Sanitized evidence</p>
+          <h4>{providerLabel(record.providerId)} · {record.requestedModel}</h4>
+        </div>
+        <span className="run-status run-status-neutral">immutable</span>
+      </div>
+      <div className="results-facts">
+        <BoundaryRow label="Provider" value={`${providerLabel(record.providerId)} (${record.providerId})`} />
+        <BoundaryRow label="Requested model" value={record.requestedModel} />
+        <BoundaryRow label="Provider model" value={`${record.providerModel} · ${formatIdentityConfidence(record.identityConfidence)}`} />
+        <BoundaryRow label="Network disclosure" value={record.networkUsed ? "Yes · external HTTPS call consented" : "No network used"} />
+        <BoundaryRow label="Usage" value={`${formatByokTokens(record.usage.inputTokens)} input · ${formatByokTokens(record.usage.outputTokens)} output · ${formatByokTokens(record.usage.totalTokens)} total`} />
+        <BoundaryRow label="Estimated cost" value={formatByokMoney(record.estimated.totalCostUsd)} />
+        <BoundaryRow label="Actual cost" value={formatByokMoney(record.actual.totalCostUsd)} />
+        <BoundaryRow label="Budget decisions" value={`preflight ${formatByokDecision(record.preflightDecision)} · final ${formatByokDecision(record.finalDecision)}`} />
+        <BoundaryRow label="Price snapshot" value={`${record.priceSnapshot.modelId} · ${record.priceSnapshot.capturedOn} · ${record.priceSnapshot.currency} · ${formatByokMoney(record.priceSnapshot.inputUsdPerMillionTokens)} input / ${formatByokMoney(record.priceSnapshot.outputUsdPerMillionTokens)} output per 1M`} />
+        <BoundaryRow label="Created" value={record.createdAt} />
+      </div>
+    </article>
   );
 }
 
