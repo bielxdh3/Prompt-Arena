@@ -1,6 +1,7 @@
 use std::fmt;
 
 use serde::{de::Deserializer, Deserialize, Serialize};
+use serde_json::{json, Value};
 
 pub const BYOK_ACCOUNT: &str = "biel4";
 pub const MAX_PROVIDER_ENDPOINT_BYTES: usize = 2 * 1024;
@@ -13,6 +14,9 @@ pub const MAX_EXTERNAL_TOKEN_COUNT: u64 = 100_000_000;
 pub const MAX_EXTERNAL_PRICE_USD_PER_MILLION_TOKENS: f64 = 1_000_000.0;
 pub const MAX_EXTERNAL_BUDGET_USD: f64 = 1_000_000_000.0;
 pub const TOKENS_PER_MILLION: f64 = 1_000_000.0;
+pub const MAX_EXTERNAL_PROMPT_BYTES: usize = 64 * 1024;
+pub const MAX_EXTERNAL_REQUEST_BYTES: usize = 256 * 1024;
+pub const MAX_EXTERNAL_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const COST_ROUNDING_TOLERANCE_USD: f64 = 2.0 / TOKENS_PER_MILLION;
 
 const CREDENTIAL_BLOB_MAX_BYTES: usize = 2_560;
@@ -167,7 +171,8 @@ pub enum CostFailure {
     InvalidUsage,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum CostDecision {
     Allow,
     ConfirmationRequired,
@@ -251,6 +256,65 @@ pub struct ConfigureProviderRequest {
 pub struct UpdateProviderCostPolicyRequest {
     pub provider_id: ExternalProviderId,
     pub cost_policy: CostPolicy,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalGenerationRequest {
+    pub provider_id: ExternalProviderId,
+    pub prompt: String,
+    pub max_output_tokens: u64,
+    #[serde(default)]
+    pub network_consent: bool,
+    #[serde(default)]
+    pub cost_confirmed: bool,
+    #[serde(default)]
+    pub price_snapshot: Option<PriceSnapshot>,
+}
+
+impl fmt::Debug for ExternalGenerationRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExternalGenerationRequest")
+            .field("provider_id", &self.provider_id)
+            .field("prompt", &"REDACTED")
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("network_consent", &self.network_consent)
+            .field("cost_confirmed", &self.cost_confirmed)
+            .field("price_snapshot", &self.price_snapshot)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalCostEvidence {
+    pub price_snapshot: PriceSnapshot,
+    pub estimated: CostBreakdown,
+    pub actual: CostBreakdown,
+    pub preflight_decision: CostDecision,
+    pub final_decision: CostDecision,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalGenerationResult {
+    pub provider_id: ExternalProviderId,
+    pub requested_model: String,
+    pub provider_model: String,
+    pub identity_confidence: IdentityConfidence,
+    pub text: String,
+    pub usage: ExternalUsage,
+    pub network_used: bool,
+    pub cost: ExternalCostEvidence,
 }
 
 pub struct SecretInput(Vec<u8>);
@@ -451,6 +515,9 @@ fn wide_null(value: &str) -> Vec<u16> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProviderEndpoint {
     display: String,
+    host: String,
+    port: u16,
+    path: String,
 }
 
 impl ProviderEndpoint {
@@ -502,11 +569,650 @@ impl ProviderEndpoint {
                 format!("/{path}")
             }
         );
-        Ok(Self { display })
+        Ok(Self {
+            display,
+            host,
+            port,
+            path,
+        })
     }
 
     fn display(&self) -> &str {
         &self.display
+    }
+}
+
+struct TransportHeader {
+    name: &'static str,
+    value: SecretBytes,
+}
+
+struct TransportRequest {
+    endpoint: ProviderEndpoint,
+    path: String,
+    headers: Vec<TransportHeader>,
+    body: Vec<u8>,
+    connect_timeout_ms: u64,
+    read_timeout_ms: u64,
+}
+
+#[derive(Clone)]
+struct TransportResponse {
+    status: u16,
+    body: Vec<u8>,
+}
+
+trait ExternalTransport {
+    fn send(&self, request: &TransportRequest) -> Result<TransportResponse, ExternalProviderError>;
+
+    fn network_used(&self) -> bool;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct HttpsTransport;
+
+#[cfg(target_os = "windows")]
+struct SecretWide(Vec<u16>);
+
+#[cfg(target_os = "windows")]
+impl Drop for SecretWide {
+    fn drop(&mut self) {
+        for value in &mut self.0 {
+            unsafe { std::ptr::write_volatile(value, 0) };
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct WinHttpHandle(*mut std::ffi::c_void);
+
+#[cfg(target_os = "windows")]
+impl Drop for WinHttpHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            use windows::Win32::Networking::WinHttp::WinHttpCloseHandle;
+
+            let _ = unsafe { WinHttpCloseHandle(self.0) };
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn append_ascii_wide(output: &mut Vec<u16>, value: &[u8]) -> Result<(), ExternalProviderError> {
+    if value.iter().any(|byte| !byte.is_ascii()) {
+        return Err(ExternalProviderError::InvalidConfiguration);
+    }
+    output.extend(value.iter().map(|byte| u16::from(*byte)));
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn wide_headers(headers: &[TransportHeader]) -> Result<SecretWide, ExternalProviderError> {
+    let mut output = SecretWide(Vec::new());
+    for header in headers {
+        append_ascii_wide(&mut output.0, header.name.as_bytes())?;
+        append_ascii_wide(&mut output.0, b": ")?;
+        append_ascii_wide(&mut output.0, header.value.as_slice())?;
+        append_ascii_wide(&mut output.0, b"\r\n")?;
+    }
+    Ok(output)
+}
+
+#[cfg(target_os = "windows")]
+fn map_winhttp_error(error: windows::core::Error) -> ExternalProviderError {
+    use windows::Win32::Networking::WinHttp::ERROR_WINHTTP_TIMEOUT;
+
+    if (error.code().0 as u32 & 0xffff) == ERROR_WINHTTP_TIMEOUT {
+        ExternalProviderError::Timeout
+    } else {
+        ExternalProviderError::Transport
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn timeout_i32(value: u64) -> i32 {
+    value.try_into().unwrap_or(i32::MAX)
+}
+
+#[cfg(target_os = "windows")]
+impl ExternalTransport for HttpsTransport {
+    fn send(&self, request: &TransportRequest) -> Result<TransportResponse, ExternalProviderError> {
+        use std::{ffi::c_void, ptr::null};
+
+        use windows::{
+            core::PCWSTR,
+            Win32::Networking::WinHttp::{
+                WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
+                WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
+                WinHttpSetOption, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                WINHTTP_DISABLE_REDIRECTS, WINHTTP_FLAG_SECURE, WINHTTP_OPTION_DISABLE_FEATURE,
+                WINHTTP_OPTION_MAX_RESPONSE_HEADER_SIZE, WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_QUERY_STATUS_CODE,
+            },
+        };
+
+        let agent = wide_null("Prompt Arena");
+        let session = unsafe {
+            WinHttpOpen(
+                PCWSTR(agent.as_ptr()),
+                WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                PCWSTR::null(),
+                PCWSTR::null(),
+                0,
+            )
+        };
+        if session.is_null() {
+            return Err(ExternalProviderError::Transport);
+        }
+        let session = WinHttpHandle(session);
+
+        let host = wide_null(&request.endpoint.host);
+        let connection =
+            unsafe { WinHttpConnect(session.0, PCWSTR(host.as_ptr()), request.endpoint.port, 0) };
+        if connection.is_null() {
+            return Err(ExternalProviderError::Transport);
+        }
+        let connection = WinHttpHandle(connection);
+
+        let method = wide_null("POST");
+        let path = wide_null(&request.path);
+        let http_request = unsafe {
+            WinHttpOpenRequest(
+                connection.0,
+                PCWSTR(method.as_ptr()),
+                PCWSTR(path.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                null(),
+                WINHTTP_FLAG_SECURE,
+            )
+        };
+        if http_request.is_null() {
+            return Err(ExternalProviderError::Transport);
+        }
+        let http_request = WinHttpHandle(http_request);
+
+        unsafe {
+            WinHttpSetTimeouts(
+                http_request.0,
+                timeout_i32(request.connect_timeout_ms),
+                timeout_i32(request.connect_timeout_ms),
+                timeout_i32(request.read_timeout_ms),
+                timeout_i32(request.read_timeout_ms),
+            )
+        }
+        .map_err(map_winhttp_error)?;
+
+        let redirect_options = WINHTTP_DISABLE_REDIRECTS.to_ne_bytes();
+        unsafe {
+            WinHttpSetOption(
+                Some(http_request.0 as *const c_void),
+                WINHTTP_OPTION_DISABLE_FEATURE,
+                Some(&redirect_options),
+            )
+        }
+        .map_err(map_winhttp_error)?;
+
+        let max_header_options = (64_u32 * 1024).to_ne_bytes();
+        unsafe {
+            WinHttpSetOption(
+                Some(http_request.0 as *const c_void),
+                WINHTTP_OPTION_MAX_RESPONSE_HEADER_SIZE,
+                Some(&max_header_options),
+            )
+        }
+        .map_err(map_winhttp_error)?;
+
+        let headers = wide_headers(&request.headers)?;
+        let body_length = u32::try_from(request.body.len())
+            .map_err(|_| ExternalProviderError::RequestTooLarge)?;
+        unsafe {
+            WinHttpSendRequest(
+                http_request.0,
+                Some(&headers.0),
+                Some(request.body.as_ptr() as *const c_void),
+                body_length,
+                body_length,
+                0,
+            )
+        }
+        .map_err(map_winhttp_error)?;
+        unsafe { WinHttpReceiveResponse(http_request.0, std::ptr::null_mut()) }
+            .map_err(map_winhttp_error)?;
+
+        let mut status = 0_u32;
+        let mut status_length = std::mem::size_of::<u32>() as u32;
+        let mut header_index = 0_u32;
+        unsafe {
+            WinHttpQueryHeaders(
+                http_request.0,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                PCWSTR::null(),
+                Some((&mut status as *mut u32).cast::<c_void>()),
+                &mut status_length,
+                &mut header_index,
+            )
+        }
+        .map_err(map_winhttp_error)?;
+        let status = u16::try_from(status).map_err(|_| ExternalProviderError::Transport)?;
+
+        let mut body = Vec::new();
+        let mut buffer = [0_u8; 8 * 1024];
+        loop {
+            let mut available = 0_u32;
+            unsafe { WinHttpQueryDataAvailable(http_request.0, &mut available) }
+                .map_err(map_winhttp_error)?;
+            if available == 0 {
+                break;
+            }
+            if available as usize > MAX_EXTERNAL_RESPONSE_BYTES.saturating_sub(body.len()) {
+                return Err(ExternalProviderError::ResponseTooLarge);
+            }
+            let requested = available.min(buffer.len() as u32);
+            let mut read = 0_u32;
+            unsafe {
+                WinHttpReadData(
+                    http_request.0,
+                    buffer.as_mut_ptr().cast::<c_void>(),
+                    requested,
+                    &mut read,
+                )
+            }
+            .map_err(map_winhttp_error)?;
+            if read == 0 {
+                return Err(ExternalProviderError::Transport);
+            }
+            let end = body
+                .len()
+                .checked_add(read as usize)
+                .ok_or(ExternalProviderError::ResponseTooLarge)?;
+            if end > MAX_EXTERNAL_RESPONSE_BYTES {
+                return Err(ExternalProviderError::ResponseTooLarge);
+            }
+            body.extend_from_slice(&buffer[..read as usize]);
+        }
+
+        Ok(TransportResponse { status, body })
+    }
+
+    fn network_used(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+impl ExternalTransport for HttpsTransport {
+    fn send(
+        &self,
+        _request: &TransportRequest,
+    ) -> Result<TransportResponse, ExternalProviderError> {
+        Err(ExternalProviderError::UnsupportedPlatform)
+    }
+
+    fn network_used(&self) -> bool {
+        false
+    }
+}
+
+fn secret_header(name: &'static str, value: &[u8]) -> TransportHeader {
+    TransportHeader {
+        name,
+        value: SecretBytes::new(value.to_vec()),
+    }
+}
+
+fn prefixed_secret_header(name: &'static str, prefix: &[u8], value: &[u8]) -> TransportHeader {
+    let mut combined = SecretBytes::new(Vec::with_capacity(prefix.len() + value.len()));
+    combined.0.extend_from_slice(prefix);
+    combined.0.extend_from_slice(value);
+    TransportHeader {
+        name,
+        value: combined,
+    }
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+fn provider_request_path(
+    provider_id: ExternalProviderId,
+    endpoint: &ProviderEndpoint,
+    model: &str,
+) -> Result<String, ExternalProviderError> {
+    let mut path = String::with_capacity(endpoint.path.len() + MAX_PROVIDER_MODEL_BYTES + 32);
+    path.push('/');
+    if !endpoint.path.is_empty() {
+        path.push_str(&endpoint.path);
+    }
+    match provider_id {
+        ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => {
+            path.push_str("/chat/completions");
+        }
+        ExternalProviderId::Anthropic => path.push_str("/messages"),
+        ExternalProviderId::Gemini => {
+            path.push_str("/models/");
+            path.push_str(&percent_encode_path_segment(model));
+            path.push_str(":generateContent");
+        }
+    }
+    if path.len() > MAX_PROVIDER_ENDPOINT_BYTES + (MAX_PROVIDER_MODEL_BYTES * 3) + 64 {
+        return Err(ExternalProviderError::InvalidConfiguration);
+    }
+    Ok(path)
+}
+
+fn build_transport_request(
+    provider_id: ExternalProviderId,
+    record: &StoredProviderCredential,
+    prompt: &str,
+    max_output_tokens: u64,
+) -> Result<TransportRequest, ExternalProviderError> {
+    let endpoint = ProviderEndpoint::parse(&record.endpoint)?;
+    let path = provider_request_path(provider_id, &endpoint, &record.model)?;
+    let payload = match provider_id {
+        ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => json!({
+            "model": record.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_output_tokens,
+        }),
+        ExternalProviderId::Anthropic => json!({
+            "model": record.model,
+            "max_tokens": max_output_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }),
+        ExternalProviderId::Gemini => json!({
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": max_output_tokens},
+        }),
+    };
+    let body = serde_json::to_vec(&payload).map_err(|_| ExternalProviderError::RequestTooLarge)?;
+    if body.len() > MAX_EXTERNAL_REQUEST_BYTES {
+        return Err(ExternalProviderError::RequestTooLarge);
+    }
+
+    let mut headers = vec![
+        secret_header("Accept", b"application/json"),
+        secret_header("Content-Type", b"application/json"),
+    ];
+    match provider_id {
+        ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => headers.push(
+            prefixed_secret_header("Authorization", b"Bearer ", record.api_key.as_slice()),
+        ),
+        ExternalProviderId::Anthropic => {
+            headers.push(secret_header("anthropic-version", b"2023-06-01"));
+            headers.push(secret_header("x-api-key", record.api_key.as_slice()));
+        }
+        ExternalProviderId::Gemini => {
+            headers.push(secret_header("x-goog-api-key", record.api_key.as_slice()));
+        }
+    }
+    Ok(TransportRequest {
+        endpoint,
+        path,
+        headers,
+        body,
+        connect_timeout_ms: record.connect_timeout_ms,
+        read_timeout_ms: record.read_timeout_ms,
+    })
+}
+
+struct ParsedProviderResponse {
+    text: String,
+    usage: ExternalUsage,
+    provider_model: Option<String>,
+}
+
+fn parse_json_response(body: &[u8]) -> Result<Value, ExternalProviderError> {
+    if body.len() > MAX_EXTERNAL_RESPONSE_BYTES {
+        return Err(ExternalProviderError::ResponseTooLarge);
+    }
+    serde_json::from_slice(body).map_err(|_| ExternalProviderError::MalformedResponse)
+}
+
+fn response_object<'a>(
+    value: &'a Value,
+) -> Result<&'a serde_json::Map<String, Value>, ExternalProviderError> {
+    value
+        .as_object()
+        .ok_or(ExternalProviderError::MalformedResponse)
+}
+
+fn response_text(value: &Value) -> Result<String, ExternalProviderError> {
+    let text = value
+        .as_str()
+        .ok_or(ExternalProviderError::MalformedResponse)?;
+    if text.len() > MAX_EXTERNAL_RESPONSE_BYTES {
+        return Err(ExternalProviderError::ResponseTooLarge);
+    }
+    Ok(text.to_owned())
+}
+
+fn append_response_text(output: &mut String, value: &Value) -> Result<(), ExternalProviderError> {
+    let text = response_text(value)?;
+    let end = output
+        .len()
+        .checked_add(text.len())
+        .ok_or(ExternalProviderError::ResponseTooLarge)?;
+    if end > MAX_EXTERNAL_RESPONSE_BYTES {
+        return Err(ExternalProviderError::ResponseTooLarge);
+    }
+    output.push_str(&text);
+    Ok(())
+}
+
+fn optional_provider_model(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Option<String>, ExternalProviderError> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => validate_model(value)
+            .map(Some)
+            .map_err(|_| ExternalProviderError::MalformedResponse),
+        Some(_) => Err(ExternalProviderError::MalformedResponse),
+    }
+}
+
+fn usage_number(value: &Value) -> Result<u64, ExternalProviderError> {
+    let value = value.as_u64().ok_or(ExternalProviderError::InvalidUsage)?;
+    if valid_token_count(value) {
+        Ok(value)
+    } else {
+        Err(ExternalProviderError::InvalidUsage)
+    }
+}
+
+fn parse_usage(
+    root: &serde_json::Map<String, Value>,
+    usage_field: &str,
+    input_field: &str,
+    output_field: &str,
+    total_field: &str,
+    total_required: bool,
+) -> Result<ExternalUsage, ExternalProviderError> {
+    let usage = root
+        .get(usage_field)
+        .ok_or(ExternalProviderError::MissingUsage)?
+        .as_object()
+        .ok_or(ExternalProviderError::InvalidUsage)?;
+    let input_tokens = usage
+        .get(input_field)
+        .ok_or(ExternalProviderError::MissingUsage)
+        .and_then(usage_number)?;
+    let output_tokens = usage
+        .get(output_field)
+        .ok_or(ExternalProviderError::MissingUsage)
+        .and_then(usage_number)?;
+    let calculated_total = input_tokens
+        .checked_add(output_tokens)
+        .filter(|value| valid_token_count(*value))
+        .ok_or(ExternalProviderError::InvalidUsage)?;
+    let total_tokens = match usage.get(total_field) {
+        Some(value) => {
+            let value = usage_number(value)?;
+            if value != calculated_total {
+                return Err(ExternalProviderError::InvalidUsage);
+            }
+            value
+        }
+        None if total_required => return Err(ExternalProviderError::MissingUsage),
+        None => calculated_total,
+    };
+    Ok(ExternalUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+    })
+}
+
+fn parse_openai_response(body: &[u8]) -> Result<ParsedProviderResponse, ExternalProviderError> {
+    let value = parse_json_response(body)?;
+    let root = response_object(&value)?;
+    let choices = root
+        .get("choices")
+        .and_then(Value::as_array)
+        .filter(|choices| !choices.is_empty())
+        .ok_or(ExternalProviderError::MalformedResponse)?;
+    let choice = response_object(
+        choices
+            .first()
+            .ok_or(ExternalProviderError::MalformedResponse)?,
+    )?;
+    let message = response_object(
+        choice
+            .get("message")
+            .ok_or(ExternalProviderError::MalformedResponse)?,
+    )?;
+    let text = response_text(
+        message
+            .get("content")
+            .ok_or(ExternalProviderError::MalformedResponse)?,
+    )?;
+    Ok(ParsedProviderResponse {
+        text,
+        usage: parse_usage(
+            root,
+            "usage",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            true,
+        )?,
+        provider_model: optional_provider_model(root, "model")?,
+    })
+}
+
+fn parse_anthropic_response(body: &[u8]) -> Result<ParsedProviderResponse, ExternalProviderError> {
+    let value = parse_json_response(body)?;
+    let root = response_object(&value)?;
+    let content = root
+        .get("content")
+        .and_then(Value::as_array)
+        .filter(|content| !content.is_empty())
+        .ok_or(ExternalProviderError::MalformedResponse)?;
+    let mut text = String::new();
+    let mut found_text = false;
+    for block in content {
+        let block = response_object(block)?;
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                append_response_text(
+                    &mut text,
+                    block
+                        .get("text")
+                        .ok_or(ExternalProviderError::MalformedResponse)?,
+                )?;
+                found_text = true;
+            }
+            Some(_) => {}
+            None => return Err(ExternalProviderError::MalformedResponse),
+        }
+    }
+    if !found_text {
+        return Err(ExternalProviderError::MalformedResponse);
+    }
+    Ok(ParsedProviderResponse {
+        text,
+        usage: parse_usage(
+            root,
+            "usage",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            false,
+        )?,
+        provider_model: optional_provider_model(root, "model")?,
+    })
+}
+
+fn parse_gemini_response(body: &[u8]) -> Result<ParsedProviderResponse, ExternalProviderError> {
+    let value = parse_json_response(body)?;
+    let root = response_object(&value)?;
+    let candidates = root
+        .get("candidates")
+        .and_then(Value::as_array)
+        .filter(|candidates| !candidates.is_empty())
+        .ok_or(ExternalProviderError::MalformedResponse)?;
+    let candidate = response_object(
+        candidates
+            .first()
+            .ok_or(ExternalProviderError::MalformedResponse)?,
+    )?;
+    let content = response_object(
+        candidate
+            .get("content")
+            .ok_or(ExternalProviderError::MalformedResponse)?,
+    )?;
+    let parts = content
+        .get("parts")
+        .and_then(Value::as_array)
+        .filter(|parts| !parts.is_empty())
+        .ok_or(ExternalProviderError::MalformedResponse)?;
+    let mut text = String::new();
+    for part in parts {
+        let part = response_object(part)?;
+        if let Some(value) = part.get("text") {
+            append_response_text(&mut text, value)?;
+        }
+    }
+    if text.is_empty() {
+        return Err(ExternalProviderError::MalformedResponse);
+    }
+    Ok(ParsedProviderResponse {
+        text,
+        usage: parse_usage(
+            root,
+            "usageMetadata",
+            "promptTokenCount",
+            "candidatesTokenCount",
+            "totalTokenCount",
+            false,
+        )?,
+        provider_model: optional_provider_model(root, "modelVersion")?,
+    })
+}
+
+fn parse_provider_response(
+    provider_id: ExternalProviderId,
+    body: &[u8],
+) -> Result<ParsedProviderResponse, ExternalProviderError> {
+    match provider_id {
+        ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => {
+            parse_openai_response(body)
+        }
+        ExternalProviderId::Anthropic => parse_anthropic_response(body),
+        ExternalProviderId::Gemini => parse_gemini_response(body),
     }
 }
 
@@ -1022,6 +1728,109 @@ fn read_record<B: CredentialBackend>(
         .transpose()
 }
 
+fn map_cost_failure(error: CostFailure) -> ExternalProviderError {
+    match error {
+        CostFailure::MissingPrice => ExternalProviderError::MissingPrice,
+        CostFailure::InvalidPrice => ExternalProviderError::InvalidPrice,
+        CostFailure::InvalidUsage => ExternalProviderError::InvalidUsage,
+    }
+}
+
+// No provider tokenizer is trusted for preflight, so each UTF-8 byte is a conservative token bound.
+fn estimate_prompt_tokens(prompt: &str) -> Result<u64, ExternalProviderError> {
+    if prompt.len() > MAX_EXTERNAL_PROMPT_BYTES {
+        return Err(ExternalProviderError::RequestTooLarge);
+    }
+    u64::try_from(prompt.len()).map_err(|_| ExternalProviderError::RequestTooLarge)
+}
+
+fn execute_external_generation_with_transport<B: CredentialBackend, T: ExternalTransport>(
+    backend: &B,
+    transport: &T,
+    request: ExternalGenerationRequest,
+) -> Result<ExternalGenerationResult, ExternalProviderError> {
+    if !request.network_consent {
+        return Err(ExternalProviderError::NetworkConsentRequired);
+    }
+    if !(1..=MAX_EXTERNAL_TOKEN_COUNT).contains(&request.max_output_tokens) {
+        return Err(ExternalProviderError::InvalidConfiguration);
+    }
+    let input_estimate = estimate_prompt_tokens(&request.prompt)?;
+    let provider_id = request.provider_id;
+    let record = read_record(backend, provider_id)?.ok_or(ExternalProviderError::NotConfigured)?;
+    let price_snapshot = request
+        .price_snapshot
+        .as_ref()
+        .ok_or(ExternalProviderError::MissingPrice)?;
+    let estimated = estimate_external_cost(
+        Some(price_snapshot),
+        provider_id,
+        &record.model,
+        input_estimate,
+        request.max_output_tokens,
+    )
+    .map_err(map_cost_failure)?;
+    let preflight_decision =
+        decide_external_cost(&estimated, &record.cost_policy, request.cost_confirmed)?;
+
+    let transport_request = build_transport_request(
+        provider_id,
+        &record,
+        &request.prompt,
+        request.max_output_tokens,
+    )?;
+    let response = transport.send(&transport_request)?;
+    if response.body.len() > MAX_EXTERNAL_RESPONSE_BYTES {
+        return Err(ExternalProviderError::ResponseTooLarge);
+    }
+    if !(200..=299).contains(&response.status) {
+        return Err(match response.status {
+            401 | 403 => ExternalProviderError::Authentication,
+            status => ExternalProviderError::Remote { status },
+        });
+    }
+    let parsed = parse_provider_response(provider_id, &response.body)?;
+    let actual = estimate_external_cost(
+        Some(price_snapshot),
+        provider_id,
+        &record.model,
+        parsed.usage.input_tokens,
+        parsed.usage.output_tokens,
+    )
+    .map_err(map_cost_failure)?;
+    let final_decision =
+        decide_external_cost(&actual, &record.cost_policy, request.cost_confirmed)?;
+    let identity_confidence = if parsed.provider_model.is_some() {
+        IdentityConfidence::ProviderReported
+    } else {
+        IdentityConfidence::Unverified
+    };
+    Ok(ExternalGenerationResult {
+        provider_id,
+        requested_model: record.model.clone(),
+        provider_model: parsed
+            .provider_model
+            .unwrap_or_else(|| record.model.clone()),
+        identity_confidence,
+        text: parsed.text,
+        usage: parsed.usage,
+        network_used: transport.network_used(),
+        cost: ExternalCostEvidence {
+            price_snapshot: price_snapshot.clone(),
+            estimated,
+            actual,
+            preflight_decision,
+            final_decision,
+        },
+    })
+}
+
+pub fn execute_external_generation(
+    request: ExternalGenerationRequest,
+) -> Result<ExternalGenerationResult, ExternalProviderError> {
+    execute_external_generation_with_transport(&OsCredentialBackend, &HttpsTransport, request)
+}
+
 pub fn list_external_providers<B: CredentialBackend>(backend: &B) -> Vec<ExternalProviderMetadata> {
     ExternalProviderId::ALL
         .into_iter()
@@ -1174,6 +1983,68 @@ mod tests {
         }
     }
 
+    struct MockRequestEvidence {
+        path: String,
+        body: Vec<u8>,
+        header_names: Vec<&'static str>,
+    }
+
+    struct MockTransport {
+        responses: Mutex<Vec<TransportResponse>>,
+        requests: Mutex<Vec<MockRequestEvidence>>,
+    }
+
+    impl MockTransport {
+        fn new(body: Vec<u8>) -> Self {
+            Self {
+                responses: Mutex::new(vec![TransportResponse { status: 200, body }]),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn request_count(&self) -> usize {
+            self.requests
+                .lock()
+                .expect("mock transport requests lock")
+                .len()
+        }
+
+        fn first_request(&self) -> MockRequestEvidence {
+            let requests = self.requests.lock().expect("mock transport requests lock");
+            let request = requests.first().expect("mock transport request");
+            MockRequestEvidence {
+                path: request.path.clone(),
+                body: request.body.clone(),
+                header_names: request.header_names.clone(),
+            }
+        }
+    }
+
+    impl ExternalTransport for MockTransport {
+        fn send(
+            &self,
+            request: &TransportRequest,
+        ) -> Result<TransportResponse, ExternalProviderError> {
+            self.requests
+                .lock()
+                .expect("mock transport requests lock")
+                .push(MockRequestEvidence {
+                    path: request.path.clone(),
+                    body: request.body.clone(),
+                    header_names: request.headers.iter().map(|header| header.name).collect(),
+                });
+            self.responses
+                .lock()
+                .expect("mock transport responses lock")
+                .pop()
+                .ok_or(ExternalProviderError::Transport)
+        }
+
+        fn network_used(&self) -> bool {
+            false
+        }
+    }
+
     #[derive(Debug, Default)]
     struct UnsupportedCredentialBackend;
 
@@ -1196,8 +2067,17 @@ mod tests {
         model: &str,
         cost_policy: Option<CostPolicy>,
     ) -> ConfigureProviderRequest {
+        configure_request_for(ExternalProviderId::OpenAi, endpoint, model, cost_policy)
+    }
+
+    fn configure_request_for(
+        provider_id: ExternalProviderId,
+        endpoint: &str,
+        model: &str,
+        cost_policy: Option<CostPolicy>,
+    ) -> ConfigureProviderRequest {
         ConfigureProviderRequest {
-            provider_id: ExternalProviderId::OpenAi,
+            provider_id,
             endpoint: endpoint.to_owned(),
             model: model.to_owned(),
             api_key: SecretInput(TEST_CREDENTIAL_MARKER.as_bytes().to_vec()),
@@ -1205,6 +2085,82 @@ mod tests {
             read_timeout_ms: None,
             cost_policy,
         }
+    }
+
+    fn configured_backend(
+        provider_id: ExternalProviderId,
+        cost_policy: Option<CostPolicy>,
+    ) -> MemoryCredentialBackend {
+        let backend = MemoryCredentialBackend::default();
+        configure_external_provider(
+            &backend,
+            configure_request_for(
+                provider_id,
+                "https://api.example.com/v1",
+                "model-example",
+                cost_policy,
+            ),
+        )
+        .expect("provider configures");
+        backend
+    }
+
+    fn price_snapshot(provider_id: ExternalProviderId, model_id: &str) -> PriceSnapshot {
+        PriceSnapshot {
+            provider_id,
+            model_id: model_id.to_owned(),
+            captured_on: "2026-08-20".to_owned(),
+            currency: "USD".to_owned(),
+            input_usd_per_million_tokens: Some(2.0),
+            output_usd_per_million_tokens: Some(4.0),
+        }
+    }
+
+    fn generation_request(
+        provider_id: ExternalProviderId,
+        snapshot: Option<PriceSnapshot>,
+        network_consent: bool,
+        cost_confirmed: bool,
+    ) -> ExternalGenerationRequest {
+        ExternalGenerationRequest {
+            provider_id,
+            prompt: "hello".to_owned(),
+            max_output_tokens: 4,
+            network_consent,
+            cost_confirmed,
+            price_snapshot: snapshot,
+        }
+    }
+
+    fn success_response(provider_id: ExternalProviderId) -> Vec<u8> {
+        let response = match provider_id {
+            ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => {
+                serde_json::json!({
+                    "choices": [{"message": {"content": "provider text"}}],
+                    "model": "served-model",
+                    "usage": {
+                        "prompt_tokens": 2,
+                        "completion_tokens": 3,
+                        "total_tokens": 5
+                    }
+                })
+            }
+            ExternalProviderId::Anthropic => serde_json::json!({
+                "content": [{"type": "text", "text": "provider text"}],
+                "model": "served-model",
+                "usage": {"input_tokens": 2, "output_tokens": 3}
+            }),
+            ExternalProviderId::Gemini => serde_json::json!({
+                "candidates": [{"content": {"parts": [{"text": "provider text"}]}}],
+                "modelVersion": "served-model",
+                "usageMetadata": {
+                    "promptTokenCount": 2,
+                    "candidatesTokenCount": 3,
+                    "totalTokenCount": 5
+                }
+            }),
+        };
+        serde_json::to_vec(&response).expect("response serializes")
     }
 
     #[test]
@@ -1390,6 +2346,322 @@ mod tests {
             decide_external_cost(&inconsistent, &CostPolicy::default(), false),
             Err(ExternalProviderError::InvalidPrice)
         );
+    }
+
+    #[test]
+    fn mock_transport_executes_and_parses_all_four_providers() {
+        for provider_id in ExternalProviderId::ALL {
+            let expected_path = match provider_id {
+                ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => {
+                    "/v1/chat/completions"
+                }
+                ExternalProviderId::Anthropic => "/v1/messages",
+                ExternalProviderId::Gemini => "/v1/models/model-example:generateContent",
+            };
+            let expected_headers: &[&str] = match provider_id {
+                ExternalProviderId::OpenAiCompatible | ExternalProviderId::OpenAi => {
+                    &["Accept", "Content-Type", "Authorization"]
+                }
+                ExternalProviderId::Anthropic => {
+                    &["Accept", "Content-Type", "anthropic-version", "x-api-key"]
+                }
+                ExternalProviderId::Gemini => &["Accept", "Content-Type", "x-goog-api-key"],
+            };
+            let backend = configured_backend(provider_id, None);
+            let transport = MockTransport::new(success_response(provider_id));
+            let result = execute_external_generation_with_transport(
+                &backend,
+                &transport,
+                generation_request(
+                    provider_id,
+                    Some(price_snapshot(provider_id, "model-example")),
+                    true,
+                    false,
+                ),
+            )
+            .expect("provider response parses");
+
+            assert_eq!(result.provider_id, provider_id);
+            assert_eq!(result.requested_model, "model-example");
+            assert_eq!(result.provider_model, "served-model");
+            assert_eq!(
+                result.identity_confidence,
+                IdentityConfidence::ProviderReported
+            );
+            assert_eq!(result.text, "provider text");
+            assert_eq!(
+                result.usage,
+                ExternalUsage {
+                    input_tokens: 2,
+                    output_tokens: 3,
+                    total_tokens: 5,
+                }
+            );
+            assert!(!result.network_used);
+            assert_eq!(result.cost.estimated.input_tokens, 5);
+            assert_eq!(result.cost.estimated.output_tokens, 4);
+            assert_eq!(result.cost.actual.input_tokens, 2);
+            assert_eq!(result.cost.actual.output_tokens, 3);
+            assert_eq!(result.cost.preflight_decision, CostDecision::Allow);
+            assert_eq!(result.cost.final_decision, CostDecision::Allow);
+
+            let request = transport.first_request();
+            assert_eq!(request.path, expected_path);
+            assert_eq!(request.header_names.as_slice(), expected_headers);
+            let body = String::from_utf8(request.body).expect("request body is utf8");
+            assert!(body.contains("hello"));
+            assert!(!body.contains(TEST_CREDENTIAL_MARKER));
+        }
+    }
+
+    #[test]
+    fn consent_and_cost_gates_block_before_mock_transport() {
+        let backend = configured_backend(ExternalProviderId::OpenAi, None);
+        let transport = MockTransport::new(success_response(ExternalProviderId::OpenAi));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                false,
+                false,
+            ),
+        )
+        .err()
+        .expect("consent must be required");
+        assert_eq!(error, ExternalProviderError::NetworkConsentRequired);
+        assert_eq!(transport.request_count(), 0);
+
+        let backend = configured_backend(
+            ExternalProviderId::OpenAi,
+            Some(CostPolicy {
+                confirmation_threshold_usd: Some(0.00001),
+                ceiling_usd: None,
+            }),
+        );
+        let transport = MockTransport::new(success_response(ExternalProviderId::OpenAi));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                true,
+                false,
+            ),
+        )
+        .err()
+        .expect("cost confirmation must be required");
+        assert_eq!(error, ExternalProviderError::ConfirmationRequired);
+        assert_eq!(transport.request_count(), 0);
+
+        let backend = configured_backend(
+            ExternalProviderId::OpenAi,
+            Some(CostPolicy {
+                confirmation_threshold_usd: None,
+                ceiling_usd: Some(0.00002),
+            }),
+        );
+        let transport = MockTransport::new(success_response(ExternalProviderId::OpenAi));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                true,
+                false,
+            ),
+        )
+        .err()
+        .expect("budget ceiling must block the request");
+        assert_eq!(error, ExternalProviderError::BudgetCeilingExceeded);
+        assert_eq!(transport.request_count(), 0);
+
+        let backend = configured_backend(ExternalProviderId::OpenAi, None);
+        let transport = MockTransport::new(success_response(ExternalProviderId::OpenAi));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(ExternalProviderId::OpenAi, None, true, false),
+        )
+        .err()
+        .expect("missing price must block the request");
+        assert_eq!(error, ExternalProviderError::MissingPrice);
+        assert_eq!(transport.request_count(), 0);
+    }
+
+    #[test]
+    fn confirmed_cost_gate_and_actual_budget_gate_are_enforced() {
+        let backend = configured_backend(
+            ExternalProviderId::OpenAi,
+            Some(CostPolicy {
+                confirmation_threshold_usd: Some(0.00001),
+                ceiling_usd: None,
+            }),
+        );
+        let transport = MockTransport::new(success_response(ExternalProviderId::OpenAi));
+        let result = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                true,
+                true,
+            ),
+        )
+        .expect("confirmed cost gate permits the request");
+        assert_eq!(
+            result.cost.preflight_decision,
+            CostDecision::ConfirmationRequired
+        );
+        assert_eq!(
+            result.cost.final_decision,
+            CostDecision::ConfirmationRequired
+        );
+        assert_eq!(transport.request_count(), 1);
+
+        let backend = configured_backend(
+            ExternalProviderId::OpenAi,
+            Some(CostPolicy {
+                confirmation_threshold_usd: None,
+                ceiling_usd: Some(0.003),
+            }),
+        );
+        let response = serde_json::json!({
+            "choices": [{"message": {"content": "provider text"}}],
+            "model": "served-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+        });
+        let transport =
+            MockTransport::new(serde_json::to_vec(&response).expect("response serializes"));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            ExternalGenerationRequest {
+                provider_id: ExternalProviderId::OpenAi,
+                prompt: "x".to_owned(),
+                max_output_tokens: 1,
+                network_consent: true,
+                cost_confirmed: false,
+                price_snapshot: Some(PriceSnapshot {
+                    provider_id: ExternalProviderId::OpenAi,
+                    model_id: "model-example".to_owned(),
+                    captured_on: "2026-08-20".to_owned(),
+                    currency: "USD".to_owned(),
+                    input_usd_per_million_tokens: Some(1_000.0),
+                    output_usd_per_million_tokens: Some(1_000.0),
+                }),
+            },
+        )
+        .err()
+        .expect("actual cost must enforce the ceiling");
+        assert_eq!(error, ExternalProviderError::BudgetCeilingExceeded);
+        assert_eq!(transport.request_count(), 1);
+    }
+
+    #[test]
+    fn malformed_provider_responses_and_usage_fail_closed() {
+        for provider_id in ExternalProviderId::ALL {
+            let backend = configured_backend(provider_id, None);
+            let transport = MockTransport::new(b"{}".to_vec());
+            let error = execute_external_generation_with_transport(
+                &backend,
+                &transport,
+                generation_request(
+                    provider_id,
+                    Some(price_snapshot(provider_id, "model-example")),
+                    true,
+                    false,
+                ),
+            )
+            .err()
+            .expect("malformed response must fail");
+            assert_eq!(error, ExternalProviderError::MalformedResponse);
+            assert_eq!(transport.request_count(), 1);
+        }
+
+        let backend = configured_backend(ExternalProviderId::OpenAi, None);
+        let response = serde_json::json!({
+            "choices": [{"message": {"content": "provider text"}}]
+        });
+        let transport =
+            MockTransport::new(serde_json::to_vec(&response).expect("response serializes"));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                true,
+                false,
+            ),
+        )
+        .err()
+        .expect("missing usage must fail");
+        assert_eq!(error, ExternalProviderError::MissingUsage);
+
+        let response = serde_json::json!({
+            "choices": [{"message": {"content": "provider text"}}],
+            "usage": {"prompt_tokens": -1, "completion_tokens": 1, "total_tokens": 0}
+        });
+        let transport =
+            MockTransport::new(serde_json::to_vec(&response).expect("response serializes"));
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                true,
+                false,
+            ),
+        )
+        .err()
+        .expect("invalid usage must fail");
+        assert_eq!(error, ExternalProviderError::InvalidUsage);
+
+        let transport = MockTransport::new(vec![b' '; MAX_EXTERNAL_RESPONSE_BYTES + 1]);
+        let error = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                ExternalProviderId::OpenAi,
+                Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+                true,
+                false,
+            ),
+        )
+        .err()
+        .expect("oversized response must fail");
+        assert_eq!(error, ExternalProviderError::ResponseTooLarge);
+    }
+
+    #[test]
+    fn execution_debug_and_results_do_not_reveal_credentials() {
+        let backend = configured_backend(ExternalProviderId::OpenAi, None);
+        let mut request = generation_request(
+            ExternalProviderId::OpenAi,
+            Some(price_snapshot(ExternalProviderId::OpenAi, "model-example")),
+            true,
+            false,
+        );
+        request.prompt = TEST_CREDENTIAL_MARKER.to_owned();
+        let debug = format!("{request:?}");
+        assert!(debug.contains("REDACTED"));
+        assert!(!debug.contains(TEST_CREDENTIAL_MARKER));
+
+        let transport = MockTransport::new(success_response(ExternalProviderId::OpenAi));
+        let result = execute_external_generation_with_transport(&backend, &transport, request)
+            .expect("provider response parses");
+        let serialized = serde_json::to_string(&result).expect("result serializes");
+        assert!(!serialized.contains(TEST_CREDENTIAL_MARKER));
+        let record = read_record(&backend, ExternalProviderId::OpenAi)
+            .expect("credential record reads")
+            .expect("credential record exists");
+        assert!(!format!("{record:?}").contains(TEST_CREDENTIAL_MARKER));
     }
 
     #[test]

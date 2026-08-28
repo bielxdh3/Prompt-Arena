@@ -24,6 +24,7 @@ pub fn run() -> tauri::Result<()> {
             commands::configure_external_provider,
             commands::update_external_cost_policy,
             commands::remove_external_provider,
+            commands::execute_external_generation,
             commands::list_official_packs,
             commands::get_official_pack,
             commands::materialize_official_pack,
