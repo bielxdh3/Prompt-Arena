@@ -17,6 +17,8 @@ import {
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SMOKE_WAIT_MS = 2_500;
 const SMOKE_TERMINATION_WAIT_MS = 5_000;
+const UNINSTALL_DISAPPEAR_WAIT_MS = 5_000;
+const UNINSTALL_POLL_INTERVAL_MS = 100;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
   const configPath = path.join(repositoryRoot, "src-tauri", "tauri.conf.json");
@@ -116,6 +118,15 @@ function findUninstaller(installDirectory) {
   return uninstaller;
 }
 
+async function waitForPathToDisappear(filePath) {
+  const deadline = Date.now() + UNINSTALL_DISAPPEAR_WAIT_MS;
+  while (fs.existsSync(filePath)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, UNINSTALL_POLL_INTERVAL_MS));
+  }
+  return true;
+}
+
 function launchCommand(executable, args) {
   if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return { command: executable, args };
   if (commandAvailable("xvfb-run")) return { command: "xvfb-run", args: ["-a", executable, ...args] };
@@ -186,7 +197,7 @@ async function windowsSmoke(artifactDirectory, metadata, lines) {
     lines.push("Installed executable restart: passed.");
     const uninstaller = findUninstaller(installDirectory);
     execFileSync(uninstaller, ["/S"], { stdio: "ignore", timeout: 120_000 });
-    if (fs.existsSync(executable)) throw new Error("NSIS uninstall left the installed executable behind");
+    if (!(await waitForPathToDisappear(executable))) throw new Error("NSIS uninstall left the installed executable behind after the removal wait");
     lines.push("NSIS silent uninstall: passed.");
   } finally {
     fs.rmSync(smokeRoot, { recursive: true, force: true, maxRetries: 3 });
@@ -275,6 +286,7 @@ function isMainModule() {
 
 if (isMainModule()) {
   const lines = ["Prompt Arena package verification"];
+  let evidencePath = path.resolve(REPOSITORY_ROOT, "package-verification.txt");
   try {
     const options = parseCliArgs(process.argv.slice(2));
     const repositoryRoot = REPOSITORY_ROOT;
@@ -282,7 +294,7 @@ if (isMainModule()) {
     const platform = normalizePlatform(options.platform ?? hostPackagingPlatform());
     const artifactDirectory = path.resolve(repositoryRoot, options.artifactdirectory ?? "package-artifacts");
     const manifestPath = path.resolve(repositoryRoot, options.manifestpath ?? CHECKSUM_MANIFEST_NAME);
-    const evidencePath = path.resolve(repositoryRoot, options.evidencefile ?? "package-verification.txt");
+    evidencePath = path.resolve(repositoryRoot, options.evidencefile ?? "package-verification.txt");
     const result = verifyPackageArtifacts({ platform, version: metadata.version, artifactDirectory, manifestPath });
     lines.push(`Checksum manifest: passed (${result.entries.length} artifact(s)).`);
     if (result.optionalMissing.length > 0) lines.push(`Optional artifacts unavailable: ${result.optionalMissing.join(", ")}.`);
@@ -299,7 +311,7 @@ if (isMainModule()) {
     const message = error instanceof Error ? error.message : "Package verification failed.";
     lines.push(`Result: failed — ${message}`);
     try {
-      writeEvidence(path.join(REPOSITORY_ROOT, "package-verification.txt"), lines);
+      writeEvidence(evidencePath, lines);
     } catch {
       // Preserve the original verification failure when evidence cannot be written.
     }
