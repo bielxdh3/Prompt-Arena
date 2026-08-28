@@ -4611,11 +4611,11 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
         <span className="provider-state">Unconfigured</span>
       </div>
       <div className="provider-facts">
-        <div><span>Transport</span><strong>External · not wired</strong></div>
-        <div><span>Credentials</span><strong>Not configured</strong></div>
-        <div><span>Identity</span><strong>Unverified</strong></div>
-        <div><span>Execution</span><strong>Not wired</strong></div>
-        <div><span>Cost</span><strong>Catalog only</strong></div>
+        <div><span>Transport</span><strong>External HTTPS available when explicitly consented</strong></div>
+        <div><span>Credentials</span><strong>OS secure storage not configured</strong></div>
+        <div><span>Identity</span><strong>Unverified until configured</strong></div>
+        <div><span>Execution</span><strong>Requires configuration and consent</strong></div>
+        <div><span>Cost</span><strong>Dated price snapshot required</strong></div>
       </div>
     </article>
   );
