@@ -227,6 +227,8 @@ pub struct ArenaExecutionEvidence {
     pub attempt_id: Option<String>,
     pub status: String,
     pub duration_ms: Option<f64>,
+    #[serde(default)]
+    pub tokens_per_second: Option<f64>,
     pub completion_tokens: Option<u64>,
     pub objective_passed: Option<bool>,
 }
@@ -1663,6 +1665,12 @@ fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageEr
         {
             return Err(StorageError::InvalidRecordId);
         }
+        if evidence
+            .tokens_per_second
+            .is_some_and(|rate| !rate.is_finite() || rate < 0.0)
+        {
+            return Err(StorageError::InvalidRecordId);
+        }
     }
     let json = serde_json::to_value(summary).map_err(|_| StorageError::DatabaseFailure)?;
     let document_json = canonical_json_value(&json).map_err(|_| StorageError::DatabaseFailure)?;
@@ -2450,6 +2458,7 @@ mod tests {
                 attempt_id: Some("attempt-1".to_owned()),
                 status: "completed".to_owned(),
                 duration_ms: Some(12.5),
+                tokens_per_second: Some(4.0),
                 completion_tokens: Some(4),
                 objective_passed: Some(true),
             }],
