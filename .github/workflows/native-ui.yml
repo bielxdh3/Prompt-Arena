@@ -60,19 +60,19 @@ jobs:
           $PWD.Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build native app without installer bundling
-        run: npm run tauri:build -- --debug --no-bundle
+        run: npm run tauri:build -- --no-bundle
 
-      - name: Stage development sidecar (Windows)
+      - name: Stage release sidecar (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $source = Get-ChildItem -LiteralPath 'src-tauri/binaries' -Filter 'prompt-arena-worker-*.exe' -File | Select-Object -First 1
           if (-not $source) { throw 'prepared worker sidecar not found under src-tauri/binaries' }
-          $destination = 'src-tauri/target/debug/prompt-arena-worker.exe'
+          $destination = 'src-tauri/target/release/prompt-arena-worker.exe'
           Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
           Get-Item -LiteralPath $destination | Format-List FullName,Length
 
-      - name: Stage development sidecar (Linux)
+      - name: Stage release sidecar (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -80,7 +80,7 @@ jobs:
           source="$(find src-tauri/binaries -maxdepth 1 -type f -name 'prompt-arena-worker-*' -print -quit)"
           test -n "$source"
           test -x "$source"
-          destination="src-tauri/target/debug/prompt-arena-worker"
+          destination="src-tauri/target/release/prompt-arena-worker"
           cp "$source" "$destination"
           chmod +x "$destination"
           ls -l "$destination"
@@ -88,9 +88,9 @@ jobs:
       - name: Native Tauri acceptance (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: node scripts/native-ui-smoke.mjs "src-tauri/target/debug/prompt-arena.exe"
+        run: node scripts/native-ui-smoke.mjs "src-tauri/target/release/prompt-arena.exe"
 
       - name: Native Tauri acceptance (Linux)
         if: runner.os == 'Linux'
         shell: bash
-        run: xvfb-run -a node scripts/native-ui-smoke.mjs "src-tauri/target/debug/prompt-arena"
+        run: xvfb-run -a node scripts/native-ui-smoke.mjs "src-tauri/target/release/prompt-arena"
