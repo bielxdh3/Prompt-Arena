@@ -270,11 +270,20 @@ function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
   const attempt = item.execution?.attempt;
   const responseSummary = attempt?.responseSummary;
   const durationNs = responseSummary?.timing?.totalDurationNs;
+  const evalDurationNs = responseSummary?.timing?.evalDurationNs;
   const completionTokens = responseSummary?.usage?.completionTokens;
   const score = attempt?.result?.score;
   const status = item.cancelled
     ? "cancelled"
     : attempt?.status ?? (item.error ? "failed_before_persistence" : "unknown");
+  const tokensPerSecond = typeof completionTokens === "number"
+    && Number.isSafeInteger(completionTokens)
+    && completionTokens >= 0
+    && typeof evalDurationNs === "number"
+    && Number.isFinite(evalDurationNs)
+    && evalDurationNs > 0
+    ? completionTokens / (evalDurationNs / 1_000_000_000)
+    : null;
   return {
     competitorId: item.competitorId,
     competitorLabel: item.competitorLabel,
@@ -284,6 +293,9 @@ function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
     status,
     durationMs: typeof durationNs === "number" && Number.isFinite(durationNs) && durationNs >= 0
       ? durationNs / 1_000_000
+      : null,
+    tokensPerSecond: tokensPerSecond !== null && Number.isFinite(tokensPerSecond) && tokensPerSecond >= 0
+      ? tokensPerSecond
       : null,
     completionTokens: typeof completionTokens === "number"
       && Number.isSafeInteger(completionTokens)

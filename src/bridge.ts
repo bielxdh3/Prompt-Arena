@@ -178,6 +178,7 @@ export type ArenaExecutionEvidence = {
   attemptId: string | null;
   status: string;
   durationMs: number | null;
+  tokensPerSecond?: number | null;
   completionTokens: number | null;
   objectivePassed: boolean | null;
 };
