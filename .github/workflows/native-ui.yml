@@ -66,13 +66,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $hostLine = rustc -vV | Select-String '^host:' | Select-Object -First 1
-          if (-not $hostLine) { throw 'rustc host target not found' }
-          $triple = ($hostLine.Line -split '\s+')[1]
-          $source = "src-tauri/target/$triple/release/prompt-arena-worker.exe"
+          $source = Get-ChildItem -LiteralPath 'src-tauri/binaries' -Filter 'prompt-arena-worker-*.exe' -File | Select-Object -First 1
+          if (-not $source) { throw 'prepared worker sidecar not found under src-tauri/binaries' }
           $destination = 'src-tauri/target/debug/prompt-arena-worker.exe'
-          if (-not (Test-Path -LiteralPath $source)) { throw "worker missing: $source" }
-          Copy-Item -LiteralPath $source -Destination $destination -Force
+          Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
           Get-Item -LiteralPath $destination | Format-List FullName,Length
 
       - name: Stage development sidecar (Linux)
@@ -80,10 +77,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          triple="$(rustc -vV | awk '/^host:/ {print $2; exit}')"
-          source="src-tauri/target/${triple}/release/prompt-arena-worker"
-          destination="src-tauri/target/debug/prompt-arena-worker"
+          source="$(find src-tauri/binaries -maxdepth 1 -type f -name 'prompt-arena-worker-*' -print -quit)"
+          test -n "$source"
           test -x "$source"
+          destination="src-tauri/target/debug/prompt-arena-worker"
           cp "$source" "$destination"
           chmod +x "$destination"
           ls -l "$destination"
