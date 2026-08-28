@@ -32,6 +32,8 @@ import {
   readRuns,
   readExternalProviders,
   readExternalGenerationEvidence,
+  previewStorageRetention,
+  cleanupStorageRetention,
   removeExternalProvider,
   saveArenaSummary,
   saveBenchmarkDraft,
@@ -52,6 +54,7 @@ import {
   type CostPolicy,
   type ExternalGenerationResult,
   type ExternalGenerationEvidenceRecord,
+  type StorageRetentionPreview,
   type ExternalProviderId,
   type ExternalProviderMetadata,
   type HardwareMetric,
@@ -161,9 +164,11 @@ import {
   ACCENT_OPTIONS,
   APPEARANCE_STORAGE_KEY,
   DEFAULT_APPEARANCE,
+  MAX_APPEARANCE_PAYLOAD_BYTES,
   RADIUS_OPTIONS,
   SURFACE_OPTIONS,
   normalizeAppearance,
+  importAppearancePreferences,
   parseAppearancePreferences,
   serializeAppearancePreferences,
   type AppearancePreferences,
@@ -3838,6 +3843,123 @@ function StateMessage({
   );
 }
 
+type RetentionState =
+  | { status: "loading" | "unsupported" | "idle" }
+  | { status: "ready"; preview: StorageRetentionPreview }
+  | { status: "error"; message: string };
+
+function StorageRetentionControls({ desktop }: { desktop: boolean }) {
+  const [olderThanDays, setOlderThanDays] = useState("30");
+  const [state, setState] = useState<RetentionState>(() => desktop ? { status: "loading" } : { status: "unsupported" });
+  const [confirmation, setConfirmation] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!desktop) {
+      setState({ status: "unsupported" });
+      return;
+    }
+    void refresh();
+  }, [desktop]);
+
+  async function refresh() {
+    if (!desktop) {
+      setState({ status: "unsupported" });
+      return;
+    }
+    const days = Number(olderThanDays);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+      setState({ status: "error", message: "Choose a whole number of days from 1 through 3,650." });
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    setConfirmation("");
+    setState({ status: "loading" });
+    try {
+      setState({ status: "ready", preview: await previewStorageRetention(days) });
+    } catch (error: unknown) {
+      setState({ status: "error", message: error instanceof Error ? error.message : "The local retention preview is unavailable." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cleanup() {
+    if (state.status !== "ready" || state.preview.eligibleRecords === 0) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      const result = await cleanupStorageRetention({
+        olderThanDays: state.preview.olderThanDays,
+        cutoffAt: state.preview.cutoffAt,
+        expectedRecords: state.preview.eligibleRecords,
+        confirmation,
+      });
+      setNotice(`${result.deletedRecords.toLocaleString()} local history record${result.deletedRecords === 1 ? "" : "s"} removed. Protected source records and artifacts were retained.`);
+      setConfirmation("");
+      await refresh();
+    } catch (error: unknown) {
+      setState({ status: "error", message: error instanceof Error ? error.message : "The local retention cleanup is unavailable." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel settings-card" aria-labelledby="retention-heading" aria-live="polite">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Local storage</p>
+          <h3 id="retention-heading">Review and clean history</h3>
+        </div>
+        <span className="section-index">C</span>
+      </div>
+      <p className="field-help">Preview old derived history before removing it. The operation is bounded to 256 records, requires an exact confirmation, and never removes immutable sources, audit records, or response artifacts.</p>
+      {state.status === "unsupported" && <StateMessage icon="◇" title="Browser preview / no cleanup" description="Retention controls read and write the local desktop database only." />}
+      {desktop && (
+        <>
+          <div className="form-control">
+            <label className="field-label" htmlFor="retention-age">Remove derived history older than</label>
+            <div className="field-label-row">
+              <input id="retention-age" type="number" min="1" max="3650" step="1" value={olderThanDays} onChange={(event) => { setOlderThanDays(event.currentTarget.value); setState({ status: "idle" }); setConfirmation(""); setNotice(""); }} />
+              <span className="control-value">days</span>
+            </div>
+          </div>
+          <div className="export-actions">
+            <button className="secondary-button" type="button" onClick={() => void refresh()} disabled={busy}>Preview cleanup</button>
+          </div>
+          {state.status === "loading" && <StateMessage icon="…" title="Loading retention preview" description="Counting removable local history without changing records." />}
+          {state.status === "idle" && <StateMessage icon="◇" title="Preview required" description="Choose an age and prepare a fresh cleanup preview." />}
+          {state.status === "error" && <StateMessage icon="!" title="Retention unavailable" description={state.message} error />}
+          {state.status === "ready" && state.preview.eligibleRecords === 0 && <StateMessage icon="—" title="No removable history" description="No derived records are older than the selected age. Nothing was changed." />}
+          {state.status === "ready" && state.preview.eligibleRecords > 0 && (
+            <>
+              <div className="results-facts">
+                {state.preview.tables.filter((table) => table.eligibleRecords > 0).map((table) => <BoundaryRow key={table.table} label={table.table} value={table.eligibleRecords.toLocaleString()} />)}
+                <BoundaryRow label="Total eligible" value={`${state.preview.eligibleRecords.toLocaleString()} / ${state.preview.maxDeleteRecords.toLocaleString()} maximum`} />
+                <BoundaryRow label="Cutoff" value={`before ${state.preview.cutoffAt}`} />
+              </div>
+              {state.preview.eligibleRecords > state.preview.maxDeleteRecords ? (
+                <StateMessage icon="!" title="Preview exceeds the safety bound" description="Narrow the age window before cleanup. No records can be removed from this preview." error />
+              ) : (
+                <div className="form-control">
+                  <label className="field-label" htmlFor="retention-confirmation">Type {state.preview.confirmation} to confirm</label>
+                  <input id="retention-confirmation" type="text" value={confirmation} autoComplete="off" onChange={(event) => setConfirmation(event.currentTarget.value)} />
+                  <p className="field-help">Protected: {state.preview.protectedTables.join(", ")}. These source and audit tables are never part of cleanup.</p>
+                  <button className="secondary-button" type="button" onClick={() => void cleanup()} disabled={busy || confirmation !== state.preview.confirmation}>Remove eligible history</button>
+                </div>
+              )}
+            </>
+          )}
+          {notice && <p className="form-feedback form-feedback-success" role="status">{notice}</p>}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Settings({
   appearance,
   desktop,
@@ -3851,8 +3973,33 @@ function Settings({
   onAppearanceChange: (next: AppearancePreferences) => void;
   onRestoreDefaults: () => void;
 }) {
+  const appearanceFileInput = useRef<HTMLInputElement>(null);
+  const [appearanceTransferMessage, setAppearanceTransferMessage] = useState("");
+
   function updateAppearance<K extends keyof AppearancePreferences>(field: K, value: AppearancePreferences[K]) {
     onAppearanceChange({ ...appearance, [field]: value });
+  }
+
+  function exportAppearance() {
+    try {
+      downloadLocalText("appearance-preferences", "json", serializeAppearancePreferences(appearance));
+      setAppearanceTransferMessage("Sanitized appearance preferences downloaded locally.");
+    } catch (error: unknown) {
+      setAppearanceTransferMessage(error instanceof Error ? error.message : "The appearance export could not be prepared.");
+    }
+  }
+
+  async function importAppearanceFile(file: File) {
+    if (file.size > MAX_APPEARANCE_PAYLOAD_BYTES) {
+      setAppearanceTransferMessage("Appearance preference files must be 8 KiB or smaller.");
+      return;
+    }
+    try {
+      onAppearanceChange(importAppearancePreferences(await file.text()));
+      setAppearanceTransferMessage("Appearance preferences imported and normalized locally.");
+    } catch (error: unknown) {
+      setAppearanceTransferMessage(error instanceof Error ? error.message : "The appearance import could not be applied.");
+    }
   }
 
   return (
@@ -3973,6 +4120,20 @@ function Settings({
           <button className="secondary-button restore-button" type="button" onClick={onRestoreDefaults}>
             Restore defaults
           </button>
+
+          <div className="appearance-transfer">
+            <div className="field-label-row">
+              <span className="field-label" id="appearance-transfer-heading">Preference file</span>
+              <span className="control-value">versioned JSON</span>
+            </div>
+            <p className="field-help">Download or import only bounded presentation preferences. Unknown fields are ignored; prompts, responses, credentials, and headers are not part of this payload.</p>
+            <div className="export-actions" role="group" aria-labelledby="appearance-transfer-heading">
+              <button className="secondary-button" type="button" onClick={exportAppearance}>Download JSON</button>
+              <button className="secondary-button" type="button" onClick={() => appearanceFileInput.current?.click()}>Import JSON</button>
+              <input ref={appearanceFileInput} type="file" accept="application/json,.json" hidden aria-label="Import appearance preference JSON" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importAppearanceFile(file); }} />
+            </div>
+            {appearanceTransferMessage && <p className="field-help" role="status">{appearanceTransferMessage}</p>}
+          </div>
         </div>
 
         <div className="panel settings-card appearance-preview-card">
@@ -4019,6 +4180,8 @@ function Settings({
           </div>
         </div>
       </section>
+
+      <StorageRetentionControls desktop={desktop} />
 
       <DiagnosticsSurface connection={connection} desktop={desktop} />
 

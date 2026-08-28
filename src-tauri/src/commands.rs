@@ -62,7 +62,8 @@ use crate::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
         BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
         CalibrationBenchmarkPayload, CalibrationBenchmarkRecord, CalibrationResultPayload,
-        CalibrationResultRecord, ExternalGenerationEvidenceRecord, StorageError, StorageService,
+        CalibrationResultRecord, ExternalGenerationEvidenceRecord, StorageError,
+        StorageRetentionPreview, StorageRetentionRequest, StorageRetentionResult, StorageService,
         TournamentResultPayload, TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES,
         MAX_PROFILE_REQUEST_BYTES,
     },
@@ -171,6 +172,10 @@ impl From<StorageError> for CommandError {
             StorageError::AdvancedSourceNotFound => "advanced_source_not_found",
             StorageError::AdvancedSourceMismatch => "advanced_source_mismatch",
             StorageError::InvalidExternalGenerationEvidence => "provider_evidence_invalid",
+            StorageError::InvalidRetentionRequest => "retention_request_invalid",
+            StorageError::RetentionTooBroad => "retention_too_broad",
+            StorageError::RetentionConfirmationRequired => "retention_confirmation_required",
+            StorageError::RetentionPreviewStale => "retention_preview_stale",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
@@ -366,6 +371,26 @@ pub fn list_external_generation_evidence(
 ) -> Result<Vec<ExternalGenerationEvidenceRecord>, CommandError> {
     storage_for(&app)?
         .list_external_generation_evidence()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn preview_storage_retention(
+    app: AppHandle,
+    older_than_days: u32,
+) -> Result<StorageRetentionPreview, CommandError> {
+    storage_for(&app)?
+        .preview_storage_retention(older_than_days)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn cleanup_storage_retention(
+    app: AppHandle,
+    request: StorageRetentionRequest,
+) -> Result<StorageRetentionResult, CommandError> {
+    storage_for(&app)?
+        .cleanup_storage_retention(&request)
         .map_err(Into::into)
 }
 

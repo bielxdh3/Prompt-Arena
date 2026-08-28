@@ -104,10 +104,10 @@ price/usage history; CI never calls a paid API.
 ### P6 — Product polish — IN PROGRESS
 
 Responsive shell, accessibility focus states, reduced motion, local appearance controls, local diagnostics, dashboard
-counts/recent summaries, persisted run and Arena-summary history, verified response reads, and bounded sanitized
-JSON/Markdown/CSV exports exist. Storage cleanup/retention, richer appearance import/export, and full
-accessibility/native review remain. Native acceptance, security review, and publication gates are still pending, so P6
-remains IN PROGRESS.
+counts/recent summaries, persisted run and Arena-summary history, verified response reads, bounded sanitized
+JSON/Markdown/CSV exports, preview-first bounded cleanup of derived history, and versioned bounded appearance
+import/export exist. Full accessibility/native review remains. Native acceptance, security review, and publication gates
+are still pending, so P6 remains IN PROGRESS.
 
 Acceptance: the primary flow reads as a model-comparison laboratory, not developer scaffolding, on supported desktop sizes.
 
