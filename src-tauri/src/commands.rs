@@ -25,11 +25,13 @@ use crate::{
     },
     external_providers::{
         configure_external_provider as configure_external_provider_record,
+        execute_external_generation as execute_external_generation_record,
         list_external_providers as list_external_provider_records,
         remove_external_provider as remove_external_provider_record,
         update_external_cost_policy as update_external_cost_policy_record,
-        ConfigureProviderRequest, ExternalProviderError, ExternalProviderId,
-        ExternalProviderMetadata, OsCredentialBackend, UpdateProviderCostPolicyRequest,
+        ConfigureProviderRequest, ExternalGenerationRequest, ExternalGenerationResult,
+        ExternalProviderError, ExternalProviderId, ExternalProviderMetadata, OsCredentialBackend,
+        UpdateProviderCostPolicyRequest,
     },
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
     model_library::{
@@ -322,6 +324,13 @@ pub fn update_external_cost_policy(
 #[tauri::command]
 pub fn remove_external_provider(provider_id: ExternalProviderId) -> Result<bool, CommandError> {
     remove_external_provider_record(&OsCredentialBackend, provider_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn execute_external_generation(
+    request: ExternalGenerationRequest,
+) -> Result<ExternalGenerationResult, CommandError> {
+    execute_external_generation_record(request).map_err(Into::into)
 }
 
 #[tauri::command]

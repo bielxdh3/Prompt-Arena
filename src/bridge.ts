@@ -53,6 +53,59 @@ export type UpdateProviderCostPolicyRequest = {
   costPolicy: CostPolicy;
 };
 
+export type PriceSnapshot = {
+  providerId: ExternalProviderId;
+  modelId: string;
+  capturedOn: string;
+  currency: string;
+  inputUsdPerMillionTokens: number | null;
+  outputUsdPerMillionTokens: number | null;
+};
+
+export type ExternalGenerationRequest = {
+  providerId: ExternalProviderId;
+  prompt: string;
+  maxOutputTokens: number;
+  networkConsent?: boolean;
+  costConfirmed?: boolean;
+  priceSnapshot?: PriceSnapshot | null;
+};
+
+export type ExternalUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
+export type CostBreakdown = {
+  inputTokens: number;
+  outputTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+};
+
+export type CostDecision = "allow" | "confirmation_required" | "ceiling_exceeded";
+
+export type ExternalCostEvidence = {
+  priceSnapshot: PriceSnapshot;
+  estimated: CostBreakdown;
+  actual: CostBreakdown;
+  preflightDecision: CostDecision;
+  finalDecision: CostDecision;
+};
+
+export type ExternalGenerationResult = {
+  providerId: ExternalProviderId;
+  requestedModel: string;
+  providerModel: string;
+  identityConfidence: IdentityConfidence;
+  text: string;
+  usage: ExternalUsage;
+  networkUsed: boolean;
+  cost: ExternalCostEvidence;
+};
+
 export type RunRecord = {
   runId: string;
   benchmarkVersionId: string;
@@ -598,6 +651,16 @@ export async function removeExternalProvider(providerId: ExternalProviderId): Pr
     "remove_external_provider",
     "The external provider could not be removed.",
     { providerId },
+  );
+}
+
+export async function executeExternalGeneration(
+  request: ExternalGenerationRequest,
+): Promise<ExternalGenerationResult> {
+  return invokeDesktop<ExternalGenerationResult>(
+    "execute_external_generation",
+    "The external provider generation could not be executed.",
+    { request },
   );
 }
 
