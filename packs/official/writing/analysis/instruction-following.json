@@ -55,6 +55,11 @@
             "caseId": "release-risk",
             "prompt": "Summarize this situation in 80 words or fewer for a product manager: a release passed unit tests, but the staging database was half the production size and no rollback rehearsal was recorded. Include one factual risk and one practical next step.",
             "expected": null,
+            "verifierPolicy": {
+              "kind": "safe_pattern",
+              "pattern": "Risk:",
+              "mode": "literal"
+            },
             "artifacts": []
           }
         ],
@@ -70,6 +75,11 @@
             "caseId": "offline-first",
             "prompt": "Write a memo with exactly these headings: Decision, Evidence, Risks, Next step. Recommend whether a small local-first desktop tool should add cloud sync in its first release when no threat model, account system, or backup design exists. Keep it under 180 words.",
             "expected": null,
+            "verifierPolicy": {
+              "kind": "safe_pattern",
+              "pattern": "Decision:",
+              "mode": "literal"
+            },
             "artifacts": []
           }
         ],
@@ -115,8 +125,13 @@
     "status": "available",
     "requiresSandbox": false,
     "sandboxStatus": "not_required",
-    "evaluationMode": "human_rubric",
+    "executionBoundary": "text_generation",
+    "evaluationMode": "mixed",
     "requirement": "Text generation only; output quality is reviewed against the declared human rubric and no automatic writing score is implied.",
     "notes": null
+  },
+  "materialization": {
+    "kind": "deterministic_seeded",
+    "algorithm": "sha256-v1"
   }
 }

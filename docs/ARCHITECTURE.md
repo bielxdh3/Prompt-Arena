@@ -200,3 +200,25 @@ evaluation, AI judging, cross-run ranking, broader official-pack coverage, full 
 imports and broader benchmark-authoring flows, external/cloud provider adapters, interruption recovery, and any
 long-lived worker/runtime lifecycle remain later phases. They must keep provenance, effective configuration, error
 taxonomy, and historical records explicit rather than smuggling behavior into the current command or worker boundary.
+
+## Completion stack: multi-model Arena and delivery
+
+The completion stack keeps the existing one-shot worker as the narrow execution primitive and composes it in
+`src/arena-runner.ts`. An Arena request validates 2–8 immutable profile revisions and 1/3/5/10 repetitions, then runs
+each materialized plan sequentially. Each sample receives a unique run identity and is persisted immediately, so a
+runtime/OOM failure for one competitor cannot erase successful evidence for another. Queued work can be cancelled before
+the next worker starts; an in-flight Ollama request retains the worker's existing cooperative cancellation semantics.
+
+Completed response text is not copied into run metadata. The `read_attempt_response` command locates only an attempt that
+belongs to the supplied run, resolves the immutable result artifact, verifies its registered kind/path/size/hash through
+the storage service, and returns bounded text without filesystem paths. The Arena UI uses that command for comparison,
+blind cards, and export. Blind locks still use the existing immutable per-run evaluation record; the UI never shows model,
+provider, timing, token, objective, or rank metadata while cards are unlocked.
+
+Objective helper policies live in `src/objective-verifiers.ts` and are bounded to local exact, numeric-tolerance,
+classification, JSON-required-field, and safe-pattern checks. They are intentionally not treated as persisted benchmark
+verifier authority until the benchmark document and Rust evidence schema carry the same policy.
+
+The packaging workflow is separate from pull-request CI and is `workflow_dispatch` only. It checks out an exact ref,
+repeats boundary/audit/frontend/Rust validation, builds Tauri's Windows NSIS/MSI and Linux deb/AppImage targets, writes
+SHA-256 checksums, and uploads artifacts. It does not publish a release, tag, deploy, or create secrets.

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ObjectiveVerifierPolicy } from "./objective-verifiers";
 
 export type StorageState = "local";
 
@@ -7,6 +8,102 @@ export type AppStatus = {
   protocolVersion: number;
   storageState: StorageState;
   supportedPlatform: "windows" | "linux" | "unsupported";
+};
+
+export type ExternalProviderId = "openai-compatible" | "openai" | "anthropic" | "gemini";
+export type ProviderKind = "generic_openai_compatible" | "native";
+export type SecureStorageStatus = "available" | "unsupported" | "error";
+export type CredentialSource = "not_configured" | "os_secure_storage" | "unavailable";
+export type IdentityConfidence = "unverified" | "provider_reported";
+
+export type ExternalProviderMetadata = {
+  providerId: ExternalProviderId;
+  label: string;
+  kind: ProviderKind;
+  defaultEndpoint: string;
+  configured: boolean;
+  endpoint: string | null;
+  model: string | null;
+  credentialSource: CredentialSource;
+  storageStatus: SecureStorageStatus;
+  identityConfidence: IdentityConfidence;
+  connectTimeoutMs: number | null;
+  readTimeoutMs: number | null;
+  confirmationThresholdUsd: number | null;
+  ceilingUsd: number | null;
+};
+
+export type CostPolicy = {
+  confirmationThresholdUsd: number | null;
+  ceilingUsd: number | null;
+};
+
+export type ConfigureProviderRequest = {
+  providerId: ExternalProviderId;
+  endpoint: string;
+  model: string;
+  apiKey: string;
+  connectTimeoutMs?: number | null;
+  readTimeoutMs?: number | null;
+  costPolicy?: CostPolicy | null;
+};
+
+export type UpdateProviderCostPolicyRequest = {
+  providerId: ExternalProviderId;
+  costPolicy: CostPolicy;
+};
+
+export type PriceSnapshot = {
+  providerId: ExternalProviderId;
+  modelId: string;
+  capturedOn: string;
+  currency: string;
+  inputUsdPerMillionTokens: number | null;
+  outputUsdPerMillionTokens: number | null;
+};
+
+export type ExternalGenerationRequest = {
+  providerId: ExternalProviderId;
+  prompt: string;
+  maxOutputTokens: number;
+  networkConsent?: boolean;
+  costConfirmed?: boolean;
+  priceSnapshot?: PriceSnapshot | null;
+};
+
+export type ExternalUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
+export type CostBreakdown = {
+  inputTokens: number;
+  outputTokens: number;
+  inputCostUsd: number;
+  outputCostUsd: number;
+  totalCostUsd: number;
+};
+
+export type CostDecision = "allow" | "confirmation_required" | "ceiling_exceeded";
+
+export type ExternalCostEvidence = {
+  priceSnapshot: PriceSnapshot;
+  estimated: CostBreakdown;
+  actual: CostBreakdown;
+  preflightDecision: CostDecision;
+  finalDecision: CostDecision;
+};
+
+export type ExternalGenerationResult = {
+  providerId: ExternalProviderId;
+  requestedModel: string;
+  providerModel: string;
+  identityConfidence: IdentityConfidence;
+  text: string;
+  usage: ExternalUsage;
+  networkUsed: boolean;
+  cost: ExternalCostEvidence;
 };
 
 export type RunRecord = {
@@ -60,11 +157,13 @@ export type ImmutableResultReference = {
 
 export type ObjectiveVerificationEvidence = {
   passed: boolean;
-  verifierKind: "exact_text";
+  verifierKind: "exact_text" | "numeric_tolerance" | "json_schema" | "required_fields" | "classification" | "safe_pattern";
   expectedNormalizedByteCount: number;
   actualNormalizedByteCount: number;
   expectedSha256: string;
   actualSha256: string;
+  reason?: string;
+  details?: Record<string, unknown>;
 };
 
 export type BlindEvaluationStatus = "empty" | "prepared" | "locked";
@@ -131,6 +230,7 @@ export type OfficialPackExecution = {
   status: "available" | "unavailable";
   requiresSandbox: boolean;
   sandboxStatus: "not_required" | "unavailable";
+  executionBoundary: "text_generation" | "docker_required";
   evaluationMode: "objective" | "human_rubric" | "mixed";
   requirement: string;
   notes: string | null;
@@ -151,6 +251,55 @@ export type OfficialPackSummary = {
 export type OfficialPackDocument = {
   summary: OfficialPackSummary;
   documentJson: string;
+};
+
+export type SaveOutcome = "saved" | "already_present";
+
+export type OfficialPackMaterialization = {
+  materializationId: string;
+  materializedContentHash: string;
+  summary: OfficialPackSummary;
+  seed: number;
+  caseCount: number;
+  taskCount: number;
+  documentJson: string;
+  savedOutcome: SaveOutcome;
+};
+
+export type ArenaExecutionEvidence = {
+  competitorId: string;
+  competitorLabel: string;
+  repetition: number;
+  runId: string;
+  attemptId: string | null;
+  status: string;
+  durationMs: number | null;
+  tokensPerSecond?: number | null;
+  completionTokens: number | null;
+  objectivePassed: boolean | null;
+};
+
+export type ArenaSummaryPayload = {
+  arenaId: string;
+  benchmarkVersionId: string;
+  taskId: string;
+  caseId: string;
+  repetitions: number;
+  packId: string | null;
+  materializationSeed: number | null;
+  summary: Record<string, unknown>;
+  competitors: Array<Record<string, unknown>>;
+  evidence: ArenaExecutionEvidence[];
+};
+
+export type ArenaSummaryRecord = ArenaSummaryPayload & {
+  contentHash: string;
+  createdAt: string;
+};
+
+export type SavedArenaSummary = {
+  record: ArenaSummaryRecord;
+  saveOutcome: SaveOutcome;
 };
 
 export type BenchmarkDraftSummary = {
@@ -230,6 +379,15 @@ export type RunPlan = {
   generation: GenerationRequest;
   runtimeConfig: OllamaConfig;
   objectiveExpectation: string | null;
+  verifierPolicy: ObjectiveVerifierPolicy | null;
+  executionBoundary: ExecutionBoundary;
+  metadata: Record<string, unknown>;
+};
+
+export type ExecutionBoundary = {
+  kind: "text_generation" | "docker_required";
+  status: "available" | "unavailable";
+  reason: string | null;
 };
 
 export type AttemptRecord = {
@@ -257,7 +415,15 @@ export type PersistedExecution = {
   run: RunRecord;
   attempt: AttemptRecord;
   progress: ProgressEvent[];
-  saveOutcome: "saved" | "already_present";
+  saveOutcome: SaveOutcome;
+};
+
+export type AttemptResponse = {
+  attemptId: string;
+  runId: string;
+  text: string;
+  byteCount: number;
+  sha256: string;
 };
 
 export type ProfileRevision = {
@@ -273,7 +439,7 @@ export type ProfileRevision = {
 
 export type ProfileRevisionRegistration = {
   profileRevisionId: string;
-  saveOutcome: "saved" | "already_present";
+  saveOutcome: SaveOutcome;
 };
 
 export type ModelInfo = {
@@ -286,6 +452,108 @@ export type ModelInfo = {
   quantizationLevel: string | null;
   contextLength: number | null;
   metadata: Record<string, unknown>;
+};
+
+export type ModelBackend = "ollama" | "lm_studio" | "llama_cpp";
+export type ModelSourceStatus = "available" | "unavailable" | "error";
+export type ModelAvailability = "available" | "unavailable" | "removed";
+
+export type ModelRecord = {
+  modelId: string;
+  sourceId: string;
+  backend: ModelBackend;
+  name: string;
+  endpoint: string | null;
+  path: string | null;
+  availability: ModelAvailability;
+  digest: string | null;
+  contentHash: string | null;
+  sizeBytes: number | null;
+  family: string | null;
+  parameterSize: string | null;
+  quantizationLevel: string | null;
+  contextLength: number | null;
+  modifiedAt: string | null;
+  managed: boolean;
+  managedPath: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ModelSourceConfig = {
+  backend: ModelBackend;
+  label?: string | null;
+  endpoint?: string | null;
+  path?: string | null;
+};
+
+export type ModelDiscoveryRequest = {
+  sources: ModelSourceConfig[];
+  query?: string | null;
+};
+
+export type ModelDuplicateGroup = {
+  groupId: string;
+  digest: string | null;
+  contentHash: string | null;
+  modelIds: string[];
+};
+
+export type ModelSource = {
+  sourceId: string;
+  backend: ModelBackend;
+  label: string;
+  endpoint: string | null;
+  path: string | null;
+  status: ModelSourceStatus;
+  message: string | null;
+  models: ModelRecord[];
+};
+
+export type ModelCatalog = {
+  generatedAt: string;
+  sources: ModelSource[];
+  models: ModelRecord[];
+  duplicateGroups: ModelDuplicateGroup[];
+};
+
+export type ModelOperationKind = "download" | "import" | "remove";
+export type ModelOperationStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+export type ModelOperation = {
+  operationId: string;
+  kind: ModelOperationKind;
+  backend: ModelBackend;
+  sourceId: string | null;
+  modelName: string | null;
+  modelId: string | null;
+  managedPath: string | null;
+  status: ModelOperationStatus;
+  bytesTotal: number | null;
+  bytesCompleted: number;
+  progressPercent: number | null;
+  contentHash: string | null;
+  message: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ModelImportRequest = {
+  sourcePath: string;
+};
+
+export type ModelOperationRequest =
+  | { kind: "download"; operationId: string; endpoint: string; modelName: string }
+  | { kind: "import"; operationId: string; sourcePath: string }
+  | { kind: "remove"; operationId: string; modelId: string };
+
+export type ModelRemovalEvidence = {
+  removalId: string;
+  modelId: string;
+  backend: ModelBackend;
+  managedPath: string;
+  contentHash: string;
+  removedAt: string;
+  outcome: string;
 };
 
 export type OllamaStartStatus = "already_running" | "running";
@@ -351,6 +619,51 @@ export async function readAppStatus(): Promise<AppStatus> {
   return invokeDesktop<AppStatus>("app_status", "The local app status command could not be reached.");
 }
 
+export async function readExternalProviders(): Promise<ExternalProviderMetadata[]> {
+  return invokeDesktop<ExternalProviderMetadata[]>(
+    "list_external_providers",
+    "The external provider metadata could not be reached.",
+  );
+}
+
+export async function configureExternalProvider(
+  request: ConfigureProviderRequest,
+): Promise<ExternalProviderMetadata> {
+  return invokeDesktop<ExternalProviderMetadata>(
+    "configure_external_provider",
+    "The external provider could not be configured.",
+    { request },
+  );
+}
+
+export async function updateExternalCostPolicy(
+  request: UpdateProviderCostPolicyRequest,
+): Promise<ExternalProviderMetadata> {
+  return invokeDesktop<ExternalProviderMetadata>(
+    "update_external_cost_policy",
+    "The external provider cost policy could not be updated.",
+    { request },
+  );
+}
+
+export async function removeExternalProvider(providerId: ExternalProviderId): Promise<boolean> {
+  return invokeDesktop<boolean>(
+    "remove_external_provider",
+    "The external provider could not be removed.",
+    { providerId },
+  );
+}
+
+export async function executeExternalGeneration(
+  request: ExternalGenerationRequest,
+): Promise<ExternalGenerationResult> {
+  return invokeDesktop<ExternalGenerationResult>(
+    "execute_external_generation",
+    "The external provider generation could not be executed.",
+    { request },
+  );
+}
+
 export async function readRuns(): Promise<RunRecord[]> {
   if (!isDesktopEnvironment()) throw new Error("Runs are available only in the local desktop workspace.");
   return invokeDesktop<RunRecord[]>("list_runs", "The local run history could not be reached.");
@@ -362,6 +675,15 @@ export async function readRunAttempts(runId: string): Promise<AttemptRecord[]> {
     "list_run_attempts",
     "The selected run attempts could not be reached.",
     { runId },
+  );
+}
+
+export async function readAttemptResponse(runId: string, attemptId: string): Promise<AttemptResponse | null> {
+  if (!isDesktopEnvironment()) throw new Error("Attempt responses are available only in the local desktop workspace.");
+  return invokeDesktop<AttemptResponse | null>(
+    "read_attempt_response",
+    "The selected response artifact could not be read.",
+    { runId, attemptId },
   );
 }
 
@@ -413,6 +735,37 @@ export async function readOfficialPack(packId: string): Promise<OfficialPackDocu
     "get_official_pack",
     "The selected official benchmark pack could not be reached.",
     { packId },
+  );
+}
+
+export async function materializeOfficialPack(packId: string, seed: number): Promise<OfficialPackMaterialization> {
+  return invokeDesktop<OfficialPackMaterialization>(
+    "materialize_official_pack",
+    "The selected official benchmark pack could not be materialized.",
+    { packId, seed },
+  );
+}
+
+export async function saveArenaSummary(summary: ArenaSummaryPayload): Promise<SavedArenaSummary> {
+  return invokeDesktop<SavedArenaSummary>(
+    "save_arena_summary",
+    "The Arena summary could not be saved.",
+    { summary },
+  );
+}
+
+export async function readArenaSummaries(): Promise<ArenaSummaryRecord[]> {
+  return invokeDesktop<ArenaSummaryRecord[]>(
+    "list_arena_summaries",
+    "The Arena summaries could not be reached.",
+  );
+}
+
+export async function readArenaSummary(arenaId: string): Promise<ArenaSummaryRecord | null> {
+  return invokeDesktop<ArenaSummaryRecord | null>(
+    "get_arena_summary",
+    "The selected Arena summary could not be reached.",
+    { arenaId },
   );
 }
 
@@ -477,6 +830,60 @@ export async function registerProfileRevision(
     "register_profile_revision",
     "The local profile revision could not be registered.",
     { revision },
+  );
+}
+
+export async function readModelCatalog(request: ModelDiscoveryRequest): Promise<ModelCatalog> {
+  return invokeDesktop<ModelCatalog>(
+    "discover_local_models",
+    "The local model catalog could not be reached.",
+    { request },
+  );
+}
+
+export async function importManagedGgufModel(request: ModelImportRequest): Promise<ModelRecord> {
+  return invokeDesktop<ModelRecord>(
+    "import_managed_gguf_model",
+    "The managed GGUF model could not be imported.",
+    { request },
+  );
+}
+
+export async function startModelOperation(request: ModelOperationRequest): Promise<ModelOperation> {
+  return invokeDesktop<ModelOperation>(
+    "start_model_operation",
+    "The model operation could not be started.",
+    { request },
+  );
+}
+
+export async function readModelOperations(): Promise<ModelOperation[]> {
+  return invokeDesktop<ModelOperation[]>(
+    "list_model_operations",
+    "The local model operations could not be reached.",
+  );
+}
+
+export async function readModelOperation(operationId: string): Promise<ModelOperation | null> {
+  return invokeDesktop<ModelOperation | null>(
+    "get_model_operation",
+    "The selected model operation could not be reached.",
+    { operationId },
+  );
+}
+
+export async function cancelModelOperation(operationId: string): Promise<void> {
+  return invokeDesktop<void>(
+    "cancel_model_operation",
+    "The model operation could not be cancelled.",
+    { operationId },
+  );
+}
+
+export async function readModelRemovals(): Promise<ModelRemovalEvidence[]> {
+  return invokeDesktop<ModelRemovalEvidence[]>(
+    "list_model_removals",
+    "The local model removal audit could not be reached.",
   );
 }
 

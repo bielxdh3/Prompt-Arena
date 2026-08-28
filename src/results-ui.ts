@@ -46,7 +46,7 @@ export function objectiveVerificationEvidence(value: unknown): ObjectiveVerifica
   const expectedSha256 = candidate.expectedSha256;
   const actualSha256 = candidate.actualSha256;
   if (
-    candidate.verifierKind !== "exact_text" ||
+    !isVerifierKind(candidate.verifierKind) ||
     typeof passed !== "boolean" ||
     !nonNegativeSafeInteger(expectedNormalizedByteCount) ||
     !nonNegativeSafeInteger(actualNormalizedByteCount) ||
@@ -55,12 +55,27 @@ export function objectiveVerificationEvidence(value: unknown): ObjectiveVerifica
   ) return null;
   return {
     passed,
-    verifierKind: "exact_text",
+    verifierKind: candidate.verifierKind,
     expectedNormalizedByteCount,
     actualNormalizedByteCount,
     expectedSha256,
     actualSha256,
+    ...(typeof candidate.reason === "string" ? { reason: candidate.reason } : {}),
+    ...(isRecord(candidate.details) ? { details: candidate.details } : {}),
   };
+}
+
+function isVerifierKind(value: unknown): value is ObjectiveVerificationEvidence["verifierKind"] {
+  return value === "exact_text"
+    || value === "numeric_tolerance"
+    || value === "json_schema"
+    || value === "required_fields"
+    || value === "classification"
+    || value === "safe_pattern";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function nonNegativeSafeInteger(value: unknown): value is number {

@@ -123,7 +123,7 @@ describe("bounded run-plan contract", () => {
     })).toThrow("Objective expectation");
   });
 
-  it("rejects malformed identities, missing selections, and multiple repetitions", () => {
+  it("rejects malformed identities, missing selections, and unsafe repetition bounds", () => {
     expect(() => buildRunPlan(input({ runId: "../run-1" }))).toThrow("Run ID");
     expect(() => buildRunPlan(input({ taskId: "missing" }))).toThrow("task identity");
     expect(() => buildRunPlan(input({ caseId: "missing" }))).toThrow("case identity");
@@ -136,9 +136,9 @@ describe("bounded run-plan contract", () => {
     expect(() => buildRunPlan({
       ...input(),
       version: versionWithDocument((document) => {
-        document.benchmarkVersion.defaultRepetitions = 2;
+        document.benchmarkVersion.defaultRepetitions = 11;
       }),
-    })).toThrow("exactly one repetition");
+    })).toThrow("between one and ten");
   });
 
   it("rejects empty prompts and profile identity/model violations", () => {

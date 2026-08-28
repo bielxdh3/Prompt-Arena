@@ -1,21 +1,266 @@
 import { describe, expect, it } from "vitest";
-import type { HardwareSnapshot, ModelInfo } from "./bridge";
+import type {
+  HardwareSnapshot,
+  ModelCatalog,
+  ModelDuplicateGroup,
+  ModelInfo,
+  ModelOperation,
+  ModelRecord,
+} from "./bridge";
 import {
   boundedRecommendationThresholds,
+  buildDownloadModelOperationRequest,
+  buildImportModelOperationRequest,
+  buildRemoveModelOperationRequest,
   classifyModelRecommendation,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
   EMPTY_PROFILE_FORM,
+  filterModelCatalog,
   hardwarePreviewCopy,
+  isActiveModelOperation,
+  modelBackendLabel,
+  modelDuplicateEvidenceLabel,
+  modelDuplicateGroupLabel,
   modelEmptyCopy,
   modelMetadataLabel,
+  modelOperationProgressLabel,
+  modelOperationStatusLabel,
   modelPreviewCopy,
+  modelRecordMetadataValue,
+  modelRecordQuantizationLabel,
+  modelSourceStatusLabel,
   profilePreviewCopy,
   profileRevisionFromForm,
   profileRevisionIdPreview,
   stableProfileRevisionId,
+  validateLoopbackEndpoint,
+  validateManagedGgufPath,
 } from "./model-library";
 
+function modelRecord(overrides: Partial<ModelRecord> = {}): ModelRecord {
+  return {
+    modelId: "model-q4",
+    sourceId: "ollama-source",
+    backend: "ollama",
+    name: "local-model",
+    endpoint: "http://127.0.0.1:11434",
+    path: null,
+    availability: "available",
+    digest: "sha256:model",
+    contentHash: null,
+    sizeBytes: 4_000,
+    family: "llama",
+    parameterSize: "7B",
+    quantizationLevel: "Q4_K_M",
+    contextLength: 8_192,
+    modifiedAt: null,
+    managed: false,
+    managedPath: null,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+function modelCatalog(models: ModelRecord[], duplicateGroups: ModelDuplicateGroup[] = []): ModelCatalog {
+  return {
+    generatedAt: "2026-08-27T00:00:00Z",
+    sources: [
+      {
+        sourceId: "ollama-source",
+        backend: "ollama",
+        label: "Ollama",
+        endpoint: "http://127.0.0.1:11434",
+        path: null,
+        status: "available",
+        message: null,
+        models: models.filter((model) => model.sourceId === "ollama-source"),
+      },
+      {
+        sourceId: "research-source",
+        backend: "lm_studio",
+        label: "Research LM Studio",
+        endpoint: "http://127.0.0.1:1234",
+        path: null,
+        status: "available",
+        message: null,
+        models: models.filter((model) => model.sourceId === "research-source"),
+      },
+      {
+        sourceId: "managed-source",
+        backend: "llama_cpp",
+        label: "Managed GGUF",
+        endpoint: null,
+        path: "models/local.gguf",
+        status: "available",
+        message: null,
+        models: models.filter((model) => model.sourceId === "managed-source"),
+      },
+    ],
+    models,
+    duplicateGroups,
+  };
+}
+
+function modelOperation(overrides: Partial<ModelOperation> = {}): ModelOperation {
+  return {
+    operationId: "operation-1",
+    kind: "download",
+    backend: "ollama",
+    sourceId: "ollama-source",
+    modelName: "local-model",
+    modelId: null,
+    managedPath: null,
+    status: "running",
+    bytesTotal: 2_048,
+    bytesCompleted: 1_024,
+    progressPercent: 50,
+    contentHash: null,
+    message: null,
+    createdAt: "2026-08-27T00:00:00Z",
+    updatedAt: "2026-08-27T00:00:01Z",
+    ...overrides,
+  };
+}
+
 describe("model library profile boundary", () => {
+  it("filters the unified catalog by model and source labels", () => {
+    const ollama = modelRecord({ modelId: "ollama-q4", name: "Qwen 7B" });
+    const lmStudio = modelRecord({
+      modelId: "lm-q8",
+      sourceId: "research-source",
+      backend: "lm_studio",
+      endpoint: "http://127.0.0.1:1234",
+      name: "Mistral 7B",
+      quantizationLevel: "Q8_0",
+    });
+    const catalog = modelCatalog([ollama, lmStudio]);
+
+    expect(filterModelCatalog(catalog, "research")).toEqual([lmStudio]);
+    expect(filterModelCatalog(catalog, "lm studio")).toEqual([lmStudio]);
+    expect(filterModelCatalog(catalog, "q8_0")).toEqual([lmStudio]);
+    expect(filterModelCatalog(catalog, "")).toEqual([ollama, lmStudio]);
+    expect(modelBackendLabel("lm_studio")).toBe("LM Studio");
+    expect(modelSourceStatusLabel("unavailable")).toBe("Unavailable");
+  });
+
+  it("keeps loopback endpoints and managed GGUF paths bounded", () => {
+    expect(validateLoopbackEndpoint(" http://[::1]:8080 ")).toBe("http://[::1]:8080");
+    expect(validateLoopbackEndpoint("http://localhost:11434")).toBe("http://localhost:11434");
+    expect(validateManagedGgufPath(" nested/model.GGUF ")).toBe("nested/model.GGUF");
+
+    for (const endpoint of [
+      "https://127.0.0.1:11434",
+      "http://192.168.1.20:11434",
+      "http://user:pass@127.0.0.1:11434",
+      "http://127.0.0.1:11434/?remote=true",
+      "http://127.0.0.1:0",
+    ]) {
+      expect(() => validateLoopbackEndpoint(endpoint)).toThrow();
+    }
+    for (const path of ["../model.gguf", "C:/model.gguf", "/model.gguf", "nested\\model.gguf", "model.bin"]) {
+      expect(() => validateManagedGgufPath(path)).toThrow();
+    }
+  });
+
+  it("builds bounded download, import, and managed removal requests", () => {
+    const ollama = modelRecord({ name: "Qwen 7B", endpoint: " http://127.0.0.1:11434 " });
+    expect(buildDownloadModelOperationRequest(" download-1 ", ollama)).toEqual({
+      kind: "download",
+      operationId: "download-1",
+      endpoint: "http://127.0.0.1:11434",
+      modelName: "Qwen 7B",
+    });
+
+    expect(buildImportModelOperationRequest("import-1", "models/qwen.gguf")).toEqual({
+      kind: "import",
+      operationId: "import-1",
+      sourcePath: "models/qwen.gguf",
+    });
+
+    const managed = modelRecord({
+      modelId: "managed-q4",
+      sourceId: "managed-source",
+      backend: "llama_cpp",
+      endpoint: null,
+      path: "models/qwen.gguf",
+      managed: true,
+      managedPath: "models/qwen.gguf",
+    });
+    expect(buildRemoveModelOperationRequest("remove-1", managed)).toEqual({
+      kind: "remove",
+      operationId: "remove-1",
+      modelId: "managed-q4",
+    });
+
+    expect(() => buildDownloadModelOperationRequest("download-2", managed)).toThrow();
+    expect(() => buildRemoveModelOperationRequest("remove-2", ollama)).toThrow();
+    expect(() => buildRemoveModelOperationRequest("remove-3", { ...managed, managedPath: "../qwen.gguf" })).toThrow();
+  });
+
+  it("keeps duplicate evidence and quantization variants distinct", () => {
+    const ollamaQ4 = modelRecord({ modelId: "ollama-q4", name: "Qwen 7B" });
+    const lmStudioQ4 = modelRecord({
+      modelId: "lm-q4",
+      sourceId: "research-source",
+      backend: "lm_studio",
+      endpoint: "http://127.0.0.1:1234",
+      name: "Qwen 7B",
+    });
+    const llamaQ8 = modelRecord({
+      modelId: "llama-q8",
+      sourceId: "managed-source",
+      backend: "llama_cpp",
+      endpoint: null,
+      path: "models/qwen-q8.gguf",
+      quantizationLevel: "Q8_0",
+      managed: true,
+      managedPath: "models/qwen-q8.gguf",
+    });
+    const duplicateGroup: ModelDuplicateGroup = {
+      groupId: "duplicate-1",
+      digest: "sha256:shared",
+      contentHash: null,
+      modelIds: [ollamaQ4.modelId, lmStudioQ4.modelId],
+    };
+    const catalog = modelCatalog([ollamaQ4, lmStudioQ4, llamaQ8], [duplicateGroup]);
+
+    expect(filterModelCatalog(catalog, "")).toHaveLength(3);
+    expect(filterModelCatalog(catalog, "q8_0")).toEqual([llamaQ8]);
+    expect(modelRecordQuantizationLabel(ollamaQ4)).toBe("Q4_K_M");
+    expect(modelRecordQuantizationLabel(llamaQ8)).toBe("Q8_0");
+    expect(modelDuplicateGroupLabel(duplicateGroup, catalog.models)).toContain("Q4_K_M");
+    expect(modelDuplicateGroupLabel(duplicateGroup, catalog.models)).not.toContain("Q8_0");
+    expect(modelDuplicateEvidenceLabel(duplicateGroup)).toBe("Digest sha256:share…");
+  });
+
+  it("shows normalized optional metadata and explicit unknown values", () => {
+    const model = modelRecord({
+      metadata: {
+        format: "gguf",
+        license: "Apache-2.0",
+        source: "Hugging Face",
+        location: "models/qwen.gguf",
+        nested: { value: true },
+      },
+    });
+    expect(modelRecordMetadataValue(model, "format")).toBe("gguf");
+    expect(modelRecordMetadataValue(model, "license")).toBe("Apache-2.0");
+    expect(modelRecordMetadataValue(model, "source")).toBe("Hugging Face");
+    expect(modelRecordMetadataValue(model, "location")).toBe("models/qwen.gguf");
+    expect(modelRecordMetadataValue(modelRecord(), "format")).toBe("Not reported");
+    expect(modelRecordMetadataValue(modelRecord(), "license")).toBe("Not reported");
+    expect(modelRecordMetadataValue(modelRecord({ metadata: { format: { kind: "gguf" } } }), "format")).toBe("Not reported");
+  });
+
+  it("labels persisted operation progress without guessing missing values", () => {
+    expect(modelOperationProgressLabel(modelOperation({ progressPercent: 42 }))).toBe("42%");
+    expect(modelOperationProgressLabel(modelOperation({ progressPercent: null, bytesCompleted: 512, bytesTotal: 2_048 }))).toBe("512 / 2048 bytes");
+    expect(modelOperationProgressLabel(modelOperation({ status: "queued", progressPercent: null, bytesCompleted: 0, bytesTotal: null }))).toBe("Queued");
+    expect(modelOperationStatusLabel("cancelled")).toBe("Cancelled");
+    expect(isActiveModelOperation(modelOperation({ status: "running" }))).toBe(true);
+    expect(isActiveModelOperation(modelOperation({ status: "completed" }))).toBe(false);
+  });
+
   it("derives immutable profile revision identity and fixed runtime", () => {
     const revision = profileRevisionFromForm({
       profileId: " local-default ",

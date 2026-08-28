@@ -246,3 +246,10 @@ be replayed idempotently, while conflicting run, attempt, result, artifact, path
 rejected. Run listings and attempt reads are local, deterministically ordered, and reject empty/path-like IDs. Browser
 preview reads no app store and never executes a model. Full model-library management, cross-runtime grouping,
 recommendations, downloads, and deletion remain planned.
+## Completion Arena composition
+
+The completion UI composes multiple existing immutable `RunPlan` values rather than mutating profile revisions or
+benchmark versions. Every competitor/repetition is persisted as its own immutable `Run`/`Attempt` pair with a unique run
+identity. `src/arena-runner.ts` retains the Arena grouping in memory for comparison and export; an aggregate Arena table
+is intentionally still a future migration. Response text is retrieved only through the verified `read_attempt_response`
+command and is never copied into metadata or exports as a filesystem path.

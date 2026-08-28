@@ -115,6 +115,7 @@ fn handle_foundation_request(
 fn worker_error_code(error: &OrchestrationError) -> WorkerErrorCode {
     match error {
         OrchestrationError::InvalidPlan(_) => WorkerErrorCode::InvalidPlan,
+        OrchestrationError::ExecutionBlocked(_) => WorkerErrorCode::RuntimeUnavailable,
         OrchestrationError::InvalidResponseSummary(_) => WorkerErrorCode::InvalidPlan,
         OrchestrationError::UnsupportedRuntime(_) => WorkerErrorCode::RuntimeUnavailable,
         OrchestrationError::Runtime(_) => WorkerErrorCode::RuntimeUnavailable,
@@ -125,6 +126,9 @@ fn worker_error_code(error: &OrchestrationError) -> WorkerErrorCode {
 fn worker_error_message(error: &OrchestrationError) -> &'static str {
     match error {
         OrchestrationError::InvalidPlan(_) => "one-shot run plan is invalid",
+        OrchestrationError::ExecutionBlocked(_) => {
+            "the requested execution boundary is unavailable"
+        }
         OrchestrationError::InvalidResponseSummary(_) => "response summary is invalid",
         OrchestrationError::UnsupportedRuntime(_) => "requested runtime is unavailable",
         OrchestrationError::Runtime(_) => "runtime could not be configured",

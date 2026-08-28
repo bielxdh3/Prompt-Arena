@@ -2,7 +2,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     thread,
     time::Duration,
 };
@@ -12,21 +12,38 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::{
     domain::{
-        validate_benchmark_document as validate_document,
+        sha256_hex, validate_benchmark_document as validate_document,
         validate_benchmark_document_size as validate_document_size, Attempt,
         BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord,
-        ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+        ModelCatalog, ModelDiscoveryRequest, ModelImportRequest, ModelOperation, ModelRecord,
+        ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
     },
     evaluation::{
         get_blind_evaluation as get_blind_evaluation_record,
         lock_blind_evaluation as lock_blind_evaluation_record,
         prepare_blind_evaluation as prepare_blind_evaluation_record, BlindEvaluationError,
     },
+    external_providers::{
+        configure_external_provider as configure_external_provider_record,
+        execute_external_generation as execute_external_generation_record,
+        list_external_providers as list_external_provider_records,
+        remove_external_provider as remove_external_provider_record,
+        update_external_cost_policy as update_external_cost_policy_record,
+        ConfigureProviderRequest, ExternalGenerationRequest, ExternalGenerationResult,
+        ExternalProviderError, ExternalProviderId, ExternalProviderMetadata, OsCredentialBackend,
+        UpdateProviderCostPolicyRequest,
+    },
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
+    model_library::{
+        discover_local_models as discover_local_models_backend,
+        import_managed_gguf_model as import_managed_gguf_model_backend, ModelLibraryError,
+        ModelOperationController, ModelOperationRequest,
+    },
     official_packs::{
         get_official_pack as get_official_pack_record,
-        list_official_packs as list_official_pack_records, OfficialPackDocument, OfficialPackError,
-        OfficialPackSummary,
+        list_official_packs as list_official_pack_records,
+        materialize_official_pack as materialize_official_pack_record, OfficialPackDocument,
+        OfficialPackError, OfficialPackMaterialization, OfficialPackSummary,
     },
     ollama::{OllamaConfig, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     orchestration::{
@@ -38,9 +55,9 @@ use crate::{
     },
     runtime::{ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
-        now_marker, BenchmarkDraft, BenchmarkDraftInput, BenchmarkDraftSummary, BenchmarkVersion,
-        BenchmarkVersionSummary, StorageError, StorageService, MAX_DRAFT_REQUEST_BYTES,
-        MAX_PROFILE_REQUEST_BYTES,
+        now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
+        BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary, StorageError,
+        StorageService, MAX_DRAFT_REQUEST_BYTES, MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -70,6 +87,13 @@ pub struct SavedBenchmarkVersion {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SavedArenaSummary {
+    pub record: ArenaSummaryRecord,
+    pub save_outcome: crate::storage::SaveOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandError {
     pub code: &'static str,
     pub message: String,
@@ -88,6 +112,11 @@ const OLLAMA_START_RETRIES: usize = 20;
 const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
+static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
+
+fn model_operation_controller() -> &'static ModelOperationController {
+    MODEL_OPERATION_CONTROLLER.get_or_init(ModelOperationController::default)
+}
 
 impl From<ValidationError> for CommandError {
     fn from(error: ValidationError) -> Self {
@@ -161,10 +190,28 @@ impl From<RuntimeError> for CommandError {
     }
 }
 
+impl From<ModelLibraryError> for CommandError {
+    fn from(error: ModelLibraryError) -> Self {
+        match error {
+            ModelLibraryError::InvalidRequest(message) => Self {
+                code: "model_request_invalid",
+                message,
+            },
+            ModelLibraryError::GgufImport(message) => Self {
+                code: "model_import_invalid",
+                message,
+            },
+            ModelLibraryError::Runtime(error) => error.into(),
+            ModelLibraryError::Storage(error) => error.into(),
+        }
+    }
+}
+
 impl From<OrchestrationError> for CommandError {
     fn from(error: OrchestrationError) -> Self {
         let code = match &error {
             OrchestrationError::InvalidPlan(_) => "run_plan_invalid",
+            OrchestrationError::ExecutionBlocked(_) => "execution_blocked",
             OrchestrationError::InvalidResponseSummary(_) => "response_summary_invalid",
             OrchestrationError::UnsupportedRuntime(_) => "runtime_unsupported",
             OrchestrationError::Runtime(_) => "runtime_failed",
@@ -195,6 +242,9 @@ impl From<BlindEvaluationError> for CommandError {
 
 impl From<OfficialPackError> for CommandError {
     fn from(error: OfficialPackError) -> Self {
+        if let OfficialPackError::Storage(storage_error) = &error {
+            return storage_error.clone().into();
+        }
         Self {
             code: if matches!(
                 error,
@@ -212,12 +262,75 @@ impl From<OfficialPackError> for CommandError {
     }
 }
 
+impl From<ExternalProviderError> for CommandError {
+    fn from(error: ExternalProviderError) -> Self {
+        let code = match error {
+            ExternalProviderError::UnsupportedPlatform => "provider_storage_unsupported",
+            ExternalProviderError::SecureStorageUnavailable => "provider_storage_unavailable",
+            ExternalProviderError::SecureStorageError => "provider_storage_error",
+            ExternalProviderError::NotConfigured => "provider_not_configured",
+            ExternalProviderError::InvalidConfiguration => "provider_configuration_invalid",
+            ExternalProviderError::InvalidCredential => "provider_credential_invalid",
+            ExternalProviderError::NetworkConsentRequired => "provider_network_consent_required",
+            ExternalProviderError::RequestTooLarge => "provider_request_too_large",
+            ExternalProviderError::ResponseTooLarge => "provider_response_too_large",
+            ExternalProviderError::Timeout => "provider_timeout",
+            ExternalProviderError::Transport => "provider_transport",
+            ExternalProviderError::Authentication => "provider_authentication",
+            ExternalProviderError::Remote { .. } => "provider_remote",
+            ExternalProviderError::MalformedResponse => "provider_malformed_response",
+            ExternalProviderError::UnsupportedParameter => "provider_unsupported_parameter",
+            ExternalProviderError::MissingUsage => "provider_missing_usage",
+            ExternalProviderError::InvalidUsage => "provider_invalid_usage",
+            ExternalProviderError::MissingPrice => "provider_missing_price",
+            ExternalProviderError::InvalidPrice => "provider_invalid_price",
+            ExternalProviderError::ConfirmationRequired => "provider_confirmation_required",
+            ExternalProviderError::BudgetCeilingExceeded => "provider_budget_ceiling_exceeded",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
 #[tauri::command]
 pub fn validate_benchmark_document(
     document: String,
 ) -> Result<BenchmarkValidationSummary, CommandError> {
     let validated = validate_document(&document)?;
     Ok(validation_summary(&validated))
+}
+
+#[tauri::command]
+pub fn list_external_providers() -> Vec<ExternalProviderMetadata> {
+    list_external_provider_records(&OsCredentialBackend)
+}
+
+#[tauri::command]
+pub fn configure_external_provider(
+    request: ConfigureProviderRequest,
+) -> Result<ExternalProviderMetadata, CommandError> {
+    configure_external_provider_record(&OsCredentialBackend, request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn update_external_cost_policy(
+    request: UpdateProviderCostPolicyRequest,
+) -> Result<ExternalProviderMetadata, CommandError> {
+    update_external_cost_policy_record(&OsCredentialBackend, request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn remove_external_provider(provider_id: ExternalProviderId) -> Result<bool, CommandError> {
+    remove_external_provider_record(&OsCredentialBackend, provider_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn execute_external_generation(
+    request: ExternalGenerationRequest,
+) -> Result<ExternalGenerationResult, CommandError> {
+    execute_external_generation_record(request).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -228,6 +341,44 @@ pub fn list_official_packs() -> Result<Vec<OfficialPackSummary>, CommandError> {
 #[tauri::command]
 pub fn get_official_pack(pack_id: String) -> Result<Option<OfficialPackDocument>, CommandError> {
     get_official_pack_record(&pack_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn materialize_official_pack(
+    app: AppHandle,
+    pack_id: String,
+    seed: u64,
+) -> Result<OfficialPackMaterialization, CommandError> {
+    materialize_official_pack_record(&storage_for(&app)?, &pack_id, seed).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn save_arena_summary(
+    app: AppHandle,
+    summary: ArenaSummaryPayload,
+) -> Result<SavedArenaSummary, CommandError> {
+    let (record, save_outcome) = storage_for(&app)?.save_arena_summary(&summary, &now_marker())?;
+    Ok(SavedArenaSummary {
+        record,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_arena_summaries(app: AppHandle) -> Result<Vec<ArenaSummaryRecord>, CommandError> {
+    storage_for(&app)?
+        .list_arena_summaries()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_arena_summary(
+    app: AppHandle,
+    arena_id: String,
+) -> Result<Option<ArenaSummaryRecord>, CommandError> {
+    storage_for(&app)?
+        .get_arena_summary(&arena_id)
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -367,6 +518,61 @@ pub fn list_profile_revisions(app: AppHandle) -> Result<Vec<ProfileRevision>, Co
 }
 
 #[tauri::command]
+pub fn discover_local_models(
+    app: AppHandle,
+    request: ModelDiscoveryRequest,
+) -> Result<ModelCatalog, CommandError> {
+    discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn import_managed_gguf_model(
+    app: AppHandle,
+    request: ModelImportRequest,
+) -> Result<ModelRecord, CommandError> {
+    import_managed_gguf_model_backend(&storage_for(&app)?, &request).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn start_model_operation(
+    app: AppHandle,
+    request: ModelOperationRequest,
+) -> Result<ModelOperation, CommandError> {
+    model_operation_controller()
+        .execute(&storage_for(&app)?, &request)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_model_operations(app: AppHandle) -> Result<Vec<ModelOperation>, CommandError> {
+    storage_for(&app)?
+        .list_model_operations()
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_model_operation(
+    app: AppHandle,
+    operation_id: String,
+) -> Result<Option<ModelOperation>, CommandError> {
+    storage_for(&app)?
+        .get_model_operation(&operation_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn cancel_model_operation(operation_id: String) -> Result<(), CommandError> {
+    model_operation_controller()
+        .cancel(&operation_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn list_model_removals(app: AppHandle) -> Result<Vec<ModelRemovalEvidence>, CommandError> {
+    storage_for(&app)?.list_model_removals().map_err(Into::into)
+}
+
+#[tauri::command]
 pub fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
     OllamaProvider::default_local()?
         .list_models()
@@ -465,6 +671,58 @@ pub fn list_run_attempts(app: AppHandle, run_id: String) -> Result<Vec<Attempt>,
     storage_for(&app)?
         .list_attempts(&run_id)
         .map_err(Into::into)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttemptResponse {
+    pub attempt_id: String,
+    pub run_id: String,
+    pub text: String,
+    pub byte_count: usize,
+    pub sha256: String,
+}
+
+const MAX_COMPARISON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Read one verified response artifact for comparison. The command accepts only an
+/// attempt that belongs to the supplied run and never exposes filesystem paths.
+#[tauri::command]
+pub fn read_attempt_response(
+    app: AppHandle,
+    run_id: String,
+    attempt_id: String,
+) -> Result<Option<AttemptResponse>, CommandError> {
+    let storage = storage_for(&app)?;
+    let attempt = storage
+        .list_attempts(&run_id)?
+        .into_iter()
+        .find(|candidate| candidate.attempt_id == attempt_id);
+    let Some(attempt) = attempt else {
+        return Ok(None);
+    };
+    if attempt.status != "completed" {
+        return Ok(None);
+    }
+    let Some(artifact) = attempt
+        .result
+        .as_ref()
+        .map(|result| result.artifact.clone())
+    else {
+        return Ok(None);
+    };
+    let response = storage.read_generation_response(&artifact, MAX_COMPARISON_RESPONSE_BYTES)?;
+    let text = response.text;
+    let bytes = text.as_bytes();
+    let byte_count = bytes.len();
+    let sha256 = sha256_hex(bytes);
+    Ok(Some(AttemptResponse {
+        attempt_id,
+        run_id,
+        text,
+        byte_count,
+        sha256,
+    }))
 }
 
 #[tauri::command]

@@ -1,0 +1,128 @@
+name: Desktop packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact commit, branch, or tag to package
+        required: true
+        default: main
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.platform }} installers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+          - platform: linux
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out exact ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Check repository boundaries
+        run: npm run check:boundaries
+
+      - name: Test boundary checker
+        run: npm run test:boundaries
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high
+
+      - name: Frontend validation
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential curl file wget libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgtk-3-dev libglib2.0-dev
+
+      - name: Rust validation
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Build mandatory Windows NSIS installer
+        if: runner.os == 'Windows'
+        run: npm run tauri:build -- --bundles nsis
+
+      - name: Attempt Windows MSI installer
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: npm run tauri:build -- --bundles msi
+
+      - name: Build Linux packages
+        if: runner.os == 'Linux'
+        run: npm run tauri:build -- --bundles deb,appimage
+
+      - name: Hash Windows installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package-artifacts | Out-Null
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $exe = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter '*-setup.exe' -File | Select-Object -First 1
+          if ($null -eq $exe) { throw 'No NSIS installer was produced.' }
+          Copy-Item $exe.FullName (Join-Path $PWD "package-artifacts/Prompt Arena Setup $version.exe")
+          $msi = Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -ne $msi) { Copy-Item $msi.FullName (Join-Path $PWD "package-artifacts/Prompt Arena $version.msi") }
+          $files = Get-ChildItem -Path package-artifacts -File
+          if ($files.Count -eq 0) { throw 'No Windows installers were produced.' }
+          $files | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash
+            "$hash  package-artifacts/$($_.Name)"
+          } | Set-Content checksums-sha256.txt
+
+      - name: Hash Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p package-artifacts
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          find src-tauri/target/release/bundle -type f \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} package-artifacts/ \;
+          mapfile -t files < <(find package-artifacts -type f \( -name '*.deb' -o -name '*.AppImage' \) -print)
+          test "${#files[@]}" -gt 0
+          sha256sum "${files[@]}" > checksums-sha256.txt
+
+      - name: Upload unsigned installers and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: prompt-arena-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/
+            package-artifacts/
+            checksums-sha256.txt
+          if-no-files-found: error
+          retention-days: 14
