@@ -99,7 +99,7 @@ export function stableProfileRevisionId(profileId: string, revision: number): st
   return `${identifier}@${revision}`;
 }
 
-export function profileRevisionFromForm(form: ProfileFormState): ProfileRevision {
+function profileRevisionBase(form: ProfileFormState): ProfileRevision {
   const profileId = validateIdentifier(form.profileId);
   const revision = validateRevision(form.revision);
   const model = validateModel(form.model);
@@ -112,6 +112,35 @@ export function profileRevisionFromForm(form: ProfileFormState): ProfileRevision
     parameters: {},
     systemPrompt: null,
   };
+}
+
+export function profileRevisionFromForm(form: ProfileFormState, model?: ModelRecord): ProfileRevision {
+  const base = profileRevisionBase(form);
+  if (!model) return base;
+
+  const endpoint = model.endpoint ? validateLoopbackEndpoint(model.endpoint) : null;
+  const path = model.path ? validateManagedGgufPath(model.path) : null;
+  if (model.backend !== "llama_cpp" && path !== null) {
+    throw new Error("Only llama.cpp profiles can carry a managed GGUF path.");
+  }
+  const identity = {
+    modelId: validateIdentifier(model.modelId),
+    sourceId: validateIdentifier(model.sourceId),
+    backend: model.backend,
+    endpoint,
+    path,
+    quantizationLevel: model.quantizationLevel,
+  };
+  return {
+    ...base,
+    model: validateModel(model.name),
+    runtime: model.backend,
+    ...identity,
+  };
+}
+
+export function profileRevisionFromModel(form: ProfileFormState, model: ModelRecord): ProfileRevision {
+  return profileRevisionFromForm(form, model);
 }
 
 export function profileRevisionIdPreview(form: ProfileFormState): string {
@@ -131,7 +160,7 @@ export function modelPreviewCopy(): string {
 }
 
 export function profileEmptyCopy(): string {
-  return "No immutable local profile revisions are registered yet. Registration uses the fixed Ollama runtime boundary.";
+  return "No immutable local profile revisions are registered yet. Select a discovered local model or enter a manual Ollama model.";
 }
 
 export function modelEmptyCopy(): string {
@@ -147,6 +176,20 @@ export function modelBackendLabel(backend: ModelBackend): string {
   if (backend === "lm_studio") return "LM Studio";
   if (backend === "llama_cpp") return "llama.cpp";
   return "Ollama";
+}
+
+export function modelDownloadCapabilityLabel(model: ModelRecord): string {
+  if (model.backend === "ollama") return "Download: supported through Ollama pull with progress and cancellation.";
+  if (model.backend === "lm_studio") return "Download: unsupported; LM Studio exposes no native download through this boundary.";
+  return "Download: unsupported; llama.cpp uses local GGUF import and no runtime download is invented.";
+}
+
+export function modelRemovalCapabilityLabel(model: ModelRecord): string {
+  if (model.backend === "llama_cpp" && model.managed && model.managedPath) {
+    return "Removal: supported for app-managed GGUF with audit evidence and active-operation guard.";
+  }
+  if (model.backend === "llama_cpp") return "Removal: unsupported; only app-managed GGUF files can be removed here.";
+  return `Removal: unsupported for ${modelBackendLabel(model.backend)}; use its official runtime mechanism.`;
 }
 
 export function modelSourceStatusLabel(status: ModelSourceStatus): string {
