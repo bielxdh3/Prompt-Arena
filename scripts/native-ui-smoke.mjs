@@ -157,7 +157,7 @@ function nativeSidecarPlan(runId) {
     caseId: "native-ui-smoke-case",
     profileRevision: {
       profileId: "native-ui-smoke-profile",
-      profileRevisionId: "native-ui-smoke-profile-r1",
+      profileRevisionId: "native-ui-smoke-profile@1",
       revision: 1,
       model: "prompt-arena-native-smoke-model-does-not-exist",
       runtime: "ollama",
