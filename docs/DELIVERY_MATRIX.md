@@ -1,51 +1,61 @@
 # Product completion evidence matrix
 
-This matrix is the closeout checkpoint for the product-completion mission. `Automated` means a local test or contract
-check; `Native QA` requires the real Tauri/WebView or installed package. No row is complete from a type or schema alone.
+Target: `completion/windows-qa-live-telemetry-i18n` at exact reviewed commit
+`be1007f99814f004e384abae6acd986e5bcaa521` (`be1007f`). `COMPLETE` means the
+local implementation and its automated evidence are present. Native Tauri and
+human gates remain `PENDING_HUMAN_QA`; environment/runtime failures are marked
+separately.
 
-The P2 implementation evidence below is present in commits `6c1eef9`, `b9ac2b4`, and `952293a`. P2 remains `IN PROGRESS`
-until the listed native Tauri/WebView and Docker-boundary checks pass.
+## Independent validation at `be1007f`
 
-| Roadmap requirement | Implementation | User-facing surface | Automated evidence | Native QA evidence | Status |
-| --- | --- | --- | --- | --- | --- |
-| Two or more competitors in one Arena | `src/arena-runner.ts`, `src/App.tsx` | Arena builder and comparison | `arena-runner.test.ts` | Required on installed app | IN PROGRESS |
-| Failure isolation and queued cancellation | `src/arena-runner.ts` | Arena progress/results | `arena-runner.test.ts` | Required with one deliberate failure | IN PROGRESS |
-| Live streaming/progress | existing worker progress plus Arena progress counts | Live Arena | Rust orchestration tests | Live event timing not yet tested | IN PROGRESS |
-| Blind evaluation and reveal | `src/App.tsx`, existing blind commands | Blind Evaluation panel | existing Rust evaluation tests + Arena tests | Required in Tauri | IN PROGRESS |
-| Objective verifiers | `src/objective-verifiers.ts`, `src/run-plan.ts`, `src-tauri/src/orchestration.rs`, `src-tauri/src/storage.rs` | Benchmark case policy and Arena objective evidence | `objective-verifiers.test.ts`, Rust objective-verification/persistence tests | Tauri persistence/reopen required | IN PROGRESS |
-| Repetition statistics | `src/arena-runner.ts`, `src/App.tsx` | Arena results and summary metrics | `arena-runner.test.ts` covers summary statistics; Rust summary replay covers persisted uncertainty/tie-margin fields | Native repetition run required | IN PROGRESS |
-| Persisted Arena summaries | `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src/App.tsx` | Arena results and Runs summary history | Rust `arena_summaries_are_immutable_replayable_and_listed` plus Arena tests | Tauri run/reopen/export smoke required | IN PROGRESS |
-| History and verified response reopen | `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src/App.tsx` | Runs, comparison, and Arena summary reload | Rust storage tests and command build | Installed restart/reopen required | IN PROGRESS |
-| JSON/Markdown/CSV exports | `src/arena-runner.ts`, `src/App.tsx` | Arena results | Arena export test | Installed save/open smoke required | IN PROGRESS |
-| Official packs | `packs/official`, `src-tauri/src/official_packs.rs`, `src-tauri/src/commands.rs`, `src/bridge.ts`, `src/App.tsx` | Benchmarks catalog, document inspection, and deterministic materialization | Rust catalog/materialization tests, TypeScript typecheck/build | Inspect/materialize each pack in Tauri | IN PROGRESS |
-| Docker-required execution boundary | `src-tauri/src/official_packs.rs`, `src/run-plan.ts`, `src/arena-ui.ts`, `src/App.tsx` | Programming-pack metadata and Arena preflight | Rust official-pack/orchestration boundary tests and boundary checks | Docker-boundary smoke required; Docker runtime remains unavailable | IN PROGRESS |
-| Ollama discovery/start | `ollama.rs`, `commands.rs`, `ModelsView` | Models | Rust adapter tests | Real Ollama smoke required | IN PROGRESS |
-| LM Studio | not yet wired | Models | None | Required | NOT IMPLEMENTED |
-| llama.cpp/GGUF | not yet wired | Models | None | Required | NOT IMPLEMENTED |
-| Downloads/removal/duplicates | not yet wired | Models | None | Required | NOT IMPLEMENTED |
-| Hardware/recommendations | `hardware.rs`, `model-library.ts` | Models | Rust + TS tests | Real hardware review required | IN PROGRESS |
-| Arena ranking | `src/arena-runner.ts`, `src/App.tsx` | Locked Arena results | ranking tests | Required in Tauri | IN PROGRESS |
-| Cross-run rankings/regression/tournament | not yet wired | Runs | comparability tests only | Required | NOT IMPLEMENTED |
-| AI judge/calibration | provider foundation only | Runs | None | Required | NOT IMPLEMENTED |
-| External BYOK/cost controls | provider foundation only | Settings | provider helper tests | Required | NOT IMPLEMENTED |
-| Appearance/accessibility | `appearance.ts`, `styles.css` | Settings | appearance tests | Native accessibility review required | IN PROGRESS |
-| Windows NSIS | Tauri bundle + workflow | Installer | local `tauri build` | Install/launch/uninstall required | ARTIFACT, QA PENDING |
-| Windows MSI | Tauri target + workflow | Installer | config check | local WiX `light.exe` failed | BLOCKED LOCALLY |
-| Linux deb/AppImage | Tauri target + workflow | Installer | workflow definition | Linux runner required | CI PENDING |
+- `npm run typecheck` — passed.
+- `npm test` — passed, 92 tests across the repository, including `src/i18n.test.ts`.
+- `npm run build` — passed.
+- `npm run check:boundaries` — passed.
+- Redirected `cargo test` — passed, 107 tests.
+- No source or documentation change is implied by these validation results; the
+  matrix records evidence for the reviewed worktree only.
 
-## Provenance
+| Roadmap requirement | Implementation and UI evidence | Automated evidence | Native/human evidence | Status |
+| --- | --- | --- | --- | --- |
+| Windows process/UI remediation | `src-tauri/src/main.rs`, `src-tauri/src/commands.rs`, `src/App.tsx`, `src/styles.css` | Rust process-creation test; typecheck/build/boundary checks | Fresh installed release: no console, bounded layout, styled scrollbars, sidebar/settings/provider layout | PENDING_HUMAN_QA |
+| Two or more competitors in one Arena | `src/arena-runner.ts`, `src/App.tsx` | `src/arena-runner.test.ts` | Installed Tauri Arena run | PENDING_HUMAN_QA |
+| Failure isolation and queued cancellation | `src/arena-runner.ts`, Arena execution monitor in `src/App.tsx` | `src/arena-runner.test.ts` failure/cancellation coverage | Deliberate failure and cancel on installed app | PENDING_HUMAN_QA |
+| Live Arena telemetry | `src/arena-runner.ts`, `src/App.tsx`, `src/styles.css` | `src/arena-runner.test.ts` progress, counters, timing, metrics, ETA, blind visibility, failure/cancel coverage | Live timing/metrics and blind hiding in Tauri | PENDING_HUMAN_QA |
+| PT-BR/English interface language | `src/i18n.ts`, `src/App.tsx`, `src/advanced-arena-view.tsx` | `src/i18n.test.ts`; typecheck and 92-test suite | Switch, restart persistence, and full-surface review in Tauri | PENDING_HUMAN_QA |
+| Blind evaluation and reveal | `src/App.tsx`, existing blind-evaluation commands | Arena and Rust evaluation tests | Tauri blind run/reveal | PENDING_HUMAN_QA |
+| Objective verifiers | `src/objective-verifiers.ts`, `src/run-plan.ts`, `src-tauri/src/orchestration.rs`, `src-tauri/src/storage.rs` | TypeScript and Rust verifier/persistence tests | Tauri persistence/reopen | PENDING_HUMAN_QA |
+| Repetition statistics and persisted Arena summaries | `src/arena-runner.ts`, `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src/App.tsx` | Arena summary tests; Rust persistence tests | Native run, reopen, and export | PENDING_HUMAN_QA |
+| History and verified response reopen | `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs`, `src/App.tsx` | Rust storage/command tests | Installed restart/reopen | PENDING_HUMAN_QA |
+| JSON/Markdown/CSV exports | `src/arena-runner.ts`, `src/App.tsx` | Arena export tests | Installed save/open smoke | PENDING_HUMAN_QA |
+| Official packs and deterministic materialization | `packs/official`, `src-tauri/src/official_packs.rs`, `src/App.tsx` | Rust catalog/materialization tests and boundary checks | Inspect/materialize packs in Tauri | PENDING_HUMAN_QA |
+| Docker-required execution boundary | `src-tauri/src/official_packs.rs`, `src/run-plan.ts`, `src/App.tsx` | Rust boundary tests and `npm run check:boundaries` | Docker runtime unavailable | BLOCKED_EXTERNAL_RUNTIME |
+| Ollama discovery/start | `src-tauri/src/ollama.rs`, `src-tauri/src/commands.rs`, `src/App.tsx` | Rust adapter tests | Real Ollama smoke | PENDING_HUMAN_QA |
+| LM Studio and llama.cpp/GGUF adapters | Not wired | None | Required | MISSING_IMPLEMENTATION |
+| Downloads/removal/duplicates | Not wired | None | Required | MISSING_IMPLEMENTATION |
+| Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | `src/advanced-arena-ui.test.ts`, TypeScript suite | Tauri reopen and workflow review | PENDING_HUMAN_QA |
+| External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
+| Appearance/accessibility | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | appearance/font tests | Native accessibility and layout review | PENDING_HUMAN_QA |
+| Windows NSIS | Tauri bundle/workflow | Build attempted at exact `be1007f` | Installer required; no artifact produced | BLOCKED_ENVIRONMENT |
+| Windows MSI | Tauri target/workflow | Config check | Existing WiX `light.exe` failure | BLOCKED LOCALLY |
+| Linux deb/AppImage | Tauri target/workflow | Workflow definition | Existing Linux runner required | CI PENDING |
 
-The implementation was authored in the direct Codex turn in `E:\Prompt Arena`. A bounded BL4 review delegation was then
-run through the repository-local launcher with control-plane evidence: `executor_account=biel4`,
-`task_transport=app_server`, `repository=E:\Prompt Arena`, thread `01a02cb7-7a36-79e0-abdd-2415d208044e`, turn
-`01a02d6b-577f-70d3-8782-63a094203167`, and result `package-artifacts/dual-codex-review-result.json`. The delegation
-was marked failed because it reported no new change and its executor-side Vitest/build attempts hit Windows spawn EPERM;
-no substitute executor or TUI fallback was used. Provenance is therefore attested for the review attempt, not for a
-successful BL4 implementation or native acceptance.
+## Packaging and provenance
 
-## Package evidence
+The exact-commit Windows NSIS build compiled the frontend/Rust application and
+prepared the worker sidecar, but Tauri failed during NSIS directory recreation
+with the verbatim error `Acesso negado. (os error 5)`. Therefore there is no
+installer path, installer size/hash, checksum manifest, bundled-sidecar proof,
+or install/launch/restart/uninstall smoke result for this commit. The expected
+repository-local evidence paths are `package-artifacts/`,
+`checksums-sha256.txt`, and `package-verification.txt`; they are not a
+successful artifact claim.
 
-The local Windows NSIS artifact is `Prompt Arena Setup 0.1.0.exe` (3,347,581 bytes), SHA-256
-`BB4DDCCB9054178DE58534F6495FD5C1BD4E4301ED1069A706D0FD82CEB52343`. It is unsigned and has not undergone clean-install
-smoke. The dispatch workflow `.github/workflows/package.yml` uploads normalized installers and `checksums-sha256.txt`
-for an exact commit. No GitHub Release or tag is created by this stack.
+Canonical BL4 provenance is the control-plane result metadata for this isolated
+worktree: account `biel4`, role Executor, App Server/headless transport,
+`workspace-write`, Windows elevated readiness `ready`, and approval policy
+`never`. The canonical BL4 result is control-plane evidence rather than a
+source-tree file; `package-artifacts/dual-codex-review-result.json` is not
+present in this isolated worktree. The canonical mission context is
+`C:\Users\bielx\Downloads\PROMPT_ARENA_WINDOWS_QA_LIVE_TELEMETRY_I18N_COMPLETION.md`.
+No secret or credential material is recorded here.
