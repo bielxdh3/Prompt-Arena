@@ -10,6 +10,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
@@ -118,6 +121,8 @@ const OLLAMA_EXECUTABLE: &str = "ollama";
 const OLLAMA_SERVE_ARGUMENT: &str = "serve";
 const OLLAMA_START_RETRIES: usize = 20;
 const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
+#[cfg(windows)]
+const WINDOWS_CREATE_NO_WINDOW: u32 = 0x08000000;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
@@ -783,12 +788,30 @@ fn ollama_is_healthy(provider: &OllamaProvider) -> bool {
 
 fn ollama_server_command() -> Command {
     let mut command = Command::new(OLLAMA_EXECUTABLE);
+    configure_background_command(&mut command);
     command
         .arg(OLLAMA_SERVE_ARGUMENT)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
+}
+
+fn configure_background_command(command: &mut Command) {
+    let _flags = background_process_creation_flags();
+    #[cfg(windows)]
+    command.creation_flags(_flags);
+}
+
+fn background_process_creation_flags() -> u32 {
+    #[cfg(windows)]
+    {
+        WINDOWS_CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
 }
 
 fn start_ollama_with<F, L, T, S>(
@@ -974,7 +997,9 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         .ok();
     let worker_executable =
         resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
-    let mut child = Command::new(worker_executable)
+    let mut child = Command::new(worker_executable);
+    configure_background_command(&mut child);
+    let mut child = child
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1217,10 +1242,11 @@ mod tests {
     };
 
     use super::{
-        app_status, ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
-        resolve_worker_executable, start_ollama_with, worker_executable_name,
-        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus, StorageState,
-        OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
+        app_status, background_process_creation_flags, ollama_server_command, ollama_spawn_error,
+        read_benchmark_version_from_storage, resolve_worker_executable, start_ollama_with,
+        worker_executable_name, worker_executable_path, worker_sidecar_resource_path,
+        OllamaStartStatus, StorageState, OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH,
+        WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
 
@@ -1280,6 +1306,14 @@ mod tests {
                 .map(OsStr::to_string_lossy)
                 .collect::<Vec<_>>(),
             vec!["serve"]
+        );
+    }
+
+    #[test]
+    fn background_processes_use_the_windows_no_window_flag() {
+        assert_eq!(
+            background_process_creation_flags(),
+            if cfg!(windows) { 0x08000000 } else { 0 }
         );
     }
 

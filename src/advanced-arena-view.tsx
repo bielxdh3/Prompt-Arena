@@ -40,6 +40,7 @@ import {
   parseBlindRankingText,
   scoreLookupFromEntries,
 } from "./advanced-arena-ui";
+import { translate } from "./i18n";
 
 type SummaryState =
   | { status: "loading" }
@@ -444,34 +445,33 @@ export function AdvancedArenaView() {
   return (
     <div className="view-stack advanced-arena-view">
       <section className="panel page-intro">
-        <p className="eyebrow">Advanced Arena</p>
-        <h2>Read deeper signals from saved Arena evidence.</h2>
+        <p className="eyebrow">{translate("Advanced Arena")}</p>
+        <h2>{translate("Read deeper signals from saved Arena evidence.")}</h2>
         <p>
-          Advanced Arena reads immutable local summaries and evidence for rankings, regression, tournaments, and judge calibration.
-          Saved artifacts freeze their source hashes and judge metadata; no network call is made.
+          {translate("Advanced Arena reads immutable local summaries and evidence for rankings, regression, tournaments, and judge calibration. Saved artifacts freeze their source hashes and judge metadata; no network call is made.")}
         </p>
       </section>
 
       {summaryState.status === "preview" && (
         <section className="panel advanced-state-panel" aria-live="polite">
-          <AdvancedStateMessage icon="◇" title="Browser preview / no writes" description="The browser preview cannot read desktop summaries. Open the desktop app to inspect immutable Arena evidence; this surface never calls a network service." />
+          <AdvancedStateMessage icon="◇" title={translate("Browser preview / no writes")} description={translate("The browser preview cannot read desktop summaries. Open the desktop app to inspect immutable Arena evidence; this surface never calls a network service.")} />
         </section>
       )}
       {summaryState.status === "loading" && (
         <section className="panel advanced-state-panel" aria-live="polite">
-          <AdvancedStateMessage icon="…" title="Loading saved Arena summaries" description="Reading existing immutable summaries from app-owned local storage." />
+          <AdvancedStateMessage icon="…" title={translate("Loading saved Arena summaries")} description={translate("Reading existing immutable summaries from app-owned local storage.")} />
         </section>
       )}
       {summaryState.status === "error" && (
         <section className="panel advanced-state-panel" aria-live="polite">
-          <AdvancedStateMessage icon="!" title="Saved summaries unavailable" description={summaryState.message} error />
-          <button className="secondary-button" type="button" onClick={() => void refreshSummaries()}>Try again</button>
+          <AdvancedStateMessage icon="!" title={translate("Saved summaries unavailable")} description={summaryState.message} error />
+          <button className="secondary-button" type="button" onClick={() => void refreshSummaries()}>{translate("Try again")}</button>
         </section>
       )}
       {summaryState.status === "ready" && summaryState.summaries.length === 0 && (
         <section className="panel advanced-state-panel" aria-live="polite">
-          <AdvancedEmptyState title="No saved Arena summaries" description="Run and save a Core Arena comparison first. Advanced Arena does not invent evidence or use unsaved model output." />
-          <button className="secondary-button" type="button" onClick={() => void refreshSummaries()}>Refresh summaries</button>
+          <AdvancedEmptyState title={translate("No saved Arena summaries")} description={translate("Run and save a Core Arena comparison first. Advanced Arena does not invent evidence or use unsaved model output.")} />
+          <button className="secondary-button" type="button" onClick={() => void refreshSummaries()}>{translate("Refresh summaries")}</button>
         </section>
       )}
 
@@ -480,31 +480,31 @@ export function AdvancedArenaView() {
           <section className="panel advanced-summary-panel" aria-labelledby="advanced-summary-heading">
             <div className="section-heading compact-heading">
               <div>
-                <p className="eyebrow">Immutable source</p>
-                <h3 id="advanced-summary-heading">Choose saved Arena evidence</h3>
+                <p className="eyebrow">{translate("Immutable source")}</p>
+                <h3 id="advanced-summary-heading">{translate("Choose saved Arena evidence")}</h3>
               </div>
-              <button className="text-button" type="button" onClick={() => void refreshSummaries()}>Refresh</button>
+              <button className="text-button" type="button" onClick={() => void refreshSummaries()}>{translate("Refresh")}</button>
             </div>
             <div className="advanced-selection-grid">
               <AdvancedSelect
                 id="advanced-summary"
-                label="Summary for rankings and tournaments"
+                label={translate("Summary for rankings and tournaments")}
                 value={selectedSummaryId}
                 onChange={setSelectedSummaryId}
                 options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: `${summary.benchmarkVersionId} · ${summary.createdAt}` }))}
-                placeholder="Select an immutable summary"
+                placeholder={translate("Select an immutable summary")}
               />
               <div className="advanced-source-facts">
-                <AdvancedBoundary label="Evidence source" value={selectedSummary ? "App-owned immutable summary" : "Not selected"} />
-                <AdvancedBoundary label="Network used" value="No" />
-                <AdvancedBoundary label="Advanced artifacts" value="Immutable local storage" />
-                <AdvancedBoundary label="Evidence samples" value={String(evidenceState.samples.length)} />
+                <AdvancedBoundary label={translate("Evidence source")} value={selectedSummary ? translate("App-owned immutable summary") : translate("Not selected")} />
+                <AdvancedBoundary label={translate("Network used")} value={translate("No")} />
+                <AdvancedBoundary label={translate("Advanced artifacts")} value={translate("Immutable local storage")} />
+                <AdvancedBoundary label={translate("Evidence samples")} value={String(evidenceState.samples.length)} />
               </div>
             </div>
             {selectedSummary && (
-              <div className="advanced-summary-meta" aria-label="Selected summary metadata">
-                <AdvancedBoundary label="Benchmark / task / case" value={`${selectedSummary.benchmarkVersionId} · ${selectedSummary.taskId} · ${selectedSummary.caseId}`} />
-                <AdvancedBoundary label="Content hash" value={selectedSummary.contentHash} />
+              <div className="advanced-summary-meta" aria-label={translate("Selected summary metadata")}>
+                <AdvancedBoundary label={translate("Benchmark / task / case")} value={`${selectedSummary.benchmarkVersionId} · ${selectedSummary.taskId} · ${selectedSummary.caseId}`} />
+                <AdvancedBoundary label={translate("Content hash")} value={selectedSummary.contentHash} />
               </div>
             )}
             {evidenceState.error && <p className="form-feedback form-feedback-error" role="alert">{evidenceState.error}</p>}
@@ -514,27 +514,27 @@ export function AdvancedArenaView() {
             <section className="panel advanced-history-panel" aria-labelledby="advanced-history-heading">
               <div className="section-heading compact-heading">
                 <div>
-                  <p className="eyebrow">Saved advanced artifacts</p>
-                  <h3 id="advanced-history-heading">Reopen calibration and tournament results</h3>
+                <p className="eyebrow">{translate("Saved advanced artifacts")}</p>
+                <h3 id="advanced-history-heading">{translate("Reopen calibration and tournament results")}</h3>
                 </div>
-                <button className="text-button" type="button" onClick={() => void refreshSummaries()}>Refresh</button>
+                <button className="text-button" type="button" onClick={() => void refreshSummaries()}>{translate("Refresh")}</button>
               </div>
               <div className="advanced-selection-grid">
                 <div className="advanced-field">
-                  <label className="field-label" htmlFor="advanced-calibration-history">Calibration result</label>
+                  <label className="field-label" htmlFor="advanced-calibration-history">{translate("Calibration result")}</label>
                   <select className="font-select" id="advanced-calibration-history" value={selectedCalibrationResultId} onChange={(event) => setSelectedCalibrationResultId(event.currentTarget.value)}>
-                    <option value="">No saved result selected</option>
+                    <option value="">{translate("No saved result selected")}</option>
                     {artifactHistory.calibrationResults.map((record) => <option key={record.resultId} value={record.resultId}>{record.resultId} · {record.createdAt}</option>)}
                   </select>
-                  <button className="secondary-button" type="button" disabled={!selectedCalibrationResultId} onClick={reopenCalibrationResult}>Reopen calibration</button>
+                  <button className="secondary-button" type="button" disabled={!selectedCalibrationResultId} onClick={reopenCalibrationResult}>{translate("Reopen calibration")}</button>
                 </div>
                 <div className="advanced-field">
-                  <label className="field-label" htmlFor="advanced-tournament-history">Tournament result</label>
+                  <label className="field-label" htmlFor="advanced-tournament-history">{translate("Tournament result")}</label>
                   <select className="font-select" id="advanced-tournament-history" value={selectedTournamentResultId} onChange={(event) => setSelectedTournamentResultId(event.currentTarget.value)}>
-                    <option value="">No saved result selected</option>
+                    <option value="">{translate("No saved result selected")}</option>
                     {artifactHistory.tournamentResults.map((record) => <option key={record.tournamentId} value={record.tournamentId}>{record.tournamentId} · {record.mode}</option>)}
                   </select>
-                  <button className="secondary-button" type="button" disabled={!selectedTournamentResultId} onClick={reopenTournamentResult}>Reopen tournament</button>
+                  <button className="secondary-button" type="button" disabled={!selectedTournamentResultId} onClick={reopenTournamentResult}>{translate("Reopen tournament")}</button>
                 </div>
               </div>
               {selectedCalibrationResultId && (() => {
@@ -549,88 +549,88 @@ export function AdvancedArenaView() {
               <section className="panel advanced-input-panel" aria-labelledby="advanced-scores-heading">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Optional manual inputs</p>
-                    <h3 id="advanced-scores-heading">Human and offline AI-judge scores</h3>
+                    <p className="eyebrow">{translate("Optional manual inputs")}</p>
+                    <h3 id="advanced-scores-heading">{translate("Human and offline AI-judge scores")}</h3>
                   </div>
-                  <span className="run-status run-status-neutral">Local only</span>
+                  <span className="run-status run-status-neutral">{translate("Local only")}</span>
                 </div>
-                <p className="field-help">Use one execution key per line in the form <code>run-id:attempt-id=score</code>. Keys are shown in the evidence table below. Scores are bounded from 1 to 5.</p>
+                <p className="field-help">{translate("Use one execution key per line in the form")} <code>run-id:attempt-id=score</code>{translate(". Keys are shown in the evidence table below. Scores are bounded from 1 to 5.")}</p>
                 <div className="advanced-input-grid">
                   <label className="advanced-field" htmlFor="advanced-human-scores">
-                    <span className="field-label">Human scores</span>
+                    <span className="field-label">{translate("Human scores")}</span>
                     <textarea className="advanced-textarea" id="advanced-human-scores" value={humanScoreText} onChange={(event) => setHumanScoreText(event.currentTarget.value)} placeholder="arena-run-1:attempt-1=4" spellCheck={false} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-judge-id">
-                    <span className="field-label">Frozen AI-judge ID</span>
+                    <span className="field-label">{translate("Frozen AI-judge ID")}</span>
                     <input className="advanced-input" id="advanced-ai-judge-id" value={aiJudgeId} onChange={(event) => setAiJudgeId(event.currentTarget.value)} placeholder="local-judge-v1" />
-                    <span className="field-help">Identity is stored with the calibration result; it never selects or contacts a service.</span>
+                    <span className="field-help">{translate("Identity is stored with the calibration result; it never selects or contacts a service.")}</span>
                   </label>
                   <label className="advanced-field advanced-field-wide" htmlFor="advanced-ai-scores">
-                    <span className="field-label">AI-judge scores · manual/offline only</span>
+                    <span className="field-label">{translate("AI-judge scores · manual/offline only")}</span>
                     <textarea className="advanced-textarea" id="advanced-ai-scores" value={aiJudgeScoreText} onChange={(event) => setAiJudgeScoreText(event.currentTarget.value)} placeholder="arena-run-1:attempt-1=3.5" spellCheck={false} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-judge-version">
-                    <span className="field-label">Judge version</span>
+                    <span className="field-label">{translate("Judge version")}</span>
                     <input className="advanced-input" id="advanced-ai-judge-version" value={aiJudgeVersion} onChange={(event) => setAiJudgeVersion(event.currentTarget.value)} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-rubric-id">
-                    <span className="field-label">Rubric ID / version</span>
+                    <span className="field-label">{translate("Rubric ID / version")}</span>
                     <input className="advanced-input" id="advanced-ai-rubric-id" value={aiJudgeRubricId} onChange={(event) => setAiJudgeRubricId(event.currentTarget.value)} />
-                    <input className="advanced-input" aria-label="Rubric version" value={aiJudgeRubricVersion} onChange={(event) => setAiJudgeRubricVersion(event.currentTarget.value)} />
+                    <input className="advanced-input" aria-label={translate("Rubric version")} value={aiJudgeRubricVersion} onChange={(event) => setAiJudgeRubricVersion(event.currentTarget.value)} />
                   </label>
                   <label className="advanced-field advanced-field-wide" htmlFor="advanced-ai-judge-prompt">
-                    <span className="field-label">Frozen judge prompt</span>
+                    <span className="field-label">{translate("Frozen judge prompt")}</span>
                     <textarea className="advanced-textarea" id="advanced-ai-judge-prompt" value={aiJudgePrompt} onChange={(event) => setAiJudgePrompt(event.currentTarget.value)} spellCheck={false} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-judge-panel">
-                    <span className="field-label">Official judge panel</span>
+                    <span className="field-label">{translate("Official judge panel")}</span>
                     <select className="font-select" id="advanced-ai-judge-panel" value={aiJudgePanelSize} onChange={(event) => setAiJudgePanelSize(event.currentTarget.value as JudgePanelSize)}>
-                      <option value="none">No panel</option>
-                      <option value="3">Official panel · 3 judges</option>
-                      <option value="5">Official panel · 5 judges</option>
+                      <option value="none">{translate("No panel")}</option>
+                      <option value="3">{translate("Official panel · 3 judges")}</option>
+                      <option value="5">{translate("Official panel · 5 judges")}</option>
                     </select>
                   </label>
                   {aiJudgePanelSize !== "none" && (
                     <label className="advanced-field" htmlFor="advanced-ai-judge-panel-ids">
-                      <span className="field-label">Panel judge IDs</span>
+                      <span className="field-label">{translate("Panel judge IDs")}</span>
                       <input className="advanced-input" id="advanced-ai-judge-panel-ids" value={aiJudgePanelIds} onChange={(event) => setAiJudgePanelIds(event.currentTarget.value)} placeholder="judge-a, judge-b, judge-c" />
-                      <span className="field-help">Enter exactly {aiJudgePanelSize} unique IDs. The panel is metadata only.</span>
+                      <span className="field-help">{translate("Enter exactly")} {aiJudgePanelSize} {translate("unique IDs. The panel is metadata only.")}</span>
                     </label>
                   )}
                 </div>
-                <div className="advanced-boundary-grid" aria-label="AI judge provenance">
-                  <AdvancedBoundary label="Source" value={scoreState.aiJudgeBoundary.status === "provided" ? "ai_judge · caller-supplied" : "ai_judge · not provided"} />
-                  <AdvancedBoundary label="Network used" value={scoreState.aiJudgeBoundary.networkUsed ? "Yes" : "No"} />
-                  <AdvancedBoundary label="Entries accepted" value={String(scoreState.aiJudgeBoundary.entries.length)} />
-                  <AdvancedBoundary label="Invalid scores" value={scoreState.error ? "Visible below" : "None"} />
+                <div className="advanced-boundary-grid" aria-label={translate("AI judge provenance")}>
+                  <AdvancedBoundary label={translate("Source")} value={scoreState.aiJudgeBoundary.status === "provided" ? translate("ai_judge · caller-supplied") : translate("ai_judge · not provided")} />
+                  <AdvancedBoundary label={translate("Network used")} value={scoreState.aiJudgeBoundary.networkUsed ? translate("Yes") : translate("No")} />
+                  <AdvancedBoundary label={translate("Entries accepted")} value={String(scoreState.aiJudgeBoundary.entries.length)} />
+                  <AdvancedBoundary label={translate("Invalid scores")} value={scoreState.error ? translate("Visible below") : translate("None")} />
                 </div>
                 {scoreState.error && <p className="form-feedback form-feedback-error" role="alert">{scoreState.error}</p>}
                 <div className="arena-actions">
                   <label className="advanced-field" htmlFor="advanced-calibration-id">
-                    <span className="field-label">Calibration ID</span>
+                    <span className="field-label">{translate("Calibration ID")}</span>
                     <input className="advanced-input" id="advanced-calibration-id" value={calibrationId} onChange={(event) => setCalibrationId(event.currentTarget.value)} />
                   </label>
-                  <button className="primary-button" type="button" onClick={() => void saveCalibrationArtifacts()}>Save calibration</button>
+                  <button className="primary-button" type="button" onClick={() => void saveCalibrationArtifacts()}>{translate("Save calibration")}</button>
                 </div>
                 {calibrationSaveMessage && <p className="field-help" role="status">{calibrationSaveMessage}</p>}
-                <p className="field-help" role="status">AI-judge boundary: optional, frozen, manual/offline, and never fabricated. No network call is made.</p>
+                <p className="field-help" role="status">{translate("AI-judge boundary: optional, frozen, manual/offline, and never fabricated. No network call is made.")}</p>
               </section>
 
               <section className="panel advanced-rankings-panel" aria-labelledby="advanced-rankings-heading" aria-live="polite">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Rankings by category</p>
-                    <h3 id="advanced-rankings-heading">Quality, latency, throughput, and human signal</h3>
+                    <p className="eyebrow">{translate("Rankings by category")}</p>
+                    <h3 id="advanced-rankings-heading">{translate("Quality, latency, throughput, and human signal")}</h3>
                   </div>
                   <label className="advanced-inline-select" htmlFor="advanced-score-source">
-                    <span className="field-label">Human metric source</span>
+                    <span className="field-label">{translate("Human metric source")}</span>
                     <select className="font-select" id="advanced-score-source" value={scoreSource} onChange={(event) => setScoreSource(event.currentTarget.value as ScoreSource)}>
-                      <option value="human">Human</option>
-                      <option value="ai_judge">AI judge · manual</option>
+                      <option value="human">{translate("Human")}</option>
+                      <option value="ai_judge">{translate("AI judge · manual")}</option>
                     </select>
                   </label>
                 </div>
-                <p className="field-help">Direction and deterministic spread are shown per metric. Ties are explicit; insufficient data is not ranked as a win or loss.</p>
+                <p className="field-help">{translate("Direction and deterministic spread are shown per metric. Ties are explicit; insufficient data is not ranked as a win or loss.")}</p>
                 {rankingsState.error && <p className="form-feedback form-feedback-error" role="alert">{rankingsState.error}</p>}
                 <div className="advanced-ranking-grid">
                   {rankingsState.rankings.map((ranking) => <AdvancedRankingCard key={ranking.metric} ranking={ranking} />)}
@@ -640,65 +640,65 @@ export function AdvancedArenaView() {
               <section className="panel advanced-regression-panel" aria-labelledby="advanced-regression-heading" aria-live="polite">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Regression workflow</p>
-                    <h3 id="advanced-regression-heading">Compare a baseline with a candidate</h3>
+                    <p className="eyebrow">{translate("Regression workflow")}</p>
+                    <h3 id="advanced-regression-heading">{translate("Compare a baseline with a candidate")}</h3>
                   </div>
-                  <span className="run-status run-status-neutral">Descriptive deltas</span>
+                  <span className="run-status run-status-neutral">{translate("Descriptive deltas")}</span>
                 </div>
                 <div className="advanced-selection-grid advanced-regression-controls">
-                  <AdvancedSelect id="advanced-baseline" label="Baseline summary" value={baselineId} onChange={setBaselineId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: summary.createdAt }))} placeholder="Select baseline" />
-                  <AdvancedSelect id="advanced-candidate" label="Candidate summary" value={candidateId} onChange={setCandidateId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: summary.createdAt }))} placeholder="Select candidate" />
-                  <AdvancedSelect id="advanced-regression-competitor" label="Competitor scope" value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: competitor.competitorLabel, detail: competitor.competitorId }))} placeholder="All competitors" />
+                  <AdvancedSelect id="advanced-baseline" label={translate("Baseline summary")} value={baselineId} onChange={setBaselineId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: summary.createdAt }))} placeholder={translate("Select baseline")} />
+                  <AdvancedSelect id="advanced-candidate" label={translate("Candidate summary")} value={candidateId} onChange={setCandidateId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: summary.createdAt }))} placeholder={translate("Select candidate")} />
+                  <AdvancedSelect id="advanced-regression-competitor" label={translate("Competitor scope")} value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: competitor.competitorLabel, detail: competitor.competitorId }))} placeholder={translate("All competitors")} />
                 </div>
                 <label className="advanced-checkbox" htmlFor="advanced-regression-human">
                   <input id="advanced-regression-human" type="checkbox" checked={includeHumanRegression} onChange={(event) => setIncludeHumanRegression(event.currentTarget.checked)} />
-                  <span>Include human/AI-judge score regression</span>
+                  <span>{translate("Include human/AI-judge score regression")}</span>
                 </label>
                 {regressionState.error && <p className="form-feedback form-feedback-error" role="alert">{regressionState.error}</p>}
-                {!regressionState.comparison && <AdvancedEmptyState title="Select two different summaries" description="A regression needs a baseline and candidate immutable summary. The comparison never mixes unsaved execution output." />}
+                {!regressionState.comparison && <AdvancedEmptyState title={translate("Select two different summaries")} description={translate("A regression needs a baseline and candidate immutable summary. The comparison never mixes unsaved execution output.")} />}
                 {regressionState.comparison && <RegressionResults comparison={regressionState.comparison} />}
               </section>
 
               <section className="panel advanced-tournament-panel" aria-labelledby="advanced-tournament-heading" aria-live="polite">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Tournament mode</p>
-                    <h3 id="advanced-tournament-heading">Plan a transparent comparison</h3>
+                    <p className="eyebrow">{translate("Tournament mode")}</p>
+                    <h3 id="advanced-tournament-heading">{translate("Plan a transparent comparison")}</h3>
                   </div>
-                  <span className="run-status run-status-neutral">Max {MAX_ADVANCED_COMPETITORS} competitors</span>
+                  <span className="run-status run-status-neutral">{translate("Max")} {MAX_ADVANCED_COMPETITORS} {translate("competitors")}</span>
                 </div>
                 <div className="advanced-selection-grid advanced-tournament-controls">
                   <label className="advanced-field" htmlFor="advanced-tournament-mode">
-                    <span className="field-label">Mode</span>
+                    <span className="field-label">{translate("Mode")}</span>
                     <select className="font-select" id="advanced-tournament-mode" value={tournamentMode} onChange={(event) => setTournamentMode(event.currentTarget.value as TournamentModeChoice)}>
                       <option value="1v1">1v1</option>
-                      <option value="blind_ranking">Blind ranking</option>
-                      <option value="round_robin">Round robin</option>
-                      <option value="single_elimination">Single elimination</option>
+                      <option value="blind_ranking">{translate("Blind ranking")}</option>
+                      <option value="round_robin">{translate("Round robin")}</option>
+                      <option value="single_elimination">{translate("Single elimination")}</option>
                     </select>
                   </label>
                   <label className="advanced-field" htmlFor="advanced-max-matches">
-                    <span className="field-label">Maximum matches</span>
+                    <span className="field-label">{translate("Maximum matches")}</span>
                     <input className="advanced-input" id="advanced-max-matches" type="number" min="1" max={MAX_ADVANCED_MATCHES} step="1" value={maxMatches} onChange={(event) => setMaxMatches(Number(event.currentTarget.value))} />
-                    <span className="field-help">Bounded from 1 to {MAX_ADVANCED_MATCHES}.</span>
+                    <span className="field-help">{translate("Bounded from 1 to")} {MAX_ADVANCED_MATCHES}.</span>
                   </label>
                   <label className="advanced-field" htmlFor="advanced-tournament-metric">
-                    <span className="field-label">Evidence metric</span>
+                    <span className="field-label">{translate("Evidence metric")}</span>
                     <select className="font-select" id="advanced-tournament-metric" value={tournamentMetric} onChange={(event) => setTournamentMetric(event.currentTarget.value as AdvancedArenaMetric)}>
-                      <option value="objective_pass_rate">Objective pass rate</option>
-                      <option value="duration_ms">Duration</option>
-                      <option value="tokens_per_second">Tokens / second</option>
-                      <option value="human_score">Human / AI-judge score</option>
+                      <option value="objective_pass_rate">{translate("Objective pass rate")}</option>
+                      <option value="duration_ms">{translate("Duration")}</option>
+                      <option value="tokens_per_second">{translate("Tokens / second")}</option>
+                      <option value="human_score">{translate("Human / AI-judge score")}</option>
                     </select>
                   </label>
                   <label className="advanced-field" htmlFor="advanced-tournament-id">
-                    <span className="field-label">Tournament ID</span>
+                    <span className="field-label">{translate("Tournament ID")}</span>
                     <input className="advanced-input" id="advanced-tournament-id" value={tournamentId} onChange={(event) => setTournamentId(event.currentTarget.value)} />
                   </label>
                 </div>
                 <fieldset className="advanced-competitor-picker">
-                  <legend className="field-label">Tournament competitors ({selectedTournamentCompetitors.length}/{MAX_ADVANCED_COMPETITORS})</legend>
-                  <p className="field-help">Choose the participants from the selected summary. 1v1 requires exactly two; other schedules require at least two.</p>
+                  <legend className="field-label">{translate("Tournament competitors")} ({selectedTournamentCompetitors.length}/{MAX_ADVANCED_COMPETITORS})</legend>
+                  <p className="field-help">{translate("Choose the participants from the selected summary. 1v1 requires exactly two; other schedules require at least two.")}</p>
                   <div className="competitor-list">
                     {competitorOptions.map((competitor) => {
                       const checked = tournamentCompetitorIds.includes(competitor.competitorId);
@@ -713,13 +713,13 @@ export function AdvancedArenaView() {
                 </fieldset>
                 {tournamentMode === "blind_ranking" && (
                   <label className="advanced-field advanced-field-wide" htmlFor="advanced-blind-ranking">
-                    <span className="field-label">Blind rank groups</span>
+                    <span className="field-label">{translate("Blind rank groups")}</span>
                     <textarea className="advanced-textarea" id="advanced-blind-ranking" value={blindRankingText} onChange={(event) => setBlindRankingText(event.currentTarget.value)} placeholder="competitor-a@1, competitor-b@1&#10;competitor-c@1" spellCheck={false} />
-                    <span className="field-help">One rank group per line; separate ties with commas. Include every selected competitor exactly once. IDs remain visible to the local operator but no score is inferred.</span>
+                    <span className="field-help">{translate("One rank group per line; separate ties with commas. Include every selected competitor exactly once. IDs remain visible to the local operator but no score is inferred.")}</span>
                   </label>
                 )}
                 <div className="arena-actions">
-                  <button className="primary-button" type="button" onClick={buildTournament}>Build {tournamentMode === "blind_ranking" ? "blind ranking" : "schedule"}</button>
+                  <button className="primary-button" type="button" onClick={buildTournament}>{translate("Build")} {tournamentMode === "blind_ranking" ? translate("blind ranking") : translate("schedule")}</button>
                 </div>
                 {tournamentError && <p className="form-feedback form-feedback-error" role="alert">{tournamentError}</p>}
                 {tournamentResult?.kind === "schedule" && <TournamentScheduleResult schedule={tournamentResult.schedule} labels={new Map(competitorOptions.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
@@ -728,7 +728,7 @@ export function AdvancedArenaView() {
                 {tournamentResult?.kind === "saved" && <SavedTournamentDetails record={tournamentResult.record} />}
                 {(tournamentResult?.kind === "outcome" || tournamentResult?.kind === "blind") && (
                   <div className="arena-actions">
-                    <button className="secondary-button" type="button" onClick={() => void saveTournamentArtifact()}>Save tournament result</button>
+                    <button className="secondary-button" type="button" onClick={() => void saveTournamentArtifact()}>{translate("Save tournament result")}</button>
                   </div>
                 )}
                 {tournamentSaveMessage && <p className="field-help" role="status">{tournamentSaveMessage}</p>}
@@ -737,36 +737,36 @@ export function AdvancedArenaView() {
               <section className="panel advanced-calibration-panel" aria-labelledby="advanced-calibration-heading" aria-live="polite">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Calibration and disagreement</p>
-                    <h3 id="advanced-calibration-heading">Check manual judge agreement</h3>
+                    <p className="eyebrow">{translate("Calibration and disagreement")}</p>
+                    <h3 id="advanced-calibration-heading">{translate("Check manual judge agreement")}</h3>
                   </div>
-                  <span className={`run-status ${calibration.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{calibration.status === "ready" ? "Ready" : "Insufficient data"}</span>
+                  <span className={`run-status ${calibration.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{translate(calibration.status === "ready" ? "Ready" : "Insufficient data")}</span>
                 </div>
                 <div className="metric-grid advanced-metric-grid">
-                  <AdvancedMetric label="Agreement rate" value={calibration.agreementRate === null ? "Insufficient data" : `${Math.round(calibration.agreementRate * 100)}%`} detail={`${calibration.agreementCount} agree · ${calibration.disagreementCount} disagree`} />
-                  <AdvancedMetric label="Mean absolute error" value={formatAdvancedValue(calibration.meanAbsoluteError)} detail={`n=${calibration.sampleSize}`} />
-                  <AdvancedMetric label="Bias" value={formatAdvancedValue(calibration.bias)} detail="AI judge − human" />
-                  <AdvancedMetric label="Matched samples" value={String(calibration.sampleSize)} detail={`${calibration.unmatchedHumanCount} human-only · ${calibration.unmatchedAiJudgeCount} AI-only`} />
+                  <AdvancedMetric label={translate("Agreement rate")} value={calibration.agreementRate === null ? translate("Insufficient data") : `${Math.round(calibration.agreementRate * 100)}%`} detail={`${calibration.agreementCount} ${translate("agree")} · ${calibration.disagreementCount} ${translate("disagree")}`} />
+                  <AdvancedMetric label={translate("Mean absolute error")} value={translate(formatAdvancedValue(calibration.meanAbsoluteError))} detail={`n=${calibration.sampleSize}`} />
+                  <AdvancedMetric label={translate("Bias")} value={translate(formatAdvancedValue(calibration.bias))} detail={translate("AI judge − human")} />
+                  <AdvancedMetric label={translate("Matched samples")} value={String(calibration.sampleSize)} detail={`${calibration.unmatchedHumanCount} ${translate("human-only")} · ${calibration.unmatchedAiJudgeCount} ${translate("AI-only")}`} />
                 </div>
                 {calibration.disagreementSampleIds.length > 0 ? (
                   <div className="advanced-disagreement" role="status">
-                    <strong>Disagreement samples</strong>
+                    <strong>{translate("Disagreement samples")}</strong>
                     <ul className="advanced-id-list">{calibration.disagreementSampleIds.map((sampleId) => <li key={sampleId}><code>{sampleId}</code></li>)}</ul>
                   </div>
                 ) : (
-                  <p className="field-help">{calibration.status === "ready" ? "No samples exceed the configured agreement tolerance of 1 point." : "Enter matching human and AI-judge score keys to calculate agreement, MAE, bias, and disagreement samples."}</p>
+                  <p className="field-help">{translate(calibration.status === "ready" ? "No samples exceed the configured agreement tolerance of 1 point." : "Enter matching human and AI-judge score keys to calculate agreement, MAE, bias, and disagreement samples.")}</p>
                 )}
               </section>
 
               <section className="panel advanced-evidence-panel" aria-labelledby="advanced-evidence-heading">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Evidence keys</p>
-                    <h3 id="advanced-evidence-heading">Local samples available for scoring</h3>
+                    <p className="eyebrow">{translate("Evidence keys")}</p>
+                    <h3 id="advanced-evidence-heading">{translate("Local samples available for scoring")}</h3>
                   </div>
                   <span className="run-status run-status-neutral">n={evidenceState.samples.length}</span>
                 </div>
-                {evidenceState.samples.length === 0 ? <AdvancedEmptyState title="No usable evidence samples" description="This immutable summary has no bounded evidence rows for ranking or score entry." /> : <EvidenceTable samples={evidenceState.samples} />}
+                {evidenceState.samples.length === 0 ? <AdvancedEmptyState title={translate("No usable evidence samples")} description={translate("This immutable summary has no bounded evidence rows for ranking or score entry.")} /> : <EvidenceTable samples={evidenceState.samples} />}
               </section>
             </>
           )}
@@ -890,9 +890,9 @@ function AdvancedSelect({
 }) {
   return (
     <label className="advanced-field" htmlFor={id}>
-      <span className="field-label">{label}</span>
+      <span className="field-label">{translate(label)}</span>
       <select className="font-select" id={id} value={value} onChange={(event) => onChange(event.currentTarget.value)}>
-        <option value="">{placeholder}</option>
+        <option value="">{translate(placeholder)}</option>
         {options.map((option) => <option key={option.value} value={option.value}>{option.label} — {option.detail}</option>)}
       </select>
     </label>
@@ -905,14 +905,14 @@ function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
     <article className="advanced-ranking-card" aria-labelledby={titleId}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">{ranking.category}</p>
-          <h4 id={titleId}>{ranking.label}</h4>
+          <p className="eyebrow">{translate(ranking.category)}</p>
+          <h4 id={titleId}>{translate(ranking.label)}</h4>
         </div>
-        <span className={`run-status ${ranking.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{ranking.status === "ready" ? "Ready" : "Insufficient"}</span>
+        <span className={`run-status ${ranking.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{translate(ranking.status === "ready" ? "Ready" : "Insufficient")}</span>
       </div>
-      <p className="field-help">Direction: <strong>{ranking.direction === "higher_is_better" ? "higher is better" : "lower is better"}</strong>.</p>
+      <p className="field-help">{translate("Direction:")} <strong>{translate(ranking.direction === "higher_is_better" ? "higher is better" : "lower is better")}</strong></p>
       {ranking.entries.length === 0 ? (
-        <p className="field-help">No usable samples are available for this metric.</p>
+        <p className="field-help">{translate("No usable samples are available for this metric.")}</p>
       ) : (
         <ol className="advanced-ranking-list">
           {ranking.entries.map((entry) => (
@@ -921,12 +921,12 @@ function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
                 <strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {entry.competitorLabel}</strong>
                 <span>{formatRankingValue(entry.metric, entry.value)} · n={entry.sampleSize}</span>
               </div>
-              {entry.tied && <small className="advanced-tie-note">Tie with {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ") || "selected peers"}; margin {formatRankingValue(entry.metric, entry.tieMargin)}</small>}
+              {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ") || translate("selected peers")}; {translate("margin")} {formatRankingValue(entry.metric, entry.tieMargin)}</small>}
             </li>
           ))}
         </ol>
       )}
-      <p className="field-help">{ranking.note}</p>
+      <p className="field-help">{translate(ranking.note)}</p>
     </article>
   );
 }
@@ -935,18 +935,18 @@ function RegressionResults({ comparison }: { comparison: ArenaRegressionComparis
   return (
     <div className="advanced-regression-results">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label="Scope" value={comparison.competitorId ?? "All competitors"} />
-        <AdvancedBoundary label="Overall status" value={comparison.status === "ready" ? "Ready" : "Insufficient data"} />
-        <AdvancedBoundary label="Metrics ready" value={`${comparison.metrics.length - comparison.insufficientMetrics.length}/${comparison.metrics.length}`} />
+        <AdvancedBoundary label={translate("Scope")} value={comparison.competitorId ?? translate("All competitors")} />
+        <AdvancedBoundary label={translate("Overall status")} value={comparison.status === "ready" ? translate("Ready") : translate("Insufficient data")} />
+        <AdvancedBoundary label={translate("Metrics ready")} value={`${comparison.metrics.length - comparison.insufficientMetrics.length}/${comparison.metrics.length}`} />
       </div>
       <div className="advanced-regression-table-wrap">
         <table className="advanced-table">
-          <caption>Baseline and candidate regression outcomes</caption>
-          <thead><tr><th scope="col">Metric</th><th scope="col">Baseline</th><th scope="col">Candidate</th><th scope="col">Delta</th><th scope="col">Outcome</th></tr></thead>
+          <caption>{translate("Baseline and candidate regression outcomes")}</caption>
+          <thead><tr><th scope="col">{translate("Metric")}</th><th scope="col">{translate("Baseline")}</th><th scope="col">{translate("Candidate")}</th><th scope="col">{translate("Delta")}</th><th scope="col">{translate("Outcome")}</th></tr></thead>
           <tbody>
             {comparison.metrics.map((metric) => (
               <tr key={metric.metric}>
-                <th scope="row">{metric.label}<small>{metric.direction === "higher_is_better" ? "Higher is better" : "Lower is better"}</small></th>
+                <th scope="row">{translate(metric.label)}<small>{translate(metric.direction === "higher_is_better" ? "Higher is better" : "Lower is better")}</small></th>
                 <td>{formatRegressionSample(metric.metric, metric.baselineValue)}<small>n={metric.baselineSampleSize}</small></td>
                 <td>{formatRegressionSample(metric.metric, metric.candidateValue)}<small>n={metric.candidateSampleSize}</small></td>
                 <td>{metric.delta === null ? "—" : formatRegressionSample(metric.metric, metric.delta, true)}</td>
@@ -956,7 +956,7 @@ function RegressionResults({ comparison }: { comparison: ArenaRegressionComparis
           </tbody>
         </table>
       </div>
-      <p className="field-help">{comparison.note}</p>
+      <p className="field-help">{translate(comparison.note)}</p>
     </div>
   );
 }
@@ -965,16 +965,16 @@ function SavedCalibrationDetails({ record }: { record: CalibrationResultRecord }
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label="Source Arena" value={record.sourceArenaId} />
-        <AdvancedBoundary label="Judge" value={`${record.judge.judgeId} v${record.judge.version}`} />
-        <AdvancedBoundary label="Rubric" value={`${record.judge.rubricId} v${record.judge.rubricVersion}`} />
-        <AdvancedBoundary label="Panel" value={record.judge.panel ? `${record.judge.panel.judgeIds.length} official judges` : "None"} />
-        <AdvancedBoundary label="Content hash" value={record.contentHash} />
+        <AdvancedBoundary label={translate("Source Arena")} value={record.sourceArenaId} />
+        <AdvancedBoundary label={translate("Judge")} value={`${record.judge.judgeId} v${record.judge.version}`} />
+        <AdvancedBoundary label={translate("Rubric")} value={`${record.judge.rubricId} v${record.judge.rubricVersion}`} />
+        <AdvancedBoundary label={translate("Panel")} value={record.judge.panel ? `${record.judge.panel.judgeIds.length} ${translate("official judges")}` : translate("None")} />
+        <AdvancedBoundary label={translate("Content hash")} value={record.contentHash} />
       </div>
       {record.metrics.disagreementSampleIds.length > 0 ? (
-        <p className="field-help">Disagreement samples: {record.metrics.disagreementSampleIds.join(", ")}</p>
+        <p className="field-help">{translate("Disagreement samples:")} {record.metrics.disagreementSampleIds.join(", ")}</p>
       ) : (
-        <p className="field-help">No saved samples exceeded the calibration tolerance.</p>
+        <p className="field-help">{translate("No saved samples exceeded the calibration tolerance.")}</p>
       )}
     </div>
   );
@@ -984,11 +984,11 @@ function SavedTournamentDetails({ record }: { record: TournamentResultRecord }) 
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label="Source Arena" value={record.sourceArenaId} />
-        <AdvancedBoundary label="Mode" value={record.mode} />
-        <AdvancedBoundary label="Metric" value={record.metric} />
-        <AdvancedBoundary label="Evidence samples" value={String(record.evidenceSampleCount)} />
-        <AdvancedBoundary label="Content hash" value={record.contentHash} />
+        <AdvancedBoundary label={translate("Source Arena")} value={record.sourceArenaId} />
+        <AdvancedBoundary label={translate("Mode")} value={record.mode} />
+        <AdvancedBoundary label={translate("Metric")} value={record.metric} />
+        <AdvancedBoundary label={translate("Evidence samples")} value={String(record.evidenceSampleCount)} />
+        <AdvancedBoundary label={translate("Content hash")} value={record.contentHash} />
       </div>
       <TournamentStandingsTable standings={record.standings} />
     </div>
@@ -999,13 +999,13 @@ function TournamentOutcomeResult({ result }: { result: TournamentEvidenceResult 
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label="Status" value={result.status === "ready" ? "Ready" : "Insufficient data"} />
-        <AdvancedBoundary label="Metric" value={result.metric} />
-        <AdvancedBoundary label="Evidence samples" value={String(result.evidenceSampleCount)} />
-        <AdvancedBoundary label="Resolved matches" value={String(result.matches.filter((match) => match.outcome !== "insufficient_data").length)} />
+        <AdvancedBoundary label={translate("Status")} value={result.status === "ready" ? translate("Ready") : translate("Insufficient data")} />
+        <AdvancedBoundary label={translate("Metric")} value={result.metric} />
+        <AdvancedBoundary label={translate("Evidence samples")} value={String(result.evidenceSampleCount)} />
+        <AdvancedBoundary label={translate("Resolved matches")} value={String(result.matches.filter((match) => match.outcome !== "insufficient_data").length)} />
       </div>
       <TournamentStandingsTable standings={result.standings} />
-      <p className="field-help">{result.note}</p>
+      <p className="field-help">{translate(result.note)}</p>
     </div>
   );
 }
@@ -1014,16 +1014,16 @@ function TournamentStandingsTable({ standings }: { standings: readonly { rank: n
   return (
     <div className="advanced-table-wrap">
       <table className="advanced-table">
-        <caption>Tournament standings from immutable Arena evidence</caption>
-        <thead><tr><th scope="col">Rank</th><th scope="col">Competitor</th><th scope="col">W-L-T</th><th scope="col">Points</th><th scope="col">Metric</th></tr></thead>
+        <caption>{translate("Tournament standings from immutable Arena evidence")}</caption>
+        <thead><tr><th scope="col">{translate("Rank")}</th><th scope="col">{translate("Competitor")}</th><th scope="col">W-L-T</th><th scope="col">{translate("Points")}</th><th scope="col">{translate("Metric")}</th></tr></thead>
         <tbody>
           {standings.map((standing) => (
             <tr key={standing.competitorId}>
-              <th scope="row">{standing.rank === null ? "—" : `#${standing.rank}`}{standing.tied ? " · tie" : ""}</th>
+        <th scope="row">{standing.rank === null ? "—" : `#${standing.rank}`}{standing.tied ? ` · ${translate("tie")}` : ""}</th>
               <td>{standing.competitorLabel}<small>{standing.competitorId}</small></td>
               <td>{standing.wins}-{standing.losses}-{standing.ties}</td>
               <td>{standing.points.toFixed(2)}</td>
-              <td>{standing.metricValue === null ? "Insufficient data" : standing.metricValue.toFixed(3)}</td>
+              <td>{standing.metricValue === null ? translate("Insufficient data") : standing.metricValue.toFixed(3)}</td>
             </tr>
           ))}
         </tbody>
@@ -1042,21 +1042,21 @@ function TournamentScheduleResult({
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label="Mode" value={schedule.mode === "round_robin" ? "Round robin" : schedule.mode === "single_elimination" ? "Single elimination" : "1v1"} />
-        <AdvancedBoundary label="Rounds" value={String(schedule.roundCount)} />
-        <AdvancedBoundary label="Matches" value={`${schedule.matches.length}/${schedule.maxMatches}`} />
-        <AdvancedBoundary label="Byes" value={schedule.byeCompetitorIds.length === 0 ? "None" : schedule.byeCompetitorIds.join(", ")} />
+        <AdvancedBoundary label={translate("Mode")} value={schedule.mode === "round_robin" ? translate("Round robin") : schedule.mode === "single_elimination" ? translate("Single elimination") : "1v1"} />
+        <AdvancedBoundary label={translate("Rounds")} value={String(schedule.roundCount)} />
+        <AdvancedBoundary label={translate("Matches")} value={`${schedule.matches.length}/${schedule.maxMatches}`} />
+        <AdvancedBoundary label={translate("Byes")} value={schedule.byeCompetitorIds.length === 0 ? translate("None") : schedule.byeCompetitorIds.join(", ")} />
       </div>
       <ol className="advanced-schedule-list">
         {schedule.matches.map((match) => (
           <li key={match.matchId}>
-            <strong>Round {match.round} · Match {match.matchNumber}</strong>
-            <span>{participantLabel(match.competitorAId, match.sourceMatchIds[0], labels)} <b aria-hidden="true">vs</b> {participantLabel(match.competitorBId, match.sourceMatchIds[1], labels)}</span>
-            {match.sourceMatchIds.length > 0 && <small>Feeds from {match.sourceMatchIds.join(", ")}</small>}
+            <strong>{translate("Round")} {match.round} · {translate("Match")} {match.matchNumber}</strong>
+            <span>{participantLabel(match.competitorAId, match.sourceMatchIds[0], labels)} <b aria-hidden="true">{translate("vs")}</b> {participantLabel(match.competitorBId, match.sourceMatchIds[1], labels)}</span>
+            {match.sourceMatchIds.length > 0 && <small>{translate("Feeds from")} {match.sourceMatchIds.join(", ")}</small>}
           </li>
         ))}
       </ol>
-      {schedule.byeCompetitorIds.length > 0 && <p className="field-help">Byes are explicit: {schedule.byeCompetitorIds.map((competitorId) => labels.get(competitorId) ?? competitorId).join(", ")} advance without a scheduled opponent in this bracket.</p>}
+      {schedule.byeCompetitorIds.length > 0 && <p className="field-help">{translate("Byes are explicit:")} {schedule.byeCompetitorIds.map((competitorId) => labels.get(competitorId) ?? competitorId).join(", ")} {translate("advance without a scheduled opponent in this bracket.")}</p>}
     </div>
   );
 }
@@ -1065,19 +1065,19 @@ function BlindRankingResult({ aggregation }: { aggregation: BlindRankingAggregat
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label="Method" value="Borda points" />
-        <AdvancedBoundary label="Ballots" value={String(aggregation.ballotCount)} />
-        <AdvancedBoundary label="Status" value={aggregation.status === "ready" ? "Ready" : "Insufficient data"} />
+        <AdvancedBoundary label={translate("Method")} value={translate("Borda points")} />
+        <AdvancedBoundary label={translate("Ballots")} value={String(aggregation.ballotCount)} />
+        <AdvancedBoundary label={translate("Status")} value={aggregation.status === "ready" ? translate("Ready") : translate("Insufficient data")} />
       </div>
       <ol className="advanced-ranking-list">
         {aggregation.entries.map((entry) => (
           <li key={entry.competitorId}>
-            <div><strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {entry.competitorId}</strong><span>{entry.averagePoints === null ? "Insufficient data" : `${entry.averagePoints.toFixed(2)} points · n=${entry.rankingSampleSize}`}</span></div>
-            {entry.tied && <small className="advanced-tie-note">Tie with {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ")}</small>}
+            <div><strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {entry.competitorId}</strong><span>{entry.averagePoints === null ? translate("Insufficient data") : `${entry.averagePoints.toFixed(2)} ${translate("points")} · n=${entry.rankingSampleSize}`}</span></div>
+            {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ")}</small>}
           </li>
         ))}
       </ol>
-      <p className="field-help">{aggregation.note}</p>
+      <p className="field-help">{translate(aggregation.note)}</p>
     </div>
   );
 }
@@ -1086,17 +1086,17 @@ function EvidenceTable({ samples }: { samples: readonly ArenaEvidenceSample[] })
   return (
     <div className="advanced-table-wrap">
       <table className="advanced-table advanced-evidence-table">
-        <caption>Use these local execution keys for manual score entry</caption>
-        <thead><tr><th scope="col">Execution key</th><th scope="col">Competitor</th><th scope="col">Status</th><th scope="col">Duration</th><th scope="col">Tokens/s</th><th scope="col">Objective</th></tr></thead>
+        <caption>{translate("Use these local execution keys for manual score entry")}</caption>
+        <thead><tr><th scope="col">{translate("Execution key")}</th><th scope="col">{translate("Competitor")}</th><th scope="col">{translate("Status")}</th><th scope="col">{translate("Duration")}</th><th scope="col">Tokens/s</th><th scope="col">{translate("Objective")}</th></tr></thead>
         <tbody>
           {samples.map((sample) => (
             <tr key={`${sample.runId}:${sample.attemptId ?? ""}:${sample.repetition}`}>
-              <th scope="row"><code>{`${sample.runId}:${sample.attemptId ?? ""}`}</code><small>repetition {sample.repetition}</small></th>
+              <th scope="row"><code>{`${sample.runId}:${sample.attemptId ?? ""}`}</code><small>{translate("repetition")} {sample.repetition}</small></th>
               <td>{sample.competitorLabel}<small>{sample.competitorId}</small></td>
-              <td>{sample.status}</td>
+              <td>{translate(sample.status)}</td>
               <td>{sample.durationMs === null ? "—" : `${sample.durationMs.toFixed(1)} ms`}</td>
               <td>{sample.tokensPerSecond === null ? "—" : sample.tokensPerSecond.toFixed(1)}</td>
-              <td>{sample.objectivePassed === null ? "—" : sample.objectivePassed ? "Pass" : "Fail"}</td>
+              <td>{sample.objectivePassed === null ? "—" : sample.objectivePassed ? translate("Pass") : translate("Fail")}</td>
             </tr>
           ))}
         </tbody>
@@ -1106,18 +1106,18 @@ function EvidenceTable({ samples }: { samples: readonly ArenaEvidenceSample[] })
 }
 
 function AdvancedMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <article className="metric-card"><p className="eyebrow">{label}</p><p className="metric-value">{value}</p><p className="metric-detail">{detail}</p></article>;
+  return <article className="metric-card"><p className="eyebrow">{translate(label)}</p><p className="metric-value">{value}</p><p className="metric-detail">{translate(detail)}</p></article>;
 }
 
 function AdvancedBoundary({ label, value }: { label: string; value: string }) {
-  return <div className="boundary-row"><span>{label}</span><strong>{value}</strong></div>;
+  return <div className="boundary-row"><span>{translate(label)}</span><strong>{value}</strong></div>;
 }
 
 function AdvancedStateMessage({ icon, title, description, error = false }: { icon: string; title: string; description: string; error?: boolean }) {
   return (
     <div className="state-panel">
       <span className={`state-icon ${error ? "state-icon-error" : "state-icon-loading"}`} aria-hidden="true">{icon}</span>
-      <div className="state-copy"><h3>{title}</h3><p>{description}</p></div>
+      <div className="state-copy"><h3>{translate(title)}</h3><p>{translate(description)}</p></div>
     </div>
   );
 }
@@ -1127,7 +1127,7 @@ function AdvancedEmptyState({ title, description }: { title: string; description
 }
 
 function formatRankingValue(metric: AdvancedArenaMetric, value: number | null): string {
-  if (value === null) return "Insufficient data";
+  if (value === null) return translate("Insufficient data");
   switch (metric) {
     case "objective_pass_rate": return `${(value * 100).toFixed(1)}%`;
     case "duration_ms": return `${value.toFixed(1)} ms`;
@@ -1137,21 +1137,21 @@ function formatRankingValue(metric: AdvancedArenaMetric, value: number | null): 
 }
 
 function formatRegressionSample(metric: AdvancedArenaMetric, value: number | null, delta = false): string {
-  if (value === null) return "Insufficient data";
+  if (value === null) return translate("Insufficient data");
   const prefix = delta && value > 0 ? "+" : "";
   return `${prefix}${formatRankingValue(metric, value)}`;
 }
 
 function assessmentLabel(assessment: ArenaRegressionComparison["metrics"][number]["assessment"]): string {
   switch (assessment) {
-    case "improved": return "Improved";
-    case "regressed": return "Regressed";
-    case "tie": return "Tie";
-    case "insufficient_data": return "Insufficient data";
+    case "improved": return translate("Improved");
+    case "regressed": return translate("Regressed");
+    case "tie": return translate("Tie");
+    case "insufficient_data": return translate("Insufficient data");
   }
 }
 
 function participantLabel(competitorId: string | null, sourceMatchId: string | undefined, labels: ReadonlyMap<string, string>): string {
   if (competitorId !== null) return labels.get(competitorId) ?? competitorId;
-  return sourceMatchId ? `Winner of ${sourceMatchId}` : "TBD";
+  return sourceMatchId ? `${translate("Winner of")} ${sourceMatchId}` : translate("TBD");
 }

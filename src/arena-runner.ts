@@ -9,6 +9,7 @@ import type {
   RunPlan,
 } from "./bridge";
 import { buildRunPlan } from "./run-plan";
+import type { AppLocale } from "./i18n";
 
 export const ARENA_REPETITION_OPTIONS = [1, 3, 5, 10] as const;
 export const MAX_ARENA_COMPETITORS = 8;
@@ -49,6 +50,7 @@ export type ArenaExecution = {
   execution: PersistedExecution | null;
   error: string | null;
   cancelled: boolean;
+  telemetry?: ArenaSampleTelemetry;
 };
 
 export type ArenaExecutionRequest = {
@@ -60,6 +62,8 @@ export type ArenaExecutionRequest = {
   repetitions: number;
   packId?: string;
   materializationSeed?: number;
+  startedAtMs?: number;
+  blind?: boolean;
 };
 
 export type ExecutePlan = (plan: RunPlan) => Promise<PersistedExecution>;
@@ -69,7 +73,144 @@ export type ArenaProgress = {
   total: number;
   currentCompetitor: string;
   repetition: number;
+  competitorOrdinal: number;
+  sampleIndex: number;
+  status: ArenaSampleStatus;
+  timestampMs: number;
+  sampleStartedAtMs: number | null;
+  sampleElapsedMs: number | null;
+  sampleDurationMs: number | null;
+  metrics: ArenaTelemetryMetrics;
+  error: string | null;
 };
+
+export type ArenaSampleStatus = "queued" | "preparing" | "generating" | "verifying" | "completed" | "failed" | "cancelled";
+
+export type ArenaTelemetryMetrics = {
+  loadDurationMs: number | null;
+  ttftMs: number | null;
+  generationDurationMs: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  tokensPerSecond: number | null;
+  authoritative: boolean;
+};
+
+export type ArenaSampleTelemetry = {
+  competitorId: string;
+  competitorLabel: string;
+  competitorOrdinal: number;
+  repetition: number;
+  sampleIndex: number;
+  status: ArenaSampleStatus;
+  startedAtMs: number | null;
+  elapsedMs: number;
+  durationMs: number | null;
+  metrics: ArenaTelemetryMetrics;
+  error: string | null;
+};
+
+export type ArenaTelemetry = {
+  state: "running" | "completed" | "cancelled" | "failed";
+  startedAtMs: number;
+  wallElapsedMs: number;
+  completed: number;
+  total: number;
+  activeSampleIndex: number | null;
+  etaMs: number | null;
+  samples: ArenaSampleTelemetry[];
+  lastError: string | null;
+};
+
+const unavailableTelemetryMetrics = (): ArenaTelemetryMetrics => ({
+  loadDurationMs: null,
+  ttftMs: null,
+  generationDurationMs: null,
+  promptTokens: null,
+  completionTokens: null,
+  totalTokens: null,
+  tokensPerSecond: null,
+  authoritative: false,
+});
+
+export function createArenaTelemetry(request: ArenaExecutionRequest, startedAtMs = Date.now()): ArenaTelemetry {
+  const samples = request.profiles.flatMap((profile, profileIndex) => Array.from({ length: request.repetitions }, (_, repetitionIndex) => ({
+    competitorId: profile.profileRevisionId,
+    competitorLabel: profile.model,
+    competitorOrdinal: profileIndex,
+    repetition: repetitionIndex + 1,
+    sampleIndex: profileIndex * request.repetitions + repetitionIndex,
+    status: "queued" as const,
+    startedAtMs: null,
+    elapsedMs: 0,
+    durationMs: null,
+    metrics: unavailableTelemetryMetrics(),
+    error: null,
+  })));
+  return { state: "running", startedAtMs, wallElapsedMs: 0, completed: 0, total: samples.length, activeSampleIndex: null, etaMs: null, samples, lastError: null };
+}
+
+export function applyArenaProgress(telemetry: ArenaTelemetry, progress: ArenaProgress): ArenaTelemetry {
+  const samples = telemetry.samples.map((sample) => sample.sampleIndex === progress.sampleIndex
+    ? { ...sample, status: progress.status, startedAtMs: progress.sampleStartedAtMs, elapsedMs: progress.sampleElapsedMs ?? sample.elapsedMs, durationMs: progress.sampleDurationMs ?? sample.durationMs, metrics: progress.metrics, error: progress.error }
+    : sample);
+  const completedDurations = samples.filter((sample) => sample.status === "completed").map((sample) => sample.durationMs).filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
+  const remaining = Math.max(0, telemetry.total - progress.completed);
+  const measuredAverage = completedDurations.length >= 2 ? average(completedDurations) : null;
+  const etaMs = measuredAverage === null ? null : measuredAverage * remaining;
+  return {
+    ...telemetry,
+    completed: progress.completed,
+    total: progress.total,
+    activeSampleIndex: progress.status === "completed" || progress.status === "failed" || progress.status === "cancelled" ? null : progress.sampleIndex,
+    wallElapsedMs: Math.max(0, progress.timestampMs - telemetry.startedAtMs),
+    etaMs,
+    samples,
+    lastError: progress.error ?? telemetry.lastError,
+    state: progress.completed >= progress.total ? (samples.some((sample) => sample.status === "failed") ? "failed" : samples.some((sample) => sample.status === "cancelled") ? "cancelled" : "completed") : "running",
+  };
+}
+
+export function refreshArenaTelemetry(telemetry: ArenaTelemetry, timestampMs = Date.now()): ArenaTelemetry {
+  const samples = telemetry.samples.map((sample) => sample.startedAtMs !== null && sample.status !== "completed" && sample.status !== "failed" && sample.status !== "cancelled"
+    ? { ...sample, elapsedMs: Math.max(0, timestampMs - sample.startedAtMs) }
+    : sample);
+  const active = samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex);
+  return { ...telemetry, wallElapsedMs: Math.max(0, timestampMs - telemetry.startedAtMs), samples, etaMs: telemetry.etaMs === null ? null : telemetry.etaMs, activeSampleIndex: active?.sampleIndex ?? telemetry.activeSampleIndex };
+}
+
+export function telemetryMetricsFromExecution(execution: PersistedExecution | null): ArenaTelemetryMetrics {
+  const summary = execution?.attempt.responseSummary;
+  const timing = summary?.timing;
+  const usage = summary?.usage;
+  const loadDurationMs = nsToMs(timing?.loadDurationNs);
+  const generationDurationMs = nsToMs(timing?.evalDurationNs);
+  const completionTokens = safeCount(usage?.completionTokens);
+  const promptTokens = safeCount(usage?.promptTokens);
+  const totalTokens = safeCount(usage?.totalTokens);
+  const tokensPerSecond = completionTokens !== null && generationDurationMs !== null && generationDurationMs > 0 ? completionTokens / (generationDurationMs / 1000) : null;
+  return {
+    loadDurationMs,
+    ttftMs: null,
+    generationDurationMs,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    tokensPerSecond: tokensPerSecond !== null && Number.isFinite(tokensPerSecond) ? tokensPerSecond : null,
+    authoritative: timing !== undefined || usage !== undefined,
+  };
+}
+
+export function visibleArenaTelemetryMetrics(metrics: ArenaTelemetryMetrics, blind: boolean): ArenaTelemetryMetrics {
+  return blind ? unavailableTelemetryMetrics() : metrics;
+}
+
+export function arenaTelemetryLabel(sample: ArenaSampleTelemetry, blind: boolean, locale: AppLocale = "en"): string {
+  return blind
+    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + (sample.competitorOrdinal % 26))}`
+    : sample.competitorLabel;
+}
 
 export type ArenaMetricSummary = {
   total: number;
@@ -131,6 +272,7 @@ export async function executeArena(
   execute: ExecutePlan,
   onProgress?: (progress: ArenaProgress) => void,
   shouldContinue: () => boolean = () => true,
+  now: () => number = () => Date.now(),
 ): Promise<ArenaExecution[]> {
   if (!request.arenaId || request.arenaId.length > 64) throw new Error("Arena ID is invalid.");
   if (request.profiles.length < 2) throw new Error("Select at least two competitors.");
@@ -147,11 +289,15 @@ export async function executeArena(
       const competitorId = profile.profileRevisionId;
       const competitorLabel = profile.model;
       const runId = `${request.arenaId}-${profileIndex + 1}-${repetition}`;
-      onProgress?.({ completed, total, currentCompetitor: competitorLabel, repetition });
+      const sampleIndex = profileIndex * request.repetitions + repetition - 1;
+      const sampleStartedAtMs = now();
+      const progress = (status: ArenaSampleStatus, completedCount: number, execution: PersistedExecution | null = null, error: string | null = null, sampleDurationMs: number | null = null) => { const timestampMs = now(); onProgress?.({ completed: completedCount, total, currentCompetitor: competitorLabel, repetition, competitorOrdinal: profileIndex, sampleIndex, status, timestampMs, sampleStartedAtMs, sampleElapsedMs: Math.max(0, timestampMs - sampleStartedAtMs), sampleDurationMs, metrics: telemetryMetricsFromExecution(execution), error }); };
+      progress("preparing", completed);
       if (!shouldContinue()) {
-        results.push({ competitorId, competitorLabel, repetition, runId, plan: null, execution: null, error: null, cancelled: true });
+        const durationMs = Math.max(0, now() - sampleStartedAtMs);
+        results.push({ competitorId, competitorLabel, repetition, runId, plan: null, execution: null, error: null, cancelled: true, telemetry: { competitorId, competitorLabel, competitorOrdinal: profileIndex, repetition, sampleIndex, status: "cancelled", startedAtMs: sampleStartedAtMs, elapsedMs: durationMs, durationMs, metrics: unavailableTelemetryMetrics(), error: null } });
         completed += 1;
-        onProgress?.({ completed, total, currentCompetitor: competitorLabel, repetition });
+        progress("cancelled", completed, null, null, durationMs);
         continue;
       }
       let plan: RunPlan | null = null;
@@ -165,23 +311,33 @@ export async function executeArena(
           metadata: {
             arenaId: request.arenaId,
             repetition,
-            sampleIndex: profileIndex * request.repetitions + repetition - 1,
+            sampleIndex,
             ...(request.packId ? { packId: request.packId } : {}),
             ...(request.materializationSeed === undefined ? {} : { materializationSeed: request.materializationSeed }),
           },
         });
+        progress("generating", completed);
+        const execution = await execute(plan);
+        const metrics = telemetryMetricsFromExecution(execution);
+        const durationMs = nsToMs(execution.attempt.responseSummary?.timing?.totalDurationNs) ?? Math.max(0, now() - sampleStartedAtMs);
         results.push({
           competitorId,
           competitorLabel,
           repetition,
           runId,
           plan,
-          execution: await execute(plan),
+          execution,
           error: null,
           cancelled: false,
+          telemetry: { competitorId, competitorLabel, competitorOrdinal: profileIndex, repetition, sampleIndex, status: execution.attempt.status === "completed" ? "completed" : execution.attempt.status === "cancelled" ? "cancelled" : "failed", startedAtMs: sampleStartedAtMs, elapsedMs: durationMs, durationMs, metrics, error: null },
         });
+        completed += 1;
+        progress(execution.attempt.status === "completed" ? "completed" : execution.attempt.status === "cancelled" ? "cancelled" : "failed", completed, execution, null, durationMs);
+        continue;
       } catch (error: unknown) {
         // ponytail: keep the other competitors running; the failed attempt is represented in the Arena report.
+        const safeError = sanitizeArenaError(error);
+        const durationMs = Math.max(0, now() - sampleStartedAtMs);
         results.push({
           competitorId,
           competitorLabel,
@@ -189,15 +345,30 @@ export async function executeArena(
           runId,
           plan,
           execution: null,
-          error: error instanceof Error ? error.message : "The competitor failed before producing a result.",
+          error: safeError,
           cancelled: false,
+          telemetry: { competitorId, competitorLabel, competitorOrdinal: profileIndex, repetition, sampleIndex, status: "failed", startedAtMs: sampleStartedAtMs, elapsedMs: durationMs, durationMs, metrics: unavailableTelemetryMetrics(), error: safeError },
         });
       }
       completed += 1;
-      onProgress?.({ completed, total, currentCompetitor: competitorLabel, repetition });
+      progress("failed", completed, null, results[results.length - 1]?.error ?? "The competitor failed before producing a result.", Math.max(0, now() - sampleStartedAtMs));
     }
   }
   return results;
+}
+
+function nsToMs(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value / 1_000_000 : null;
+}
+
+function safeCount(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function sanitizeArenaError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "The competitor failed before producing a result.";
+  if (!message.trim() || /(api[_ -]?key|authorization|bearer|credential|secret|prompt|response body)/iu.test(message)) return "Execution failed; details withheld.";
+  return message.replace(/[\r\n\t]+/gu, " ").slice(0, 180);
 }
 
 export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMetricSummary {
@@ -288,6 +459,7 @@ export function buildArenaSummaryPayload(
     repetitions: request.repetitions,
     packId: request.packId ?? null,
     materializationSeed: request.materializationSeed ?? null,
+    arenaWallTimeMs: request.startedAtMs === undefined ? null : Math.max(0, Date.now() - request.startedAtMs),
     summary,
     competitors: summarizeArenaCompetitors(executions),
     evidence: executions.map(arenaExecutionEvidence),
@@ -299,7 +471,10 @@ function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
   const responseSummary = attempt?.responseSummary;
   const durationNs = responseSummary?.timing?.totalDurationNs;
   const evalDurationNs = responseSummary?.timing?.evalDurationNs;
+  const loadDurationNs = responseSummary?.timing?.loadDurationNs;
   const completionTokens = responseSummary?.usage?.completionTokens;
+  const promptTokens = responseSummary?.usage?.promptTokens;
+  const totalTokens = responseSummary?.usage?.totalTokens;
   const score = attempt?.result?.score;
   const status = item.cancelled
     ? "cancelled"
@@ -321,7 +496,11 @@ function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
     status,
     durationMs: typeof durationNs === "number" && Number.isFinite(durationNs) && durationNs >= 0
       ? durationNs / 1_000_000
-      : null,
+      : item.telemetry?.durationMs ?? null,
+    loadDurationMs: typeof loadDurationNs === "number" && Number.isFinite(loadDurationNs) && loadDurationNs >= 0 ? loadDurationNs / 1_000_000 : item.telemetry?.metrics.loadDurationMs ?? null,
+    generationDurationMs: typeof evalDurationNs === "number" && Number.isFinite(evalDurationNs) && evalDurationNs >= 0 ? evalDurationNs / 1_000_000 : item.telemetry?.metrics.generationDurationMs ?? null,
+    ttftMs: null,
+    promptTokens: safeCount(promptTokens),
     tokensPerSecond: tokensPerSecond !== null && Number.isFinite(tokensPerSecond) && tokensPerSecond >= 0
       ? tokensPerSecond
       : null,
@@ -330,6 +509,7 @@ function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
       && completionTokens >= 0
       ? completionTokens
       : null,
+    totalTokens: safeCount(totalTokens),
     objectivePassed: isRecord(score) && typeof score.passed === "boolean" ? score.passed : null,
   };
 }
@@ -531,6 +711,7 @@ export function arenaSummaryExportCsv(record: ArenaSummaryRecord): string {
     "caseId",
     "createdAt",
     "contentHash",
+    "arenaWallTimeMs",
     "competitorId",
     "competitorLabel",
     "repetition",
@@ -538,8 +719,13 @@ export function arenaSummaryExportCsv(record: ArenaSummaryRecord): string {
     "attemptId",
     "status",
     "durationMs",
+    "loadDurationMs",
+    "generationDurationMs",
+    "ttftMs",
+    "promptTokens",
     "tokensPerSecond",
     "completionTokens",
+    "totalTokens",
     "objectivePassed",
   ]];
   for (const evidence of payload.evidence) {
@@ -550,6 +736,7 @@ export function arenaSummaryExportCsv(record: ArenaSummaryRecord): string {
       payload.caseId,
       payload.createdAt,
       payload.contentHash,
+      csvExportNumber(payload.arenaWallTimeMs),
       evidence.competitorId,
       evidence.competitorLabel,
       csvExportNumber(evidence.repetition),
@@ -557,8 +744,13 @@ export function arenaSummaryExportCsv(record: ArenaSummaryRecord): string {
       evidence.attemptId ?? "",
       evidence.status,
       csvExportNumber(evidence.durationMs),
+      csvExportNumber(evidence.loadDurationMs),
+      csvExportNumber(evidence.generationDurationMs),
+      csvExportNumber(evidence.ttftMs),
+      csvExportNumber(evidence.promptTokens),
       csvExportNumber(evidence.tokensPerSecond),
       csvExportNumber(evidence.completionTokens),
+      csvExportNumber(evidence.totalTokens),
       evidence.objectivePassed === null ? "" : String(evidence.objectivePassed),
     ]);
   }
@@ -588,6 +780,7 @@ type PersistedArenaExportPayload = {
   materializationSeed: number | null;
   createdAt: string;
   contentHash: string;
+  arenaWallTimeMs: ExportNumber;
   summary: Record<(typeof ARENA_SUMMARY_NUMBER_KEYS)[number], ExportNumber>;
   competitors: Array<{
     competitorId: string;
@@ -614,8 +807,13 @@ type PersistedArenaExportPayload = {
     attemptId: string | null;
     status: string;
     durationMs: ExportNumber;
+    loadDurationMs: ExportNumber;
+    generationDurationMs: ExportNumber;
+    ttftMs: ExportNumber;
+    promptTokens: ExportNumber;
     tokensPerSecond: ExportNumber;
     completionTokens: ExportNumber;
+    totalTokens: ExportNumber;
     objectivePassed: boolean | null;
   }>;
   truncated: { competitors: boolean; evidence: boolean };
@@ -642,6 +840,7 @@ function persistedArenaExportPayload(record: ArenaSummaryRecord): PersistedArena
     materializationSeed: record.materializationSeed === null ? null : exportCount(record.materializationSeed),
     createdAt: boundedExportText(record.createdAt),
     contentHash: boundedExportText(record.contentHash),
+    arenaWallTimeMs: exportMetric(record.arenaWallTimeMs),
     summary: publicSummaryNumbers(record.summary),
     competitors,
     evidence,
@@ -689,8 +888,13 @@ function publicPersistedEvidence(evidence: ArenaExecutionEvidence) {
     attemptId: evidence.attemptId === null ? null : boundedExportText(evidence.attemptId),
     status: boundedExportText(evidence.status),
     durationMs: exportMetric(evidence.durationMs),
+    loadDurationMs: exportMetric(evidence.loadDurationMs),
+    generationDurationMs: exportMetric(evidence.generationDurationMs),
+    ttftMs: exportMetric(evidence.ttftMs),
+    promptTokens: exportCount(evidence.promptTokens),
     tokensPerSecond: exportMetric(evidence.tokensPerSecond),
     completionTokens: exportCount(evidence.completionTokens),
+    totalTokens: exportCount(evidence.totalTokens),
     objectivePassed: typeof evidence.objectivePassed === "boolean" ? evidence.objectivePassed : null,
   };
 }
