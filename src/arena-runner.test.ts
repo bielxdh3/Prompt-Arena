@@ -8,6 +8,11 @@ import {
   rankArenaCompetitors,
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
+  applyArenaProgress,
+  arenaTelemetryLabel,
+  createArenaTelemetry,
+  visibleArenaTelemetryMetrics,
+  type ArenaProgress,
 } from "./arena-runner";
 import type { BenchmarkVersion, PersistedExecution, ProfileRevision } from "./bridge";
 
@@ -140,5 +145,49 @@ describe("arena runner", () => {
     ]));
     expect(ranking[0]).toMatchObject({ rank: 1, competitorId: "one@1", metric: "human_average_score", value: 5, sampleSize: 1 });
     expect(rankArenaCompetitors(results)[0].metric).toBe("objective_pass_rate");
+  });
+
+  it("tracks progress transitions, measured accumulation, token rate, and deterministic ETA", () => {
+    const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 3 };
+    let clock = 1000;
+    const progress: ArenaProgress[] = [];
+    const resultsPromise = executeArena(request, async (plan) => {
+      clock += 100;
+      return execution(plan.runId, plan.profileRevision.profileRevisionId, "completed");
+    }, (event) => progress.push(event), () => true, () => clock);
+    return resultsPromise.then((results) => {
+      let telemetry = createArenaTelemetry(request, 1000);
+      for (const event of progress) telemetry = applyArenaProgress(telemetry, event);
+      expect(progress.map((event) => event.status)).toContain("preparing");
+      expect(progress.map((event) => event.status)).toContain("generating");
+      expect(progress.at(-1)?.status).toBe("completed");
+      expect(telemetry.completed).toBe(6);
+      expect(telemetry.samples[0].durationMs).toBe(1);
+      expect(telemetry.etaMs).toBe(0);
+      expect(telemetry.samples[0].metrics.tokensPerSecond).toBe(1000);
+      expect(telemetry.samples[0].metrics.generationDurationMs).toBe(1);
+      expect(telemetry.samples[0].metrics.loadDurationMs).toBeNull();
+      expect(results).toHaveLength(6);
+    });
+  });
+
+  it("keeps blind telemetry neutral and hides identity-sensitive metrics", () => {
+    const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 };
+    const telemetry = createArenaTelemetry(request, 10);
+    expect(arenaTelemetryLabel(telemetry.samples[0], true)).toBe("Competitor A");
+    expect(arenaTelemetryLabel(telemetry.samples[1], true)).toBe("Competitor B");
+    expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
+  });
+
+  it("records cancellation and sanitized failure without weakening sequential continuation", async () => {
+    let keepRunning = true;
+    const events: ArenaProgress[] = [];
+    const results = await executeArena({ arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 }, async () => {
+      keepRunning = false;
+      throw new Error("authorization bearer secret");
+    }, (event) => events.push(event), () => keepRunning, () => 100);
+    expect(results[0].error).toBe("Execution failed; details withheld.");
+    expect(results[1].cancelled).toBe(true);
+    expect(events.map((event) => event.status)).toEqual(expect.arrayContaining(["failed", "cancelled"]));
   });
 });
