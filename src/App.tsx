@@ -218,7 +218,15 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
-import { I18nProvider, translate, useI18n } from "./i18n";
+import {
+  formatLocaleDate,
+  formatLocaleDuration,
+  formatLocaleNumber,
+  formatLocalePercent,
+  I18nProvider,
+  translate,
+  useI18n,
+} from "./i18n";
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -459,7 +467,7 @@ function Overview({
   const count = (items: readonly unknown[] | undefined) => {
     if (state.status === "preview") return "Preview";
     if (state.status !== "ready" || !items) return state.status === "loading" ? "…" : "—";
-    return items.length.toLocaleString();
+    return formatLocaleNumber(items.length);
   };
   const data = state.status === "ready" ? state.data : null;
   const recentSummaries = data ? [...data.summaries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 3) : [];
@@ -543,9 +551,9 @@ function Overview({
               <div className="dashboard-activity-row" key={summary.arenaId}>
                 <div>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} {translate("samples")} · {translate("saved")} {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)} {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
                 </div>
-                <span>{summary.summary.completed === undefined ? translate("Completed not recorded") : `${String(summary.summary.completed)} ${translate("completed")}`}</span>
+                <span>{typeof summary.summary.completed === "number" && Number.isFinite(summary.summary.completed) ? `${formatLocaleNumber(summary.summary.completed)} ${translate("completed")}` : translate("Completed not recorded")}</span>
               </div>
             ))}
           </div>
@@ -964,7 +972,7 @@ function BenchmarksView() {
                 <article className="benchmark-record-row version-row" key={version.versionId}>
                   <span>
                     <strong>{version.versionId}</strong>
-                    <small>{version.contentHash.slice(0, 12)}… · {translate("saved")} {version.createdAt}</small>
+                    <small>{version.contentHash.slice(0, 12)}… · {translate("saved")} {formatDisplayTimestamp(version.createdAt)}</small>
                   </span>
                   <span className="run-status">{translate("immutable")}</span>
                 </article>
@@ -1846,7 +1854,7 @@ function ModelsView() {
                   <article className="profile-record-row" key={removal.removalId}>
                     <span>
                       <strong>{removal.modelId}</strong>
-                      <small>{removal.managedPath} · SHA-256 {removal.contentHash.slice(0, 12)}… · {removal.removedAt}</small>
+                      <small>{removal.managedPath} · SHA-256 {removal.contentHash.slice(0, 12)}… · {formatDisplayTimestamp(removal.removedAt)}</small>
                     </span>
                     <span className="run-status run-status-neutral">{translate(removal.outcome)}</span>
                   </article>
@@ -2022,17 +2030,19 @@ function formatHardwareBytes(value: number): string {
 }
 
 function formatArenaMetric(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? translate("Not recorded") : value.toFixed(2);
+  return value === null || !Number.isFinite(value)
+    ? translate("Not recorded")
+    : formatLocaleNumber(value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function summaryNumberText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : translate("Not recorded");
+  return typeof value === "number" && Number.isFinite(value) ? formatLocaleNumber(value) : translate("Not recorded");
 }
 
 function summaryPercentText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : translate("Not recorded");
+  return typeof value === "number" && Number.isFinite(value) ? formatLocalePercent(value) : translate("Not recorded");
 }
 
 function summaryMetricText(summary: Record<string, unknown>, key: string): string {
@@ -2042,8 +2052,14 @@ function summaryMetricText(summary: Record<string, unknown>, key: string): strin
 
 function formatModelSize(sizeBytes: number | null): string {
   if (sizeBytes === null) return translate("size unavailable");
-  if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
-  return `${(sizeBytes / 1024 ** 3).toFixed(1)} GB`;
+  if (sizeBytes < 1024 ** 3) return `${formatLocaleNumber(Math.round(sizeBytes / 1024 ** 2))} MB`;
+  return `${formatLocaleNumber(sizeBytes / 1024 ** 3, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GB`;
+}
+
+function formatDisplayTimestamp(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T/iu.test(value)) return value;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? formatLocaleDate(timestamp) : value;
 }
 
 type ArenaRecordsState =
@@ -2831,8 +2847,8 @@ function ArenaResultsSurface({
 
   return (
     <section className="panel arena-results-panel" aria-live="polite">
-      <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Arena results")}</p><h3>{showMeasuredResults ? `${summary.completed}/${summary.total} ${translate("samples completed")}` : translate("Blind results locked until reveal")}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? translate("Saved") : translate("Summary unavailable")}</span></div>
-       {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label={translate("Successful")} value={String(summary.completed)} detail={`${summary.failed} ${translate("failed")} · ${summary.cancelled} ${translate("cancelled")}`} /><MetricCard label={translate("Success rate")} value={`${Math.round(summary.successRate * 100)}%`} detail={translate("Completed samples / total")} /><MetricCard label={translate("Average duration")} value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? translate("No timing samples") : `${translate("Median")} ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label={translate("Timing spread")} value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? translate("No timing samples") : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label={translate("Objective")} value={summary.objectiveChecked === 0 ? translate("Human review") : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail={translate("Deterministic evidence only")} /></div>}
+      <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Arena results")}</p><h3>{showMeasuredResults ? `${formatLocaleNumber(summary.completed)}/${formatLocaleNumber(summary.total)} ${translate("samples completed")}` : translate("Blind results locked until reveal")}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? translate("Saved") : translate("Summary unavailable")}</span></div>
+       {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label={translate("Successful")} value={formatLocaleNumber(summary.completed)} detail={`${formatLocaleNumber(summary.failed)} ${translate("failed")} · ${formatLocaleNumber(summary.cancelled)} ${translate("cancelled")}`} /><MetricCard label={translate("Success rate")} value={formatLocalePercent(summary.successRate)} detail={translate("Completed samples / total")} /><MetricCard label={translate("Average duration")} value={summary.averageDurationMs === null ? "—" : formatLocaleDuration(summary.averageDurationMs)} detail={summary.medianDurationMs === null ? translate("No timing samples") : `${translate("Median")} ${formatLocaleDuration(summary.medianDurationMs)}`} /><MetricCard label={translate("Timing spread")} value={summary.minimumDurationMs === null ? "—" : `${formatLocaleDuration(summary.minimumDurationMs)}–${summary.maximumDurationMs === null ? "—" : formatLocaleDuration(summary.maximumDurationMs)}`} detail={summary.standardDeviationDurationMs === null ? translate("No timing samples") : `σ ${formatLocaleDuration(summary.standardDeviationDurationMs)}`} /><MetricCard label={translate("Objective")} value={summary.objectiveChecked === 0 ? translate("Human review") : `${formatLocaleNumber(summary.objectivePassed)}/${formatLocaleNumber(summary.objectiveChecked)}`} detail={translate("Deterministic evidence only")} /></div>}
        {summaryPersistence.status === "error" && <StateMessage icon="!" title={translate("Aggregate summary unavailable")} description={`${summaryPersistence.message} ${translate("Per-sample run evidence remains available.")}`} error />}
       {showMeasuredResults && summaryPersistence.status === "saved" && (
         <div className="results-section">
@@ -2844,7 +2860,7 @@ function ArenaResultsSurface({
             <BoundaryRow label="Timing tie margin" value={`${formatArenaMetric(summary.tieMargin)} ms`} />
             <BoundaryRow label="Objective uncertainty" value={formatArenaMetric(summary.objectiveUncertainty)} />
             <BoundaryRow label="Objective tie margin" value={formatArenaMetric(summary.objectiveTieMargin)} />
-            <BoundaryRow label="Per-sample evidence" value={String(summaryPersistence.record.evidence.length)} />
+            <BoundaryRow label="Per-sample evidence" value={formatLocaleNumber(summaryPersistence.record.evidence.length)} />
           </div>
         </div>
       )}
@@ -2882,12 +2898,12 @@ function ArenaResultsSurface({
                  {response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}
                  <ul className="arena-sample-list">{items.map((item) => {
                    const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined;
-                   return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {translate(item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled"))} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? `· ${item.error}` : ""}</li>;
+                   return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {translate(item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled"))} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${formatLocaleDuration(evidence.durationMs)}`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? `· ${item.error}` : ""}</li>;
                  })}</ul>
                </article>
              );
            })}</div>
-          {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${entry.value.toFixed(2)}/5 ${translate("average")}` : `${Math.round(entry.value * 100)}% ${translate("objective pass rate")} `} · n={entry.sampleSize}</span></li>)}</ol></div>}
+          {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/5 ${translate("average")}` : `${formatLocalePercent(entry.value)} ${translate("objective pass rate")} `} · n=${formatLocaleNumber(entry.sampleSize)}</span></li>)}</ol></div>}
           {revealed && lockState === "locked" && <p className="field-help" role="status">{translate("Blind scores are locked in immutable per-run evaluation records. Responses are now identified.")}</p>}
            <div className="export-actions" role="group" aria-label={translate("Current Arena evidence exports")}><button className="secondary-button" type="button" onClick={() => download("json")}>{translate("Export JSON")}</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>{translate("Export Markdown")}</button><button className="secondary-button" type="button" onClick={() => download("csv")}>{translate("Export CSV")}</button></div>
            {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
@@ -2916,11 +2932,11 @@ function ArenaExecutionMonitor({
     <div className="arena-execution-monitor" role="status" aria-live="polite">
       <div className="section-heading compact-heading">
         <div><p className="eyebrow">{translate("Live execution monitor")}</p><h4>{saving ? translate("Saving measured evidence") : telemetry.state === "running" ? translate("Arena is running") : telemetry.state}</h4></div>
-        <span className="run-status run-status-neutral">{telemetry.completed}/{telemetry.total}</span>
+        <span className="run-status run-status-neutral">{formatLocaleNumber(telemetry.completed)}/{formatLocaleNumber(telemetry.total)}</span>
       </div>
       <div className="arena-live-facts">
          <BoundaryRow label={translate("Arena state")} value={saving ? translate("saving") : translate(telemetry.state)} />
-         <BoundaryRow label={translate("Progress")} value={`${telemetry.completed} / ${telemetry.total} ${translate("samples")}`} />
+         <BoundaryRow label={translate("Progress")} value={`${formatLocaleNumber(telemetry.completed)} / ${formatLocaleNumber(telemetry.total)} ${translate("samples")}`} />
          <BoundaryRow label={translate("Arena wall time")} value={blind ? translate("Hidden during blind execution") : formatArenaMs(telemetry.wallElapsedMs)} />
          <BoundaryRow label={translate("ETA")} value={blind ? translate("Hidden during blind execution") : telemetry.etaMs === null ? translate("Unavailable · needs 2 measured samples") : `~${formatArenaMs(telemetry.etaMs)}`} />
       </div>
@@ -2940,7 +2956,7 @@ function ArenaExecutionMonitor({
           const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
           return <div className="arena-live-row" key={first.competitorId}>
             <strong>{arenaTelemetryLabel(first, blind, locale)}</strong>
-             <span>{translate(latest.status)} · {samples.filter((sample) => sample.status === "completed").length}/{samples.length}</span>
+             <span>{translate(latest.status)} · {formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)}</span>
             <span>{blind ? translate("Timing hidden") : `${translate("Total")} ${formatArenaMs(accumulated)}`}</span>
             <span>{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
             {latest.error && <em>{latest.error}</em>}
@@ -2957,17 +2973,14 @@ function ArenaExecutionMonitor({
 }
 
 function formatArenaMs(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return translate("Unavailable");
-  if (value < 1000) return `${Math.round(value)} ms`;
-  const seconds = value / 1000;
-  return seconds < 60 ? `${seconds.toFixed(1)} s` : `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  return formatLocaleDuration(value ?? Number.NaN);
 }
 
 function formatArenaMetrics(metrics: ReturnType<typeof visibleArenaTelemetryMetrics>): string {
   const values = [
-    metrics.tokensPerSecond === null ? translate("tokens/s unavailable") : `${metrics.tokensPerSecond.toFixed(1)} tok/s`,
-    metrics.completionTokens === null ? translate("output unavailable") : `${metrics.completionTokens} ${translate("output tokens")}`,
-    metrics.ttftMs === null ? translate("TTFT unavailable") : `TTFT ${Math.round(metrics.ttftMs)} ms`,
+    metrics.tokensPerSecond === null ? translate("tokens/s unavailable") : `${formatLocaleNumber(metrics.tokensPerSecond, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} tok/s`,
+    metrics.completionTokens === null ? translate("output unavailable") : `${formatLocaleNumber(metrics.completionTokens)} ${translate("output tokens")}`,
+    metrics.ttftMs === null ? translate("TTFT unavailable") : `TTFT ${formatLocaleDuration(metrics.ttftMs)}`,
   ];
   return values.join(" · ");
 }
@@ -3252,7 +3265,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                     <p className="eyebrow">{run.benchmarkVersionId}</p>
                     <h3>{run.runId}</h3>
                     <p className="run-meta">
-                      {run.attemptIds.length} {translate(run.attemptIds.length === 1 ? "attempt" : "attempts")} · {run.profileRevisionIds.length} {translate(run.profileRevisionIds.length === 1 ? "profile revision" : "profile revisions")} · {translate("started")} {run.startedAt}
+                      {formatLocaleNumber(run.attemptIds.length)} {translate(run.attemptIds.length === 1 ? "attempt" : "attempts")} · {formatLocaleNumber(run.profileRevisionIds.length)} {translate(run.profileRevisionIds.length === 1 ? "profile revision" : "profile revisions")} · {translate("started")} {formatDisplayTimestamp(run.startedAt)}
                     </p>
                   </div>
                   <span className={`run-status run-status-${attemptStatusTone(run.status)}`}>
@@ -3370,12 +3383,12 @@ function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] })
                 key={summary.arenaId}
                 type="button"
                 aria-pressed={selectedArenaId === summary.arenaId}
-                aria-label={`${summary.arenaId}, ${summary.evidence.length} ${translate("persisted samples")}, ${translate("saved")} ${summary.createdAt}`}
+                   aria-label={`${summary.arenaId}, ${formatLocaleNumber(summary.evidence.length)} ${translate("persisted samples")}, ${translate("saved")} ${formatDisplayTimestamp(summary.createdAt)}`}
                 onClick={() => void selectSummary(summary.arenaId)}
               >
                 <span>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} {translate("samples")} · {translate("saved")} {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)} {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
                 </span>
                 <span aria-hidden="true">→</span>
               </button>
@@ -3455,9 +3468,9 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       <div className="results-facts">
         <BoundaryRow label="Arena" value={record.arenaId} />
         <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
-        <BoundaryRow label="Saved" value={record.createdAt} />
+        <BoundaryRow label="Saved" value={formatDisplayTimestamp(record.createdAt)} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
-        <BoundaryRow label="Samples" value={String(record.evidence.length)} />
+        <BoundaryRow label="Samples" value={formatLocaleNumber(record.evidence.length)} />
         <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
         <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
         <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
@@ -3509,9 +3522,9 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
                     <td>#{evidence.repetition}</td>
                     <td>{translate(evidence.status)}</td>
                     <td><code>{evidence.runId}{evidence.attemptId ? ` / ${evidence.attemptId}` : ""}</code></td>
-                    <td>{evidence.durationMs === null ? translate("Not recorded") : `${evidence.durationMs.toFixed(0)} ms`}</td>
-                    <td>{evidence.tokensPerSecond === null || evidence.tokensPerSecond === undefined ? translate("Not recorded") : evidence.tokensPerSecond.toFixed(2)}</td>
-                    <td>{evidence.completionTokens === null ? translate("Not recorded") : evidence.completionTokens}</td>
+                    <td>{evidence.durationMs === null ? translate("Not recorded") : formatLocaleDuration(evidence.durationMs)}</td>
+                    <td>{evidence.tokensPerSecond === null || evidence.tokensPerSecond === undefined ? translate("Not recorded") : formatLocaleNumber(evidence.tokensPerSecond, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td>{evidence.completionTokens === null ? translate("Not recorded") : formatLocaleNumber(evidence.completionTokens)}</td>
                     <td>{evidence.objectivePassed === null ? translate("Not recorded") : evidence.objectivePassed ? translate("Pass") : translate("Fail")}</td>
                   </tr>
                 ))}
@@ -4018,7 +4031,7 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
         expectedRecords: state.preview.eligibleRecords,
         confirmation,
       });
-      setNotice(`${result.deletedRecords.toLocaleString()} ${translate(result.deletedRecords === 1 ? "local history record removed." : "local history records removed.")} ${translate("Protected source records and artifacts were retained.")}`);
+      setNotice(`${formatLocaleNumber(result.deletedRecords)} ${translate(result.deletedRecords === 1 ? "local history record removed." : "local history records removed.")} ${translate("Protected source records and artifacts were retained.")}`);
       setConfirmation("");
       await refresh();
     } catch (error: unknown) {
@@ -4058,8 +4071,8 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
           {state.status === "ready" && state.preview.eligibleRecords > 0 && (
             <>
               <div className="results-facts">
-                {state.preview.tables.filter((table) => table.eligibleRecords > 0).map((table) => <BoundaryRow key={table.table} label={table.table} value={table.eligibleRecords.toLocaleString()} />)}
-                <BoundaryRow label="Total eligible" value={`${state.preview.eligibleRecords.toLocaleString()} / ${state.preview.maxDeleteRecords.toLocaleString()} ${translate("maximum")}`} />
+                {state.preview.tables.filter((table) => table.eligibleRecords > 0).map((table) => <BoundaryRow key={table.table} label={table.table} value={formatLocaleNumber(table.eligibleRecords)} />)}
+                <BoundaryRow label="Total eligible" value={`${formatLocaleNumber(state.preview.eligibleRecords)} / ${formatLocaleNumber(state.preview.maxDeleteRecords)} ${translate("maximum")}`} />
                 <BoundaryRow label="Cutoff" value={`${translate("before")} ${state.preview.cutoffAt}`} />
               </div>
               {state.preview.eligibleRecords > state.preview.maxDeleteRecords ? (
@@ -4333,7 +4346,7 @@ function ResponsePreview({ text }: { text: string }) {
   return (
     <div className="response-preview-block">
       <pre className="attempt-response">{visible}</pre>
-      {truncated && <p className="field-help">Response preview is bounded at {maxCharacters.toLocaleString()} characters. The verified byte count and hash cover the complete artifact.</p>}
+      {truncated && <p className="field-help">Response preview is bounded at {formatLocaleNumber(maxCharacters)} characters. The verified byte count and hash cover the complete artifact.</p>}
     </div>
   );
 }
@@ -5024,7 +5037,7 @@ function ByokEvidenceHistoryEntry({ record }: { record: ExternalGenerationEviden
         <BoundaryRow label="Actual cost" value={formatByokMoney(record.actual.totalCostUsd)} />
         <BoundaryRow label="Budget decisions" value={`${translate("preflight")} ${translate(formatByokDecision(record.preflightDecision))} · ${translate("final")} ${translate(formatByokDecision(record.finalDecision))}`} />
         <BoundaryRow label="Price snapshot" value={`${record.priceSnapshot.modelId} · ${record.priceSnapshot.capturedOn} · ${record.priceSnapshot.currency} · ${formatByokMoney(record.priceSnapshot.inputUsdPerMillionTokens)} ${translate("input")} / ${formatByokMoney(record.priceSnapshot.outputUsdPerMillionTokens)} ${translate("output")} ${translate("per 1M")}`} />
-        <BoundaryRow label="Created" value={record.createdAt} />
+        <BoundaryRow label="Created" value={formatDisplayTimestamp(record.createdAt)} />
       </div>
     </article>
   );
