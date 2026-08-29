@@ -33,7 +33,7 @@ until the listed native Tauri/WebView and Docker-boundary checks pass.
 | Appearance/accessibility | `appearance.ts`, `styles.css` | Settings | appearance tests | Native accessibility review required | none yet | IN PROGRESS |
 | Windows NSIS | Tauri bundle + workflow | Installer | local `tauri build` | Install/launch/uninstall required | 33213307890: NSIS + smoke | ARTIFACT, QA PENDING |
 | Windows MSI | Tauri target + workflow | Installer | config check | local WiX `light.exe` failed | 33213307890: unavailable; zero artifacts | BLOCKED LOCALLY |
-| Linux deb/AppImage | Tauri target + workflow | Installer | workflow definition | Linux runner required | 33213307890: DEB/AppImage + smoke | CI PENDING |
+| Linux deb/AppImage | Tauri target + workflow | Installer | workflow definition | Linux runner required | 33213307890: DEB/AppImage + smoke | ARTIFACT, QA PENDING |
 
 ## Current CI, native, and package evidence
 
