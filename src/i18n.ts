@@ -960,8 +960,13 @@ export function formatLocalePercent(value: number, locale: AppLocale = activeLoc
   return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(value);
 }
 
-export function formatLocaleCurrency(value: number, locale: AppLocale = activeLocale, currency = "USD"): string {
-  return new Intl.NumberFormat(locale, { style: "currency", currency }).format(value);
+export function formatLocaleCurrency(
+  value: number,
+  locale: AppLocale = activeLocale,
+  currency = "USD",
+  options?: Intl.NumberFormatOptions,
+): string {
+  return new Intl.NumberFormat(locale, { style: "currency", currency, ...options }).format(value);
 }
 
 export function formatLocaleDate(value: string | number | Date, locale: AppLocale = activeLocale): string {
