@@ -25,7 +25,12 @@ jobs:
 
       - name: Install tauri-driver
         shell: pwsh
-        run: cargo install tauri-driver --locked
+        run: |
+          $installLog = Join-Path $env:RUNNER_TEMP 'tauri-driver-install.log'
+          & cargo install tauri-driver --locked 2>&1 | Tee-Object -FilePath $installLog
+          if ($LASTEXITCODE -ne 0) {
+            throw "tauri-driver installation failed with exit code $LASTEXITCODE."
+          }
 
       - name: Install matching EdgeDriver tool
         shell: pwsh
@@ -87,7 +92,19 @@ jobs:
           }
 
           $edgeDriverPath = Resolve-Executable -Name 'msedgedriver.exe' -Roots $roots
-          $tauriDriverVersion = Read-Version -Path $tauriDriverPath
+          $installLog = Join-Path $env:RUNNER_TEMP 'tauri-driver-install.log'
+          if (-not (Test-Path -LiteralPath $installLog -PathType Leaf)) {
+            throw 'tauri-driver install output was not retained.'
+          }
+          $tauriDriverInstallOutput = Get-Content -LiteralPath $installLog -Raw
+          $packageMatches = [regex]::Matches($tauriDriverInstallOutput, 'Installing tauri-driver v(?<version>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)')
+          $packageVersions = @($packageMatches | ForEach-Object { $_.Groups['version'].Value } | Sort-Object -Unique)
+          if ($packageVersions.Count -ne 1) {
+            throw "Expected exactly one verified tauri-driver package version, found $($packageVersions.Count)."
+          }
+          $tauriDriverPackageVersion = $packageVersions[0]
+          $tauriDriverVersionProbeOutput = (& $tauriDriverPath --version 2>&1 | Out-String).Trim()
+          $tauriDriverVersionProbeExitCode = $LASTEXITCODE
           $edgeDriverVersionOutput = Read-Version -Path $edgeDriverPath
           $edgeVersionMatch = [regex]::Match($edgeDriverVersionOutput, '\b(?<version>\d+\.\d+\.\d+\.\d+)\b')
           if (-not $edgeVersionMatch.Success) {
@@ -122,6 +139,12 @@ jobs:
             targetArchitecture = 'x64'
             capturedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
             edgeDriverCompatibilityPrefix = '151.0.4129'
+            tauriDriverPackageVersion = $tauriDriverPackageVersion
+            tauriDriverInstallOutput = $tauriDriverInstallOutput.Trim()
+            tauriDriverVersionProbe = [ordered]@{
+              exitCode = $tauriDriverVersionProbeExitCode
+              output = $tauriDriverVersionProbeOutput
+            }
             binaries = @(
               [ordered]@{
                 name = 'tauri-driver.exe'
