@@ -1,7 +1,7 @@
 # Product completion evidence matrix
 
 Target: `completion/windows-qa-live-telemetry-i18n` at exact reviewed commit
-`dd74a26a56d32be96303c7753635bafd3c0c0e41` (`dd74a26`). `COMPLETE` means the
+`57f02b35abacce6a0a1ed64a5f952d29a710614a` (`57f02b3`). `COMPLETE` means the
 local implementation and its automated evidence are present. Native Tauri and
 human gates remain `PENDING_HUMAN_QA`; environment/runtime failures are marked
 separately.
@@ -18,6 +18,15 @@ separately.
 - `npm run build` — passed.
 - `npm run check:boundaries` — passed.
 - Redirected `cargo test` — passed, 107 tests.
+
+## Windows NSIS artifact evidence at `57f02b3`
+
+- `npm run tauri:build -- --bundles nsis --config {"bundle":{"useLocalToolsDir":true}}` — passed.
+- `npm run package:artifacts -- --platform windows` — passed; checksum manifest written to `checksums-sha256.txt`.
+- `npm run verify:package -- --platform windows` — passed.
+- `npm run verify:package -- --platform windows --smoke` — passed checksum validation, clean install, launch, restart, and silent uninstall.
+- Temporary installed-tree proof found `prompt-arena.exe` and `prompt-arena-worker.exe`, recorded their hashes, and confirmed both disappeared after silent uninstall; the temporary directory was removed.
+- This is automated package evidence only; it does not satisfy visual or native-human QA.
 
 | Roadmap requirement | Implementation and UI evidence | Automated evidence | Native/human evidence | Status |
 | --- | --- | --- | --- | --- |
@@ -39,20 +48,32 @@ separately.
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | `src/advanced-arena-ui.test.ts`, TypeScript suite | Tauri reopen and workflow review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance/accessibility | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | appearance/font tests | Native accessibility and layout review | PENDING_HUMAN_QA |
-| Windows NSIS | Tauri bundle/workflow | Preceding-state attempt at `be1007f` failed with `Acesso negado. (os error 5)` | No current-commit installer, hash, or install/launch/restart/uninstall smoke | BLOCKED_ENVIRONMENT |
+| Windows NSIS | Tauri bundle/workflow | Build succeeded with `bundle.useLocalToolsDir=true`; package preparation, checksum verification, smoke, and installed-tree sidecar proof passed | Automated package lifecycle passed; visual/native review remains pending | PENDING_HUMAN_QA |
 | Windows MSI | Tauri target/workflow | Config check | Existing WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Existing Linux runner required | CI PENDING |
 
 ## Packaging and provenance
 
-The preceding-source-state Windows NSIS build compiled the frontend/Rust
-application and prepared the worker sidecar, but Tauri failed during NSIS
-directory recreation with the verbatim error `Acesso negado. (os error 5)`.
-Therefore the current reviewed commit `dd74a26` has no fresh installer path,
-installer size/hash, checksum manifest, bundled-sidecar proof, or
-install/launch/restart/uninstall smoke result. The expected repository-local
-evidence paths are `package-artifacts/`, `checksums-sha256.txt`, and
-`package-verification.txt`; they are not a successful artifact claim.
+The exact reviewed commit `57f02b3` produced the NSIS installer
+`package-artifacts/prompt-arena-0.1.0-windows-nsis.exe` (3,744,774 bytes,
+SHA-256 `755BC8C48FD8912A4C8E07BB4C8ED11938D5022F63DBE800800BE69CCD05991C`).
+The matching checksum is recorded in `checksums-sha256.txt`, and
+`package-verification.txt` records passed checksum, install, launch, restart,
+and silent-uninstall automation.
+
+The prepared worker sidecar is
+`src-tauri/binaries/prompt-arena-worker-x86_64-pc-windows-msvc.exe` (SHA-256
+`89B82DCDB78B0B99FF0B0DCD29C42C9836901B66CDD86CC1CEA3077B77744F76`). The
+temporary installed-tree proof found
+`prompt-arena.exe` (12,975,104 bytes, SHA-256
+`EA599701D5AF9F8CFA86630AE521E68B2AEB4151CB41361FB66B708EBCE39C03`) and
+`prompt-arena-worker.exe` (2,570,752 bytes, SHA-256
+`31FDC12F505EF00A15D56AF2C9CF3DFB5C3BA33428C8B3D4D29B784454A7D437`). Both
+files disappeared after silent uninstall, and the temporary directory was
+removed. No native human UI acceptance is claimed.
+
+Remote CI status is unconfirmed. The optional MSI artifact remains blocked
+locally, and Linux CI remains pending.
 
 Canonical BL4 provenance is the control-plane result metadata for this isolated
 worktree: account `biel4`, role Executor, App Server/headless transport,

@@ -1,0 +1,8 @@
+Prompt Arena package verification
+Checksum manifest: passed (1 artifact(s)).
+Optional artifacts unavailable: msi.
+NSIS clean install: passed (prompt-arena.exe).
+Installed executable start: passed.
+Installed executable restart: passed.
+NSIS silent uninstall: passed.
+Result: passed.

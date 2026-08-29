@@ -1,10 +1,10 @@
 # Windows native/human QA checklist
 
 Target: exact reviewed commit
-`dd74a26a56d32be96303c7753635bafd3c0c0e41` (`dd74a26`). Overall status:
-`PENDING_HUMAN_QA`. No item below is complete. Windows NSIS is
-`BLOCKED_ENVIRONMENT` by `Acesso negado. (os error 5)` with no installer, hash,
-or smoke result; MSI is `BLOCKED LOCALLY`; Linux is `CI PENDING`.
+`57f02b35abacce6a0a1ed64a5f952d29a710614a` (`57f02b3`). Overall status:
+`PENDING_HUMAN_QA`. Automated NSIS lifecycle and temporary installed-tree
+sidecar proof passed, but no item below is complete. MSI is `BLOCKED LOCALLY`,
+Linux is `CI PENDING`, and remote CI is unconfirmed.
 
 For each item record `PASS`/`FAIL`, action, expected result, evidence path, and
 the applicable marker. Automated tests are not human UI evidence.
@@ -24,11 +24,13 @@ the applicable marker. Automated tests are not human UI evidence.
   progress, timing, totals, available token metrics, statuses, blind hiding,
   failure isolation, cancellation, and persisted reopen behavior are accurate.
 
-## Package gate
+## Automated package evidence
 
-- [ ] Install, launch, restart, and uninstall from a fresh exact-commit NSIS
-  artifact once the `Acesso negado. (os error 5)` blocker is cleared.
-- [ ] Record installer path, SHA-256, sidecar proof, and install/launch/
-  restart/uninstall smoke evidence under `package-artifacts/`,
-  `checksums-sha256.txt`, and `package-verification.txt` when an artifact
-  exists. Do not mark this checklist complete from source-only validation.
+Automated evidence already passed for the exact reviewed commit: NSIS build with
+`bundle.useLocalToolsDir=true`, checksum verification, clean install, launch,
+restart, silent uninstall, and installed-tree presence/disappearance of both
+executables. This does not prove visual or native-human acceptance.
+
+The installer is `package-artifacts/prompt-arena-0.1.0-windows-nsis.exe`;
+checksum and lifecycle evidence are recorded in `checksums-sha256.txt` and
+`package-verification.txt`. Do not mark any human item complete from automation.
