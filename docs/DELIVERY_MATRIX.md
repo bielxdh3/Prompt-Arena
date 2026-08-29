@@ -37,14 +37,17 @@ until the listed native Tauri/WebView and Docker-boundary checks pass.
 
 ## Current CI, native, and package evidence
 
-- [PR #28 native UI workflow run 33233256324](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33233256324): Linux passed the full native chain (real Tauri WebView, bridge, Rust command, app-owned sidecar, persisted evidence, and close/reopen). Windows reached the real tauri-driver/EdgeDriver session but failed at session creation with `session not created: DevToolsActivePort file doesn't exist`, after the harness UDF and capability fixes. This is not Windows native acceptance. The earlier run 33232495346 is historical only.
+- [PR #28 native UI workflow run 33233256324](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33233256324): Linux passed the full native chain (real Tauri WebView, bridge, Rust command, app-owned sidecar, persisted evidence, and close/reopen). This remains the recorded Linux hosted native evidence; it does not establish Windows acceptance. The earlier run 33232495346 is historical only.
+- [Windows native driver toolchain workflow run 33254907801](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33254907801) succeeded and produced `prompt-arena-windows-native-driver-toolchain-55d685fbdbd927a5ab195ab141fa76ea823acf96`. Its manifest records `sourceCommit=55d685fbdbd927a5ab195ab141fa76ea823acf96`, tauri-driver package `2.0.6`, EdgeDriver `151.0.4129.101`, `x64`, and locally verified SHA-256 hashes for both binaries.
+- [PR #28 hosted Windows native run 33254907800](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33254907800) failed during real WebDriver `POST /session` with `session not created: DevToolsActivePort file doesn't exist`. Classify this as `CI_HOSTED_WINDOWS_WEBDRIVER_POLICY_LIMITATION`, not product acceptance. No Windows native acceptance marker was produced; the bridge, Rust command, app-owned sidecar, persistence, and close/reopen assertions remain unexercised on Windows.
+- The local artifact-backed run used product SHA `f3048a61f45cdb6b29f362444f3d32646edf4943` and failed at the same session boundary with `session not created from chrome not reachable`. A read-only diagnosis observed DevToolsActivePort creation and repeated WebView2 GPU exits `STATUS_ACCESS_DENIED (0xC0000022)`. Classify this separately as `LOCAL_WINDOWS_WEBVIEW2_GPU_HOST_LIMITATION`, not product acceptance.
 - [CI run 33233256205](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33233256205): frontend and Rust checks green. These checks do not replace native QA.
 - [Packaging run 33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890): frontend/Rust validation, mandatory Windows NSIS build, Windows checksum normalization and clean-install/start/restart/silent-uninstall smoke, and Linux DEB/AppImage builds, checksum normalization, and package/app smoke passed. MSI was attempted but unavailable, with zero MSI artifacts. The workflow uploads unsigned artifacts and creates no GitHub Release; this evidence does not replace final native/manual desktop acceptance.
 
 ## Provenance
 
 This audit was performed in the standalone checkout `E:\Prompt Arena-pr28-bl4` at branch `validation/native-tauri-acceptance`,
-base revision `d1a4d2165471b1b473e8f7b91ad7b02d97afff9c`, by the BL4/biel4 implementation Executor through the configured
+PR #28 head revision `55d685fbdbd927a5ab195ab141fa76ea823acf96`, by the BL4/biel4 implementation Executor through the configured
 App Server/headless transport. No substitute executor or TUI fallback was used. The machine-readable execution metadata is:
 
 ```json
@@ -55,7 +58,7 @@ App Server/headless transport. No substitute executor or TUI fallback was used. 
   "sandbox": "managed workspace-write",
   "repository": "E:\\Prompt Arena-pr28-bl4",
   "branch": "validation/native-tauri-acceptance",
-  "base_head": "d1a4d2165471b1b473e8f7b91ad7b02d97afff9c"
+  "base_head": "55d685fbdbd927a5ab195ab141fa76ea823acf96"
 }
 ```
 
@@ -63,5 +66,6 @@ App Server/headless transport. No substitute executor or TUI fallback was used. 
 
 The package workflow evidence above is the current recorded artifact evidence. Windows NSIS and Linux package/app smoke
 passed in run `33213307890`; MSI was unavailable and produced zero artifacts. The workflow normalizes target names and
-writes `checksums-sha256.txt` for the exact commit, uploads unsigned artifacts, and creates no GitHub Release or tag.
-Packaging evidence and automated checks do not close the remaining native QA, security, or publication gates.
+writes `checksums-sha256.txt` for the exact commit, uploads unsigned artifacts, and creates no GitHub Release, tag, deploy,
+or merge. The native driver artifact is diagnostic-only; packaging evidence and automated checks do not close the
+remaining native QA, security, or publication gates.
