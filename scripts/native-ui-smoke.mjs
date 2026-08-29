@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const WEBDRIVER = "http://127.0.0.1:4444";
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
 const application = path.resolve(process.argv[2] || process.env.PROMPT_ARENA_APP || "");
-const webviewUserDataFolder = path.join(os.tmpdir(), `prompt-arena-native-ui-smoke-${process.pid}-${Date.now()}`);
+const webviewUserDataFolder = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-arena-native-ui-smoke-"));
 
 if (!application || !fs.existsSync(application)) {
   throw new Error(`Prompt Arena application binary not found: ${application || "missing"}`);
