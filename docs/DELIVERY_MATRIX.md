@@ -1,20 +1,23 @@
 # Product completion evidence matrix
 
 Target: `completion/windows-qa-live-telemetry-i18n` at exact reviewed commit
-`be1007f99814f004e384abae6acd986e5bcaa521` (`be1007f`). `COMPLETE` means the
+`dd74a26a56d32be96303c7753635bafd3c0c0e41` (`dd74a26`). `COMPLETE` means the
 local implementation and its automated evidence are present. Native Tauri and
 human gates remain `PENDING_HUMAN_QA`; environment/runtime failures are marked
 separately.
 
-## Independent validation at `be1007f`
+## Locale-formatting presentation phase at `dd74a26`
 
 - `npm run typecheck` — passed.
 - `npm test` — passed, 92 tests across the repository, including `src/i18n.test.ts`.
+- The phase localizes numeric and timestamp presentation only; canonical stored
+  values, telemetry, evidence, and security behavior are unchanged.
+
+## Preceding source-state validation at `be1007f`
+
 - `npm run build` — passed.
 - `npm run check:boundaries` — passed.
 - Redirected `cargo test` — passed, 107 tests.
-- No source or documentation change is implied by these validation results; the
-  matrix records evidence for the reviewed worktree only.
 
 | Roadmap requirement | Implementation and UI evidence | Automated evidence | Native/human evidence | Status |
 | --- | --- | --- | --- | --- |
@@ -36,20 +39,20 @@ separately.
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | `src/advanced-arena-ui.test.ts`, TypeScript suite | Tauri reopen and workflow review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance/accessibility | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | appearance/font tests | Native accessibility and layout review | PENDING_HUMAN_QA |
-| Windows NSIS | Tauri bundle/workflow | Build attempted at exact `be1007f` | Installer required; no artifact produced | BLOCKED_ENVIRONMENT |
+| Windows NSIS | Tauri bundle/workflow | Preceding-state attempt at `be1007f` failed with `Acesso negado. (os error 5)` | No current-commit installer, hash, or install/launch/restart/uninstall smoke | BLOCKED_ENVIRONMENT |
 | Windows MSI | Tauri target/workflow | Config check | Existing WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Existing Linux runner required | CI PENDING |
 
 ## Packaging and provenance
 
-The exact-commit Windows NSIS build compiled the frontend/Rust application and
-prepared the worker sidecar, but Tauri failed during NSIS directory recreation
-with the verbatim error `Acesso negado. (os error 5)`. Therefore there is no
-installer path, installer size/hash, checksum manifest, bundled-sidecar proof,
-or install/launch/restart/uninstall smoke result for this commit. The expected
-repository-local evidence paths are `package-artifacts/`,
-`checksums-sha256.txt`, and `package-verification.txt`; they are not a
-successful artifact claim.
+The preceding-source-state Windows NSIS build compiled the frontend/Rust
+application and prepared the worker sidecar, but Tauri failed during NSIS
+directory recreation with the verbatim error `Acesso negado. (os error 5)`.
+Therefore the current reviewed commit `dd74a26` has no fresh installer path,
+installer size/hash, checksum manifest, bundled-sidecar proof, or
+install/launch/restart/uninstall smoke result. The expected repository-local
+evidence paths are `package-artifacts/`, `checksums-sha256.txt`, and
+`package-verification.txt`; they are not a successful artifact claim.
 
 Canonical BL4 provenance is the control-plane result metadata for this isolated
 worktree: account `biel4`, role Executor, App Server/headless transport,
