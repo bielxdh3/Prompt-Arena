@@ -2,6 +2,8 @@
 
 This matrix is the closeout checkpoint for the product-completion mission. `Automated` means a local test or contract
 check; `Native QA` requires the real Tauri/WebView or installed package. No row is complete from a type or schema alone.
+Automated implementation evidence is not native acceptance, and artifact evidence is recorded separately below. All
+phase and gate statuses remain incomplete until their listed evidence exists.
 
 The P2 implementation evidence below is present in commits `6c1eef9`, `b9ac2b4`, and `952293a`. P2 remains `IN PROGRESS`
 until the listed native Tauri/WebView and Docker-boundary checks pass.
@@ -19,33 +21,47 @@ until the listed native Tauri/WebView and Docker-boundary checks pass.
 | JSON/Markdown/CSV exports | `src/arena-runner.ts`, `src/App.tsx` | Arena results | Arena export test | Installed save/open smoke required | IN PROGRESS |
 | Official packs | `packs/official`, `src-tauri/src/official_packs.rs`, `src-tauri/src/commands.rs`, `src/bridge.ts`, `src/App.tsx` | Benchmarks catalog, document inspection, and deterministic materialization | Rust catalog/materialization tests, TypeScript typecheck/build | Inspect/materialize each pack in Tauri | IN PROGRESS |
 | Docker-required execution boundary | `src-tauri/src/official_packs.rs`, `src/run-plan.ts`, `src/arena-ui.ts`, `src/App.tsx` | Programming-pack metadata and Arena preflight | Rust official-pack/orchestration boundary tests and boundary checks | Docker-boundary smoke required; Docker runtime remains unavailable | IN PROGRESS |
-| Ollama discovery/start | `ollama.rs`, `commands.rs`, `ModelsView` | Models | Rust adapter tests | Real Ollama smoke required | IN PROGRESS |
-| LM Studio | not yet wired | Models | None | Required | NOT IMPLEMENTED |
-| llama.cpp/GGUF | not yet wired | Models | None | Required | NOT IMPLEMENTED |
-| Downloads/removal/duplicates | not yet wired | Models | None | Required | NOT IMPLEMENTED |
-| Hardware/recommendations | `hardware.rs`, `model-library.ts` | Models | Rust + TS tests | Real hardware review required | IN PROGRESS |
+| Ollama discovery/start | `ollama.rs`, `commands.rs`, `src/model-library.ts`, `src/App.tsx` | Models catalog, start action, and profiles | Rust adapter/model-library tests + `model-library.test.ts` | Real Ollama discovery/start/profile smoke required | IN PROGRESS |
+| LM Studio discovery/profile | `src/model-library.ts`, `src-tauri/src/model_library.rs`, `src/App.tsx` | Models unified catalog and source-aware profiles | `model-library.test.ts`; Rust source discovery/validation tests | Real LM Studio discovery/profile smoke required | IN PROGRESS |
+| llama.cpp and managed GGUF | `src/model-library.ts`, `src-tauri/src/model_library.rs`, `src/App.tsx` | Models llama.cpp source, bounded managed GGUF import/removal, and profiles | `model-library.test.ts`; Rust GGUF/parser and import/remove operation tests | Real llama.cpp/GGUF import/removal smoke required | IN PROGRESS |
+| Downloads, removal, duplicates, and quantization | `src/model-library.ts`, `src-tauri/src/model_library.rs`, `src-tauri/src/storage.rs` | Models operation progress, supported-action labels, duplicate groups, and quantization variants | `model-library.test.ts`; Rust `download_operation_persists_progress_and_event_history`, `import_and_remove_operations_persist_progress_and_audit_hash`, and duplicate-group tests | Real Ollama pull plus import/removal/duplicate review required | IN PROGRESS |
+| Hardware/recommendations | `src-tauri/src/hardware.rs`, `src/model-library.ts`, `src/App.tsx` | Models hardware snapshot and recommendations | Rust + TS model-library tests | Real hardware review required | IN PROGRESS |
 | Arena ranking | `src/arena-runner.ts`, `src/App.tsx` | Locked Arena results | ranking tests | Required in Tauri | IN PROGRESS |
-| Cross-run rankings/regression/tournament | not yet wired | Runs | comparability tests only | Required | NOT IMPLEMENTED |
-| AI judge/calibration | provider foundation only | Runs | None | Required | NOT IMPLEMENTED |
-| External BYOK/cost controls | provider foundation only | Settings | provider helper tests | Required | NOT IMPLEMENTED |
+| Cross-run rankings/regression/tournament | `src/advanced-arena.ts`, `src/advanced-arena-view.tsx`, `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs` | Advanced Arena saved-evidence rankings, regression comparison, tournament scheduling/standings, and reopen | `advanced-arena-ui.test.ts`, comparability tests, Rust advanced-artifact persistence tests | Native Tauri save/reopen/disagreement review required | IN PROGRESS |
+| AI judge/calibration | `src/advanced-arena.ts`, `src/advanced-arena-view.tsx`, `src/bridge.ts`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs` | Advanced Arena offline judge-score input, frozen metadata, calibration metrics, save/reopen | `advanced-arena-ui.test.ts`, Rust calibration persistence/validation tests | Native Tauri review required; official benchmark-version judge integration remains pending | IN PROGRESS |
+| External BYOK, cost controls, and history | `src/provider-foundation.ts`, `src/App.tsx`, `src/bridge.ts`, `src-tauri/src/external_providers.rs`, `src-tauri/src/commands.rs`, `src-tauri/src/storage.rs` | Settings provider configuration/removal, OS-secure credentials, explicit network/cost consent, generation, and sanitized history reload | `provider-foundation.test.ts`, `byok-ui.test.ts`, Rust provider credential/adapter/cost/history tests | Native secure-config, provider-call, history/export, log-review, security, and publication gates required | IN PROGRESS |
 | Appearance/accessibility | `appearance.ts`, `styles.css` | Settings | appearance tests | Native accessibility review required | IN PROGRESS |
 | Windows NSIS | Tauri bundle + workflow | Installer | local `tauri build` | Install/launch/uninstall required | ARTIFACT, QA PENDING |
 | Windows MSI | Tauri target + workflow | Installer | config check | local WiX `light.exe` failed | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target + workflow | Installer | workflow definition | Linux runner required | CI PENDING |
 
+## Current CI, native, and package evidence
+
+- [PR #28 native UI workflow run 33232495346](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33232495346): Linux passed the full native chain (real Tauri WebView, bridge, Rust command, app-owned sidecar, persisted evidence, and close/reopen). Windows reached the real tauri-driver/EdgeDriver session but failed at session creation with `session not created: DevToolsActivePort file doesn't exist`, after the harness UDF and capability fixes. This is not Windows native acceptance.
+- [CI run 33233256205](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33233256205): frontend and Rust checks green. These checks do not replace native QA.
+- [Packaging run 33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890): frontend/Rust validation, mandatory Windows NSIS build, Windows checksum normalization and clean-install/start/restart/silent-uninstall smoke, and Linux DEB/AppImage builds, checksum normalization, and package/app smoke passed. MSI was attempted but unavailable, with zero MSI artifacts. The workflow uploads unsigned artifacts and creates no GitHub Release; this evidence does not replace final native/manual desktop acceptance.
+
 ## Provenance
 
-The implementation was authored in the direct Codex turn in `E:\Prompt Arena`. A bounded BL4 review delegation was then
-run through the repository-local launcher with control-plane evidence: `executor_account=biel4`,
-`task_transport=app_server`, `repository=E:\Prompt Arena`, thread `01a02cb7-7a36-79e0-abdd-2415d208044e`, turn
-`01a02d6b-577f-70d3-8782-63a094203167`, and result `package-artifacts/dual-codex-review-result.json`. The delegation
-was marked failed because it reported no new change and its executor-side Vitest/build attempts hit Windows spawn EPERM;
-no substitute executor or TUI fallback was used. Provenance is therefore attested for the review attempt, not for a
-successful BL4 implementation or native acceptance.
+This audit was performed in the standalone checkout `E:\Prompt Arena-pr28-bl4` at branch `validation/native-tauri-acceptance`,
+base revision `5aa76dd6e62a760c8481340dd5014cbfe7c6a23f`, by the BL4/biel4 implementation Executor through the configured
+App Server/headless transport. No substitute executor or TUI fallback was used. The machine-readable execution metadata is:
+
+```json
+{
+  "executor_account": "biel4",
+  "executor_role": "BL4 implementation Executor",
+  "task_transport": "App Server/headless",
+  "sandbox": "managed workspace-write",
+  "repository": "E:\\Prompt Arena-pr28-bl4",
+  "branch": "validation/native-tauri-acceptance",
+  "base_head": "5aa76dd6e62a760c8481340dd5014cbfe7c6a23f"
+}
+```
 
 ## Package evidence
 
-The local Windows NSIS artifact is `Prompt Arena Setup 0.1.0.exe` (3,347,581 bytes), SHA-256
-`BB4DDCCB9054178DE58534F6495FD5C1BD4E4301ED1069A706D0FD82CEB52343`. It is unsigned and has not undergone clean-install
-smoke. The dispatch workflow `.github/workflows/package.yml` uploads normalized installers and `checksums-sha256.txt`
-for an exact commit. No GitHub Release or tag is created by this stack.
+The package workflow evidence above is the current recorded artifact evidence. Windows NSIS and Linux package/app smoke
+passed in run `33213307890`; MSI was unavailable and produced zero artifacts. The workflow normalizes target names and
+writes `checksums-sha256.txt` for the exact commit, uploads unsigned artifacts, and creates no GitHub Release or tag.
+Packaging evidence and automated checks do not close the remaining native QA, security, or publication gates.
