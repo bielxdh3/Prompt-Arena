@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 const WEBDRIVER = "http://127.0.0.1:4444";
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
 const application = path.resolve(process.argv[2] || process.env.PROMPT_ARENA_APP || "");
+const webviewUserDataFolder = path.join(os.tmpdir(), `prompt-arena-native-ui-smoke-${process.pid}-${Date.now()}`);
 
 if (!application || !fs.existsSync(application)) {
   throw new Error(`Prompt Arena application binary not found: ${application || "missing"}`);
@@ -59,7 +60,10 @@ async function startSession() {
     capabilities: {
       alwaysMatch: {
         browserName: "wry",
-        "tauri:options": { application },
+        "tauri:options": {
+          application,
+          webviewOptions: { userDataFolder: webviewUserDataFolder },
+        },
       },
     },
   });
@@ -153,7 +157,7 @@ async function invoke(command, args = {}) {
 function nativeSidecarPlan(runId) {
   return {
     runId,
-    benchmarkVersionId: "native-ui-smoke-v1",
+    benchmarkVersionId: "native-ui-smoke@1",
     caseId: "native-ui-smoke-case",
     profileRevision: {
       profileId: "native-ui-smoke-profile",
