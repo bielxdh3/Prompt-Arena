@@ -12,9 +12,13 @@ jobs:
     name: Acquire Windows native WebDriver toolchain
     runs-on: windows-latest
     timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -98,9 +102,10 @@ jobs:
             throw 'This diagnostic requires an x64 Windows runner.'
           }
 
-          $sourceCommit = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
-            throw 'Unable to resolve the checked-out source commit.'
+          $sourceCommit = $env:SOURCE_SHA
+          $checkedOutCommit = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$' -or $checkedOutCommit -ne $sourceCommit) {
+            throw "Checked-out commit does not match the requested source SHA: expected $sourceCommit, actual $checkedOutCommit."
           }
 
           $staging = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'prompt-arena-native-driver-toolchain'
@@ -135,7 +140,7 @@ jobs:
       - name: Upload native driver toolchain artifact
         uses: actions/upload-artifact@v4
         with:
-          name: prompt-arena-windows-native-driver-toolchain-${{ github.sha }}
+          name: prompt-arena-windows-native-driver-toolchain-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ${{ runner.temp }}/prompt-arena-native-driver-toolchain/tauri-driver.exe
             ${{ runner.temp }}/prompt-arena-native-driver-toolchain/msedgedriver.exe
