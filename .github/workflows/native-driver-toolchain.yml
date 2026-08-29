@@ -148,7 +148,7 @@ jobs:
             binaries = @(
               [ordered]@{
                 name = 'tauri-driver.exe'
-                version = $tauriDriverVersion
+                version = $tauriDriverPackageVersion
                 sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $tauriStagedPath).Hash.ToLowerInvariant()
               }
               [ordered]@{
