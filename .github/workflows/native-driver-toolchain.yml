@@ -1,0 +1,144 @@
+name: Windows native driver toolchain diagnostic
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  toolchain:
+    name: Acquire Windows native WebDriver toolchain
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tauri-driver
+        shell: pwsh
+        run: cargo install tauri-driver --locked
+
+      - name: Install matching EdgeDriver tool
+        shell: pwsh
+        run: cargo install --git https://github.com/chippers/msedgedriver-tool
+
+      - name: Acquire drivers and write manifest
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          function Resolve-Executable {
+            param(
+              [Parameter(Mandatory = $true)][string]$Name,
+              [Parameter(Mandatory = $true)][string[]]$Roots
+            )
+
+            $command = Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $command) {
+              return (Get-Item -LiteralPath $command.Path -ErrorAction Stop).FullName
+            }
+
+            $candidates = @(
+              foreach ($root in $Roots) {
+                if (Test-Path -LiteralPath $root -PathType Container) {
+                  Get-ChildItem -LiteralPath $root -Filter $Name -File -Recurse -ErrorAction SilentlyContinue
+                }
+              }
+            ) | Sort-Object -Property FullName -Unique
+            if ($candidates.Count -ne 1) {
+              throw "Expected exactly one actual $Name executable, found $($candidates.Count)."
+            }
+            return $candidates[0].FullName
+          }
+
+          function Read-Version {
+            param([Parameter(Mandatory = $true)][string]$Path)
+            $output = (& $Path --version 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
+              throw "Unable to read version from $Path."
+            }
+            return $output
+          }
+
+          $cargoBin = Join-Path -Path $HOME -ChildPath '.cargo\bin'
+          $workspace = $env:GITHUB_WORKSPACE
+          $roots = @($cargoBin, $workspace, $env:RUNNER_TEMP)
+          $tauriDriverPath = Resolve-Executable -Name 'tauri-driver.exe' -Roots @($cargoBin)
+          $matchingToolPath = Resolve-Executable -Name 'msedgedriver-tool.exe' -Roots $roots
+
+          Push-Location -LiteralPath $workspace
+          try {
+            & $matchingToolPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "Matching EdgeDriver tool failed with exit code $LASTEXITCODE."
+            }
+          } finally {
+            Pop-Location
+          }
+
+          $edgeDriverPath = Resolve-Executable -Name 'msedgedriver.exe' -Roots $roots
+          $tauriDriverVersion = Read-Version -Path $tauriDriverPath
+          $edgeDriverVersionOutput = Read-Version -Path $edgeDriverPath
+          $edgeVersionMatch = [regex]::Match($edgeDriverVersionOutput, '\b(?<version>\d+\.\d+\.\d+\.\d+)\b')
+          if (-not $edgeVersionMatch.Success) {
+            throw "Unable to parse a four-component EdgeDriver version from: $edgeDriverVersionOutput"
+          }
+          $edgeDriverVersion = $edgeVersionMatch.Groups['version'].Value
+          if ($edgeDriverVersion -notmatch '^151\.0\.4129\.') {
+            throw "Incompatible EdgeDriver version $edgeDriverVersion; expected prefix 151.0.4129."
+          }
+
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
+            throw 'This diagnostic requires an x64 Windows runner.'
+          }
+
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to resolve the checked-out source commit.'
+          }
+
+          $staging = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'prompt-arena-native-driver-toolchain'
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item -LiteralPath $tauriDriverPath -Destination (Join-Path $staging 'tauri-driver.exe')
+          Copy-Item -LiteralPath $edgeDriverPath -Destination (Join-Path $staging 'msedgedriver.exe')
+
+          $tauriStagedPath = Join-Path $staging 'tauri-driver.exe'
+          $edgeStagedPath = Join-Path $staging 'msedgedriver.exe'
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            sourceCommit = $sourceCommit
+            workflowRunId = '${{ github.run_id }}'
+            targetArchitecture = 'x64'
+            capturedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            edgeDriverCompatibilityPrefix = '151.0.4129'
+            binaries = @(
+              [ordered]@{
+                name = 'tauri-driver.exe'
+                version = $tauriDriverVersion
+                sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $tauriStagedPath).Hash.ToLowerInvariant()
+              }
+              [ordered]@{
+                name = 'msedgedriver.exe'
+                version = $edgeDriverVersionOutput
+                sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $edgeStagedPath).Hash.ToLowerInvariant()
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $staging 'manifest.json') -Encoding utf8NoBOM
+
+      - name: Upload native driver toolchain artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prompt-arena-windows-native-driver-toolchain-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/prompt-arena-native-driver-toolchain/tauri-driver.exe
+            ${{ runner.temp }}/prompt-arena-native-driver-toolchain/msedgedriver.exe
+            ${{ runner.temp }}/prompt-arena-native-driver-toolchain/manifest.json
+          if-no-files-found: error
+          retention-days: 3
