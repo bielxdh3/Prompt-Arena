@@ -7,6 +7,7 @@ export type AppLocale = (typeof APP_LOCALES)[number];
 const PT_BR_MESSAGES_BASE = {
   "Skip to content": "Pular para o conteúdo",
   "Local workspace": "Espaço de trabalho local",
+  "Local models": "Modelos locais",
   Overview: "Visão geral",
   "Workspace status": "Status do espaço de trabalho",
   Arena: "Arena",

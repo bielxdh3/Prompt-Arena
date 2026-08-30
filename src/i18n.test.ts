@@ -49,6 +49,10 @@ describe("i18n", () => {
     expect(translateText("pt-BR", "Not in the catalog")).toBe("Not in the catalog");
   });
 
+  it("translates the overview local-model metric label", () => {
+    expect(translateText("pt-BR", "Local models")).toBe("Modelos locais");
+  });
+
   it("keeps critical P2 controls translated without exposing internal labels", () => {
     expect(translateText("pt-BR", "Advanced local controls")).toBe("Controles locais avançados");
     expect(translateText("pt-BR", "Advanced diagnostics")).toBe("Diagnóstico avançado");
