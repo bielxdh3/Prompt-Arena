@@ -1021,7 +1021,7 @@ function TournamentStandingsTable({ standings }: { standings: readonly { rank: n
     <div className="advanced-table-wrap">
       <table className="advanced-table">
         <caption>{translate("Tournament standings from immutable Arena evidence")}</caption>
-        <thead><tr><th scope="col">{translate("Rank")}</th><th scope="col">{translate("Competitor")}</th><th scope="col">W-L-T</th><th scope="col">{translate("Points")}</th><th scope="col">{translate("Metric")}</th></tr></thead>
+        <thead><tr><th scope="col">{translate("Rank")}</th><th scope="col">{translate("Competitor")}</th><th scope="col">{translate("W-L-T")}</th><th scope="col">{translate("Points")}</th><th scope="col">{translate("Metric")}</th></tr></thead>
         <tbody>
           {standings.map((standing) => (
             <tr key={standing.competitorId}>
@@ -1093,7 +1093,7 @@ function EvidenceTable({ samples }: { samples: readonly ArenaEvidenceSample[] })
     <div className="advanced-table-wrap">
       <table className="advanced-table advanced-evidence-table">
         <caption>{translate("Use these local execution keys for manual score entry")}</caption>
-        <thead><tr><th scope="col">{translate("Execution key")}</th><th scope="col">{translate("Competitor")}</th><th scope="col">{translate("Status")}</th><th scope="col">{translate("Duration")}</th><th scope="col">Tokens/s</th><th scope="col">{translate("Objective")}</th></tr></thead>
+        <thead><tr><th scope="col">{translate("Execution key")}</th><th scope="col">{translate("Competitor")}</th><th scope="col">{translate("Status")}</th><th scope="col">{translate("Duration")}</th><th scope="col">{translate("Tokens/s")}</th><th scope="col">{translate("Objective")}</th></tr></thead>
         <tbody>
           {samples.map((sample) => (
             <tr key={`${sample.runId}:${sample.attemptId ?? ""}:${sample.repetition}`}>
