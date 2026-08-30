@@ -1,1 +1,1 @@
-085c1bf1ec49d6b8c5701ac4412dba5fce53989c2a075c2bb7e1768ff5ffcf62  prompt-arena-0.1.0-windows-nsis.exe
+68c4ccf7e7ab0b1d14501dce1cf401a2deecc0a8db52228557b28e447f34ae6c  prompt-arena-0.1.0-windows-nsis.exe

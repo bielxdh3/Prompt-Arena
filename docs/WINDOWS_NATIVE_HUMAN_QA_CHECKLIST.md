@@ -1,7 +1,7 @@
 # Windows native/human QA checklist
 
 Reviewed source HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`). The source HEAD is after
+`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`). The source HEAD is after
 `75bf8266a7af257a028724365f627a31aa28af37`,
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2`,
 `bcf706e5c32568ba43ac24f7673074c6d230098`, and documentation commit
@@ -31,7 +31,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, comparison density, telemetry layout, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate, and fresh NSIS packaging at checkout HEAD f393e9023b2f1d28de27ce34b73eff83f9a2af45 passed after generated Cargo cleanup resolved the earlier STATUS_IN_PAGE_ERROR (0xc0000006). | COMPLETE — checksum, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains blocked. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate, and fresh NSIS packaging at checkout/source HEAD 37dbafcabb03079927e6d2f1ee499269c1a6722f passed after generated Cargo cleanup resolved the earlier STATUS_IN_PAGE_ERROR (0xc0000006). | COMPLETE — checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native review |
 
 ## Application review
 
@@ -89,20 +89,25 @@ with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
 For the current package checkout, `cargo clean --manifest-path
 src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
 command was retried. The retry passed at checkout HEAD
-`f393e9023b2f1d28de27ce34b73eff83f9a2af45` for reviewed source HEAD `838d952`.
+`37dbafcabb03079927e6d2f1ee499269c1a6722f` for the reviewed source HEAD.
 Fresh artifact:
 `E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,756,114 bytes, SHA-256
-`085C1BF1EC49D6B8C5701AC4412DBA5FCE53989C2A075C2BB7E1768FF5FFCF62`.
+3,757,226 bytes, SHA-256
+`68C4CCF7E7AB0B1D14501DCE1CF401A2DEECC0A8DB52228557B28E447F34AE6C`.
 Bundle source:
-`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`.
-Worker sidecar:
-`E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`,
-2,544,640 bytes, SHA-256
-`C42F5C56C18DAF36455D2062498FA7DE66CB5BB730AE58DFE4A1DB45F549BAB0`.
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
+3,757,226 bytes, SHA-256
+`68C4CCF7E7AB0B1D14501DCE1CF401A2DEECC0A8DB52228557B28E447F34AE6C`.
+The fresh bundled worker is
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\prompt-arena-worker.exe`,
+2,567,680 bytes, SHA-256
+`80AB45BCEBE7009CD174B9C1E1B1D360D3D9BD029002EE15A6A0D279035BE078`.
+The tracked source sidecar at
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
+remains separately identified and is not the bundled-worker measurement above.
 Checksum manifest:
 `E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt`, SHA-256
-`f052e25cdda301c094a54053119c7492550f4bc5d38e1a91e3b3d92b2b1de72c`.
+`D361EE0B0C0984A202BB392B6FC6732CBBEDCFF299385CF4955CB2889B9E5B52`.
 `package-verification.txt` records checksum pass, clean install pass,
 executable start pass, restart pass, and silent uninstall pass. This is not
 visual or human QA.
@@ -119,14 +124,15 @@ evidence only. Remote CI is unconfirmed.
   persistence, blind-evaluation continuity, or human QA.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
-- `COMPLETE`: fresh NSIS packaging at checkout HEAD
-  `f393e9023b2f1d28de27ce34b73eff83f9a2af45` passed after generated Cargo
+- `COMPLETE`: fresh NSIS packaging at checkout/source HEAD
+  `37dbafcabb03079927e6d2f1ee499269c1a6722f` passed after generated Cargo
   cleanup resolved `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle,
-  sidecar, checksum, and lifecycle evidence is recorded above. This does not
+  bundled-worker, tracked source sidecar, checksum, and lifecycle evidence is
+  recorded above. This does not
   close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review; the
   historical 57f02b3 artifact is not current-head output.
-- `BLOCKED LOCALLY`: Windows MSI remains blocked by the existing WiX
-  `light.exe` failure.
+- `BLOCKED LOCALLY`: Windows MSI remains unavailable because of the existing
+  WiX `light.exe` failure.
 - `CI PENDING`: Linux deb/AppImage still requires the Linux runner.
 - Remote CI is unconfirmed.
 

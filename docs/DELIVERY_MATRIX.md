@@ -1,7 +1,7 @@
 # Product completion evidence matrix
 
 Reviewed source HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`). The source HEAD is
+`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`). The source HEAD is
 after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
@@ -56,7 +56,7 @@ native-control, full Arena live-runtime, and human review remain
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at checkout HEAD `f393e9023b2f1d28de27ce34b73eff83f9a2af45` for reviewed source HEAD `838d952` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, sidecar, and checksum evidence are recorded below. | Checksum, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at checkout/source HEAD `37dbafcabb03079927e6d2f1ee499269c1a6722f` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, bundled-worker, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
@@ -122,26 +122,30 @@ account `biel4`, role Executor, App Server/headless transport,
 
 ## Packaging and historical provenance
 
-Fresh exact-HEAD evidence: the reviewed source target is `838d952`; the
-package was built at checkout HEAD `f393e9023b2f1d28de27ce34b73eff83f9a2af45`.
+Fresh exact-HEAD evidence: the reviewed source and package checkout/source HEAD
+is `37dbafcabb03079927e6d2f1ee499269c1a6722f`.
 The prepared NSIS artifact is
 `E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,756,114 bytes, SHA-256
-`085C1BF1EC49D6B8C5701AC4412DBA5FCE53989C2A075C2BB7E1768FF5FFCF62`.
+3,757,226 bytes, SHA-256
+`68C4CCF7E7AB0B1D14501DCE1CF401A2DEECC0A8DB52228557B28E447F34AE6C`.
 The bundle source is
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-with the same size and SHA-256. The worker sidecar is
-`E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`,
-2,544,640 bytes, SHA-256
-`C42F5C56C18DAF36455D2062498FA7DE66CB5BB730AE58DFE4A1DB45F549BAB0`.
+with the same size and SHA-256. The fresh bundled worker is
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\prompt-arena-worker.exe`,
+2,567,680 bytes, SHA-256
+`80AB45BCEBE7009CD174B9C1E1B1D360D3D9BD029002EE15A6A0D279035BE078`.
+The tracked source sidecar at
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
+remains separately identified and is not the bundled-worker measurement above.
 `E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt` has SHA-256
-`f052e25cdda301c094a54053119c7492550f4bc5d38e1a91e3b3d92b2b1de72c` and
+`D361EE0B0C0984A202BB392B6FC6732CBBEDCFF299385CF4955CB2889B9E5B52` and
 records the artifact checksum. `package-verification.txt` records passed
 checksum verification, clean install, executable start, restart, and silent
-uninstall. This package smoke is not visual or human QA. MSI remains
-`BLOCKED LOCALLY`; Docker remains `BLOCKED_EXTERNAL_RUNTIME`. Local Ollama
+uninstall. This package smoke is not visual or human QA. MSI remains unavailable
+(`BLOCKED LOCALLY`); Docker remains `BLOCKED_EXTERNAL_RUNTIME`. Local Ollama
 worker-protocol evidence is `COMPLETE`; Tauri discovery and full Arena native
-runtime review remain `PENDING_HUMAN_QA`.
+runtime review remain `PENDING_HUMAN_QA`. Linux/remote CI and visual/native/full
+Tauri Arena human QA remain pending.
 
 The following NSIS evidence is historical and is not an artifact for the new
 reviewed HEAD. At `57f02b3`, the installer
