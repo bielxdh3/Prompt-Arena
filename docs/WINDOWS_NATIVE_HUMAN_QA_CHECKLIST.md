@@ -36,7 +36,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PENDING — historical 57f02b3 evidence remains separate; the recorded NSIS/package hashes were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`, not reviewed source HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING — fresh NSIS rebuild at exact reviewed source HEAD is required before current package evidence can be COMPLETE; prior checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `PARTIAL_IMPLEMENTATION`; `PENDING_HUMAN_QA` after rebuild for visual/native review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh NSIS/package evidence was built from exact checkout source tree HEAD `da36292cb8e19336d401f9a05f18c788985d647f`, whose production source implementation is reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
 
 ## Application review
 
@@ -87,30 +87,29 @@ check.
   evidence only, not full Tauri Arena, persistence, blind-evaluation,
   responsiveness, or human QA evidence.
 
-The previously successful NSIS build was performed at prior source
-implementation HEAD `5c5de64`, not the reviewed source HEAD
-`8588a2dd66e386082e153c933b1b55891ac42657`. A fresh exact-head rebuild is
-required before current package COMPLETE can be claimed. Recorded historical
-target-workspace artifact:
+Fresh exact-source-tree package evidence was built from checkout HEAD
+`da36292cb8e19336d401f9a05f18c788985d647f`, whose production source
+implementation is reviewed source HEAD
+`8588a2dd66e386082e153c933b1b55891ac42657`. Target-workspace artifact:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,761,685 bytes, SHA-256
-`644EB56BEDF341869516F8C2E397DECA01BE6424F828B2060448D1D8560822F7`.
+3,817,692 bytes, SHA-256
+`25DAF0F70B027005A2778188EBE3FE17CFB4D4EFAE4FE2482E474FAD2C73CC09`.
 Bundle source:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-3,761,685 bytes, SHA-256
-`644EB56BEDF341869516F8C2E397DECA01BE6424F828B2060448D1D8560822F7`.
-The fresh bundled worker is
+3,817,692 bytes, SHA-256
+`25DAF0F70B027005A2778188EBE3FE17CFB4D4EFAE4FE2482E474FAD2C73CC09`.
+The bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\prompt-arena-worker.exe`,
-2,567,680 bytes, SHA-256
-`FC17A3D9EA80D74D0CFB5A084A5E54B0AA637AA8E619230D473DA5CA7C9E232B`.
-The tracked source sidecar at
+2,651,136 bytes, SHA-256
+`5578F859D268568016AD9CD6CEC27C7EA96B884BD6CBDB170AC4EAFE4198E436`.
+The prepared source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
-remains separately identified and is not the bundled-worker measurement above;
-it is 2,544,640 bytes, SHA-256
-`22E02E062C03BA96B54284DC81B03108F9550A4DAC7398306D8D8175A00D529B`.
+is separately identified and is not the bundled-worker measurement above;
+it is 2,629,120 bytes, SHA-256
+`E296B5637C25292D609B05C093BFF7AD157EA8CA501E9678050A7347B3D2DF5B`.
 Checksum manifest:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\checksums-sha256.txt`, SHA-256
-`31DC7ECCBB699467A6F7F77811381E0B74CD1BE0E0D613AEC523C06E3F1ECB07`.
+`A1780E60AB87D0A1349C9A8ACBD1BC543EC8C4444040DFF9293BA3D037B11325`.
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-verification.txt` has
 SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
 and records checksum pass, clean install pass,
@@ -129,14 +128,14 @@ evidence only. Remote CI is unconfirmed.
   persistence, blind-evaluation continuity, or human QA.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
-- `PARTIAL_IMPLEMENTATION`: the recorded NSIS/package hashes were built at
-  prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`;
-  a fresh NSIS rebuild at reviewed source HEAD
-  `8588a2dd66e386082e153c933b1b55891ac42657` is required before current
-  package `COMPLETE` can be claimed. The prior artifact, bundle, bundled-worker,
-  tracked source sidecar, checksum, and lifecycle evidence is recorded above.
-  This does not close `PENDING_HUMAN_QA` for visual/accessibility/live Arena
-  review; the historical 57f02b3 artifact is not current-head output.
+- `COMPLETE`: fresh NSIS/package evidence was built from exact checkout source
+  tree HEAD `da36292cb8e19336d401f9a05f18c788985d647f`, whose production source
+  implementation is reviewed source HEAD
+  `8588a2dd66e386082e153c933b1b55891ac42657`; checksum verification, clean
+  install, executable start, restart, and silent uninstall passed. This does
+  not close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review;
+  packaging smoke is not visual or human QA, and the historical 57f02b3
+  artifact is not current-head output.
 - `BLOCKED LOCALLY`: Windows MSI remains unavailable because of the existing
   WiX `light.exe` failure.
 - `CI PENDING`: Linux deb/AppImage still requires the Linux runner.
