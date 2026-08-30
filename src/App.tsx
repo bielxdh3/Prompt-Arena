@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -97,6 +97,7 @@ import {
   attemptStatusLabel,
   attemptStatusTone,
   BLIND_RESPONSE_MAX_HEIGHT_PX,
+  buildLegacyBlindEvaluationLockRequest,
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
@@ -104,6 +105,7 @@ import {
   formatCount,
   formatDurationNs,
   objectiveVerificationEvidence,
+  reconcileLegacyBlindEvaluationRetry,
   updateBlindEvaluationScore,
 } from "./results-ui";
 import { assessRunComparability } from "./comparability";
@@ -2881,40 +2883,50 @@ function ArenaResultsSurface({
 }) {
   const [blind, setBlind] = useState(request.blind === true);
   const [revealed, setRevealed] = useState(false);
-  const [scores, setScores] = useState<Record<string, number>>({});
+  const [scores, setScores] = useState<Record<string, number | null>>({});
   const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
   const [lockMessage, setLockMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState("");
   const summary = summarizeArenaExecutions(results);
-  const responseMap = responseState.status === "ready"
+  const responseMap = useMemo(() => responseState.status === "ready"
     ? new Map(Object.entries(responseState.responses).map(([key, value]) => [key, value.text]))
-    : new Map<string, string>();
-  const cards = buildBlindArenaCards(results, responseMap);
+    : new Map<string, string>(), [responseState]);
+  const cards = useMemo(() => buildBlindArenaCards(results, responseMap), [results, responseMap]);
   const grouped = groupArenaExecutions(results);
   const competitorSummaries = summarizeArenaCompetitors(results);
   const blindExecutionLocked = request.blind === true && !revealed;
   const showBlindEvaluation = !revealed && (blind || request.blind === true);
   const showMeasuredResults = !blindExecutionLocked;
   const ranking = lockState === "locked"
-    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.token] ?? 3] as const)))
+    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.executionKey] ?? 3] as const)))
     : [];
 
   async function lockEvaluation() {
-    if (cards.length === 0) return;
+    if (cards.length === 0 || lockState === "busy" || lockState === "locked") return;
     setLockState("busy");
     setLockMessage(null);
     try {
       for (const card of cards) {
-        const [runId] = card.executionKey.split(":");
+        const separator = card.executionKey.indexOf(":");
+        const runId = separator > 0 ? card.executionKey.slice(0, separator) : "";
         const preparation = await prepareBlindEvaluation(runId);
-        const prepared = preparation.responses.find((response) => response.text === card.text) ?? preparation.responses[0];
-        if (!prepared) continue;
-        await lockBlindEvaluation({
-          evaluationId: preparation.evaluationId,
+        const selectedScore = scores[card.executionKey] ?? 3;
+        if (preparation.status === "locked") {
+          reconcileLegacyBlindEvaluationRetry(
+            runId,
+            card.executionKey,
+            preparation.evaluationId,
+            selectedScore,
+            await readBlindEvaluation(runId),
+          );
+          continue;
+        }
+        await lockBlindEvaluation(buildLegacyBlindEvaluationLockRequest(
           runId,
-          scores: [{ token: prepared.token, overallScore: scores[card.token] ?? 3, criterionScores: {} }],
-          ranking: [[prepared.token]],
-        });
+          card.executionKey,
+          preparation,
+          selectedScore,
+        ));
       }
       setLockState("locked");
       setRevealed(true);
@@ -2923,6 +2935,11 @@ function ArenaResultsSurface({
       setLockMessage(error instanceof Error ? error.message : "The blind evaluation could not be locked.");
     }
   }
+
+  const setScore = useCallback((executionKey: string, value: string) => {
+    setLockMessage(null);
+    setScores((current) => updateBlindEvaluationScore(current, executionKey, value));
+  }, []);
 
   function download(kind: LocalExportKind) {
     try {
@@ -2959,7 +2976,7 @@ function ArenaResultsSurface({
         <div className="blind-arena-surface">
           <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Blind evaluation")}</p><h4>{translate("Score anonymous responses before reveal")}</h4></div><span className="run-status run-status-neutral">{translate("Locked until submit")}</span></div>
           <p className="field-help">{translate("Model, provider, runtime, timing, tokens, objective status, and rank are hidden until the evaluation lock is saved.")}</p>
-           {cards.length === 0 ? <EmptyState title={translate("No completed responses")} description={translate("Only completed, verified responses can enter blind review.")} /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><label className="field-label" htmlFor={`score-${card.token}`}>{translate("Overall score (1–5)")}<select className="font-select" id={`score-${card.token}`} value={scores[card.token] ?? 3} onChange={(event) => setScores((current) => ({ ...current, [card.token]: Number(event.currentTarget.value) }))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></article>)}</div>}
+            {cards.length === 0 ? <EmptyState title={translate("No completed responses")} description={translate("Only completed, verified responses can enter blind review.")} /> : <div className="blind-card-grid">{cards.map((card) => <LegacyBlindResponseCard key={card.token} card={card} score={scores[card.executionKey] ?? 3} disabled={lockState === "busy"} onScore={setScore} />)}</div>}
           <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? translate("Saving evaluation…") : translate("Lock scores and reveal")}</button>{request.blind !== true && <button className="text-button" type="button" onClick={() => setBlind(false)}>{translate("Back to comparison")}</button>}</div>
           {lockMessage && <p className="field-help" role="alert">{lockMessage}</p>}
         </div>
@@ -3001,6 +3018,31 @@ function ArenaResultsSurface({
     </section>
   );
 }
+
+const LegacyBlindResponseCard = memo(function LegacyBlindResponseCard({
+  card,
+  score,
+  disabled,
+  onScore,
+}: {
+  card: ReturnType<typeof buildBlindArenaCards>[number];
+  score: number;
+  disabled: boolean;
+  onScore: (executionKey: string, value: string) => void;
+}) {
+  return (
+    <article className="blind-response-card">
+      <p className="eyebrow">{card.label}</p>
+      <div className="arena-response-text" tabIndex={0}>{card.text}</div>
+      <label className="field-label" htmlFor={`score-${card.token}`}>
+        {translate("Overall score (1–5)")}
+        <select className="font-select" id={`score-${card.token}`} value={score} disabled={disabled} onChange={(event) => onScore(card.executionKey, event.currentTarget.value)}>
+          {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+      </label>
+    </article>
+  );
+});
 
 function ArenaExecutionMonitor({
   telemetry,

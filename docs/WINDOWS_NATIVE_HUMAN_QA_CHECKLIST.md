@@ -26,8 +26,8 @@ check.
 | --- | --- | --- | --- |
 | Core stability | PASS — async `execute_run_once` delegates blocking work; Arena rejection/failure/cancel tests pass. | PENDING — run and resize installed Tauri app. | `src-tauri/src/commands.rs`, `src/arena-runner.test.ts` |
 | P0 freeze | PASS — blind response bounds/score state and generic blind telemetry errors are implemented and covered. | PENDING — freeze review with failure, cancellation, lock/reveal, and reopen flows. | `src/arena-runner.ts`, `src/App.tsx`, `src/arena-runner.test.ts` |
-| Score continuity | PASS — blind score state is local, bounded to 1–5, and hidden until immutable lock. | PENDING — score with keyboard, lock/reveal, reopen. | `src/results-ui.ts`, `src/results-ui.test.ts` |
-| Model actions | PASS — typed availability and primary local actions are covered by model-library tests. | PENDING — discover, download/import, cancel/retry/use/remove where runtime permits. | `src/model-library.ts`, `src/model-library.test.ts` |
+| Score continuity | PASS — blind score state is local, bounded to 1–5, keyed by stable execution identity in the legacy Arena surface, and hidden until immutable lock. | PENDING — score with keyboard, lock/reveal, reopen. | `src/results-ui.ts`, `src/results-ui.test.ts` |
+| Model actions | PASS — typed availability gives active install operations DOWNLOADING/CANCEL precedence over stale catalog availability, with primary local actions covered by tests. | PENDING — discover, download/import, cancel/retry/use/remove where runtime permits. | `src/model-library.ts`, `src/model-library.test.ts` |
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, comparison density, telemetry layout, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
@@ -63,8 +63,8 @@ check.
 
 ## Automated evidence recorded
 
-- `npm test` — passed: 17 files, 100 tests, including blind telemetry error
-  genericization.
+- `npm test` — passed: 17 files, 103 tests, including stable legacy blind lock
+  continuity and model action precedence.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; only the existing large-chunk warning was emitted.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:

@@ -6,10 +6,12 @@ import {
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
+  buildLegacyBlindEvaluationLockRequest,
   formatByteCount,
   formatCount,
   formatDurationNs,
   objectiveVerificationEvidence,
+  reconcileLegacyBlindEvaluationRetry,
   updateBlindEvaluationScore,
 } from "./results-ui";
 
@@ -63,10 +65,44 @@ describe("read-only results formatting", () => {
   });
 
   it("keeps score edits local, bounded, and prepared", () => {
-    const scores = { first: null, second: 2 };
-    expect(updateBlindEvaluationScore(scores, "first", "5")).toEqual({ first: 5, second: 2 });
-    expect(updateBlindEvaluationScore(scores, "first", "9")).toEqual(scores);
+    const scores = { "run-a:attempt-a": null, "run-b:attempt-b": 2 };
+    expect(updateBlindEvaluationScore(scores, "run-a:attempt-a", "5")).toEqual({ "run-a:attempt-a": 5, "run-b:attempt-b": 2 });
+    expect(updateBlindEvaluationScore(scores, "run-a:attempt-a", "9")).toEqual(scores);
     expect(blindReviewHidesAttemptEvidence("prepared")).toBe(true);
+  });
+
+  it("locks the prepared response for the selected run without text matching", () => {
+    const preparation = {
+      evaluationId: "blind-a",
+      runId: "run-a",
+      status: "prepared" as const,
+      responses: [{ label: "Response 1", token: "stable-token-a", text: "same response" }],
+    };
+    expect(buildLegacyBlindEvaluationLockRequest("run-a", "run-a:attempt-a", preparation, 4)).toEqual({
+      evaluationId: "blind-a",
+      runId: "run-a",
+      scores: [{ token: "stable-token-a", overallScore: 4, criterionScores: {} }],
+      ranking: [["stable-token-a"]],
+    });
+    expect(() => buildLegacyBlindEvaluationLockRequest("run-b", "run-b:attempt-b", preparation, 4)).toThrow("does not belong");
+    expect(() => buildLegacyBlindEvaluationLockRequest("run-a", "run-a:attempt-a", { ...preparation, responses: [] }, 4)).toThrow("one prepared response");
+  });
+
+  it("reconciles an immutable legacy lock before retrying", () => {
+    const record = {
+      evaluationId: "blind-a",
+      runId: "run-a",
+      status: "locked" as const,
+      presentation: [{ label: "Response 1", token: "stable-token-a", attemptId: "attempt-a" }],
+      scores: [{ token: "stable-token-a", overallScore: 4, criterionScores: {} }],
+      ranking: [["stable-token-a"]],
+      createdAt: "2026-08-30T00:00:00Z",
+      lockedAt: "2026-08-30T00:00:01Z",
+    };
+    expect(reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-a", "blind-a", 4, record)).toBe("skip");
+    expect(() => reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-a", "blind-a", 5, record)).toThrow("conflicts");
+    expect(() => reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-a", "blind-a", 4, null)).toThrow("record is missing");
+    expect(() => reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-b", "blind-a", 4, record)).toThrow("missing the selected response");
   });
 
   it("keeps blind results hidden until the immutable lock state", () => {

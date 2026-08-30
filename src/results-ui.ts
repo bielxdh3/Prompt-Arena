@@ -1,4 +1,4 @@
-import type { ObjectiveVerificationEvidence } from "./bridge";
+import type { BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord, ObjectiveVerificationEvidence } from "./bridge";
 import { formatLocaleNumber, translate } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
@@ -48,6 +48,50 @@ export function updateBlindEvaluationScore(
   const score = value === "" ? null : Number(value);
   if (score !== null && (!Number.isInteger(score) || score < 1 || score > 5)) return { ...scores };
   return { ...scores, [token]: score };
+}
+
+export function buildLegacyBlindEvaluationLockRequest(
+  runId: string,
+  executionKey: string,
+  preparation: BlindEvaluationPreparation,
+  overallScore: number,
+): BlindEvaluationLockRequest {
+  if (preparation.runId !== runId || !executionKey.startsWith(`${runId}:`)) {
+    throw new Error("The prepared response does not belong to the selected Arena run.");
+  }
+  if (preparation.status !== "prepared" || preparation.responses.length !== 1) {
+    throw new Error("The selected Arena run did not resolve to one prepared response.");
+  }
+  if (!Number.isInteger(overallScore) || overallScore < 1 || overallScore > 5) {
+    throw new Error("Scores must be between 1 and 5.");
+  }
+  const response = preparation.responses[0];
+  return {
+    evaluationId: preparation.evaluationId,
+    runId,
+    scores: [{ token: response.token, overallScore, criterionScores: {} }],
+    ranking: [[response.token]],
+  };
+}
+
+export function reconcileLegacyBlindEvaluationRetry(
+  runId: string,
+  executionKey: string,
+  evaluationId: string,
+  selectedScore: number,
+  record: BlindEvaluationRecord | null,
+): "skip" {
+  const prefix = `${runId}:`;
+  if (!record) throw new Error("The immutable blind evaluation record is missing; retry cannot continue.");
+  if (record.runId !== runId || record.evaluationId !== evaluationId || !executionKey.startsWith(prefix)) {
+    throw new Error("The immutable blind evaluation record does not match the selected run.");
+  }
+  const attemptId = executionKey.slice(prefix.length);
+  const presentation = record.presentation.find((entry) => entry.attemptId === attemptId);
+  if (!presentation) throw new Error("The immutable blind evaluation record is missing the selected response.");
+  const savedScore = record.scores.find((score) => score.token === presentation.token)?.overallScore;
+  if (savedScore !== selectedScore) throw new Error("The selected score conflicts with the immutable saved score.");
+  return "skip";
 }
 
 export function objectiveVerificationEvidence(value: unknown): ObjectiveVerificationEvidence | null {
