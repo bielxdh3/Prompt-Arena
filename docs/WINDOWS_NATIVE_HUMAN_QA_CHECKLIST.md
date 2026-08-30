@@ -38,7 +38,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh incremental NSIS/package evidence was built from corrected checkout HEAD `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`, containing baseline reviewed production implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` plus focused PT-BR label correction commit `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh incremental NSIS/package evidence was built from checkout HEAD `fe5c28644b7aea01f7077bbb0e73ef73605255f2`, containing baseline reviewed production implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` plus focused corrections `4e471224d51bddef7f9d511f4dcce6df62f6a2ee` and `fe5c28644b7aea01f7077bbb0e73ef73605255f2`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
 
 ## Application review
 
@@ -90,31 +90,32 @@ check.
   responsiveness, or human QA evidence.
 
 Fresh incremental exact-source-tree package evidence from the verified turn was
-built from corrected checkout HEAD
-`4e471224d51bddef7f9d511f4dcce6df62f6a2ee`, containing baseline reviewed
+built from checkout HEAD
+`fe5c28644b7aea01f7077bbb0e73ef73605255f2`, containing baseline reviewed
 production source implementation HEAD
-`8588a2dd66e386082e153c933b1b55891ac42657` plus focused PT-BR label correction
-commit `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`. Target-workspace artifact:
+`8588a2dd66e386082e153c933b1b55891ac42657` plus focused corrections
+`4e471224d51bddef7f9d511f4dcce6df62f6a2ee` and
+`fe5c28644b7aea01f7077bbb0e73ef73605255f2`. Target-workspace artifact:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,817,224 bytes, SHA-256
-`9C28A522592A2B7AFC56D08A2AB1C232412E91660B516ACF34E89EFF6F854C9C`.
+3,814,606 bytes, SHA-256
+`19D55E79D53E3BB34C5BCF911FDCEFA48F7A5FB1520932D9FA847BBBB69F1D24`.
 Bundle source:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-3,817,224 bytes, SHA-256
-`9C28A522592A2B7AFC56D08A2AB1C232412E91660B516ACF34E89EFF6F854C9C`.
+3,814,606 bytes, SHA-256
+`19D55E79D53E3BB34C5BCF911FDCEFA48F7A5FB1520932D9FA847BBBB69F1D24`.
 The bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\prompt-arena-worker.exe`,
 2,651,136 bytes, SHA-256
-`5A379CBCDF1D6C537504CA4D08323F84AA9A8DCB1B113715CBCC3A38E5EB932A`.
+`DFD1DBF13F1D7605294B32972A34B5958BAB1320DAD90021C40264EB8789C4B5`.
 The prepared source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
 is separately identified and is not the bundled-worker measurement above;
 it is 2,629,120 bytes, SHA-256
 `352E09C15C9FD3ACAD1CF321F020597561FAF5A485D02B5A265C12A5FBAA3033`.
 Checksum manifest:
-`E:\Prompt Arena-live-telemetry-i18n-commit2\checksums-sha256.txt`, SHA-256
-`5A4E1FE141F61E79BF522BBC8B98B3EB61F8F82C5836E10250B7F341F6D1209B`.
-`E:\Prompt Arena-live-telemetry-i18n-commit2\package-verification.txt` has
+`E:\Prompt Arena-live-telemetry-i18n-commit2\checksums-sha256.txt`, 102 bytes,
+SHA-256 `D4B5C8DEA9CF88702559E373C18AFD05FD1B0824F8C1961E0B9C5E2BDE8C4819`.
+`E:\Prompt Arena-live-telemetry-i18n-commit2\package-verification.txt` is 282 bytes,
 SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
 and records checksum pass, clean install pass,
 executable start pass, restart pass, and silent uninstall pass; the optional MSI
@@ -132,11 +133,12 @@ evidence only. Remote CI is unconfirmed.
   persistence, blind-evaluation continuity, or human QA.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
-- `COMPLETE`: fresh NSIS/package evidence was built from exact checkout source
-  corrected checkout HEAD `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`, containing
+- `COMPLETE`: fresh NSIS/package evidence was built from exact checkout HEAD
+  `fe5c28644b7aea01f7077bbb0e73ef73605255f2`, containing
   baseline reviewed production implementation HEAD
-  `8588a2dd66e386082e153c933b1b55891ac42657` plus focused PT-BR label correction
-  `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`; checksum verification, clean
+  `8588a2dd66e386082e153c933b1b55891ac42657` plus focused corrections
+  `4e471224d51bddef7f9d511f4dcce6df62f6a2ee` and
+  `fe5c28644b7aea01f7077bbb0e73ef73605255f2`; checksum verification, clean
   install, executable start, restart, and silent uninstall passed. This does
   not close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review;
   packaging smoke is not visual or human QA, and the historical 57f02b3
