@@ -30,7 +30,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, comparison density, telemetry layout, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 NSIS lifecycle evidence is preserved only as historical evidence. | PENDING_AUTOMATED_NATIVE_QA — NSIS was attempted twice at checkout HEAD 99485de with the local-tools override; Rust compilation failed before bundling with Windows STATUS_IN_PAGE_ERROR (0xc0000006). No package preparation, verification, or install/launch/restart/uninstall smoke ran, and no current artifact evidence exists. | `PENDING_AUTOMATED_NATIVE_QA` |
+| Packaging | PASS — historical 57f02b3 evidence remains separate, and fresh NSIS packaging at checkout HEAD f393e9023b2f1d28de27ce34b73eff83f9a2af45 passed after generated Cargo cleanup resolved the earlier STATUS_IN_PAGE_ERROR (0xc0000006). | COMPLETE — checksum, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains blocked. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native review |
 
 ## Application review
 
@@ -68,10 +68,31 @@ check.
 - `npm run build` — passed; only the existing large-chunk warning was emitted.
 - `git diff --check` — passed.
 
-The exact-source-HEAD NSIS command was attempted twice with
+The exact-source-HEAD NSIS command was previously attempted twice with
 `npm run tauri:build -- --bundles nsis --config
 '{"bundle":{"useLocalToolsDir":true}}'`; both attempts failed before bundling
 with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
+
+For the current package checkout, `cargo clean --manifest-path
+src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
+command was retried. The retry passed at checkout HEAD
+`f393e9023b2f1d28de27ce34b73eff83f9a2af45` for reviewed source HEAD `838d952`.
+Fresh artifact:
+`E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
+3,756,114 bytes, SHA-256
+`085C1BF1EC49D6B8C5701AC4412DBA5FCE53989C2A075C2BB7E1768FF5FFCF62`.
+Bundle source:
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`.
+Worker sidecar:
+`E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`,
+2,544,640 bytes, SHA-256
+`C42F5C56C18DAF36455D2062498FA7DE66CB5BB730AE58DFE4A1DB45F549BAB0`.
+Checksum manifest:
+`E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt`, SHA-256
+`f052e25cdda301c094a54053119c7492550f4bc5d38e1a91e3b3d92b2b1de72c`.
+`package-verification.txt` records checksum pass, clean install pass,
+executable start pass, restart pass, and silent uninstall pass. This is not
+visual or human QA.
 
 These checks do not prove visual, native control, live-runtime, or human
 accessibility acceptance. Remote CI is unconfirmed.
@@ -81,11 +102,12 @@ accessibility acceptance. Remote CI is unconfirmed.
 - `BLOCKED_EXTERNAL_RUNTIME`: no local Ollama listener was available for
   discovery/start or a real Arena run; no Docker runtime was available for the
   Docker-required boundary. These are not implementation failures.
-- `PENDING_AUTOMATED_NATIVE_QA`: resolve the Rust `STATUS_IN_PAGE_ERROR`
-  (`0xc0000006`) blocker, then build a new NSIS package from exact source HEAD
-  `838d952` and run package preparation, verification, and install/launch/
-  restart/uninstall smoke. No current artifact/checksum/sidecar evidence exists;
-  the 57f02b3 artifact is not current-head output.
+- `COMPLETE`: fresh NSIS packaging at checkout HEAD
+  `f393e9023b2f1d28de27ce34b73eff83f9a2af45` passed after generated Cargo
+  cleanup resolved `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle,
+  sidecar, checksum, and lifecycle evidence is recorded above. This does not
+  close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review; the
+  historical 57f02b3 artifact is not current-head output.
 - `BLOCKED LOCALLY`: Windows MSI remains blocked by the existing WiX
   `light.exe` failure.
 - `CI PENDING`: Linux deb/AppImage still requires the Linux runner.
