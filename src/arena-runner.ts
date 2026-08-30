@@ -206,6 +206,11 @@ export function visibleArenaTelemetryMetrics(metrics: ArenaTelemetryMetrics, bli
   return blind ? unavailableTelemetryMetrics() : metrics;
 }
 
+export function visibleArenaTelemetryError(error: string | null | undefined, blind: boolean): string | null {
+  if (!error) return null;
+  return blind ? "Execution failed; details withheld." : error;
+}
+
 export function arenaTelemetryLabel(sample: ArenaSampleTelemetry, blind: boolean, locale: AppLocale = "en"): string {
   return blind
     ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + (sample.competitorOrdinal % 26))}`

@@ -11,6 +11,7 @@ import {
   applyArenaProgress,
   arenaTelemetryLabel,
   createArenaTelemetry,
+  visibleArenaTelemetryError,
   visibleArenaTelemetryMetrics,
   type ArenaProgress,
 } from "./arena-runner";
@@ -177,6 +178,13 @@ describe("arena runner", () => {
     expect(arenaTelemetryLabel(telemetry.samples[0], true)).toBe("Competitor A");
     expect(arenaTelemetryLabel(telemetry.samples[1], true)).toBe("Competitor B");
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
+  });
+
+  it("keeps blind telemetry errors generic while retaining non-blind detail", () => {
+    const identityBearingError = "Ollama model llama3.2 failed at runtime";
+    expect(visibleArenaTelemetryError(identityBearingError, true)).toBe("Execution failed; details withheld.");
+    expect(visibleArenaTelemetryError(identityBearingError, false)).toBe(identityBearingError);
+    expect(visibleArenaTelemetryError(null, true)).toBeNull();
   });
 
   it("records cancellation and sanitized failure without weakening sequential continuation", async () => {

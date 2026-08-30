@@ -140,6 +140,7 @@ import {
   arenaTelemetryLabel,
   createArenaTelemetry,
   refreshArenaTelemetry,
+  visibleArenaTelemetryError,
   visibleArenaTelemetryMetrics,
   type ArenaExecution,
   type ArenaProgress,
@@ -3016,6 +3017,7 @@ function ArenaExecutionMonitor({
   const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
     ?? [...telemetry.samples].reverse().find((sample) => sample.status !== "queued");
   const competitors = [...new Map(telemetry.samples.map((sample) => [sample.competitorId, telemetry.samples.filter((candidate) => candidate.competitorId === sample.competitorId)])).values()];
+  const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
   return (
     <div className="arena-execution-monitor" role="status" aria-live="polite">
       <div className="section-heading compact-heading">
@@ -3042,16 +3044,17 @@ function ArenaExecutionMonitor({
           const latest = [...samples].reverse().find((sample) => sample.status !== "queued") ?? first;
           const accumulated = samples.reduce((total, sample) => total + (sample.durationMs ?? 0), 0);
           const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
+          const latestError = visibleArenaTelemetryError(latest.error, blind);
           return <div className="arena-live-row" key={first.competitorId}>
             <strong>{arenaTelemetryLabel(first, blind, locale)}</strong>
              <span>{translate(latest.status)} · {formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)}</span>
             <span>{blind ? translate("Timing hidden") : `${translate("Total")} ${formatArenaMs(accumulated)}`}</span>
             <span>{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
-            {latest.error && <em>{latest.error}</em>}
+            {latestError && <em>{translate(latestError)}</em>}
           </div>;
         })}
       </div>
-      {telemetry.lastError && <p className="field-help" role="alert">{translate("Failure recorded")}: {telemetry.lastError}</p>}
+      {lastError && <p className="field-help" role="alert">{translate("Failure recorded")}: {translate(lastError)}</p>}
       {telemetry.state === "cancelled" && <p className="field-help" role="status">{translate("Cancellation recorded. Queued samples were skipped; completed evidence was retained.")}</p>}
       {telemetry.state === "failed" && <p className="field-help" role="alert">{translate("One or more samples failed. Other sequential competitors continued where possible.")}</p>}
        <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total}>{translate("Cancel queued work")}</button></div>
