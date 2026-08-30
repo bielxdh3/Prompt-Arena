@@ -1,12 +1,14 @@
 # Windows native/human QA checklist
 
 Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`). It includes the
-stability, model-action, telemetry-safety, and desktop UI batches after
+`af1ff48361341fa661a296955e7186a72f7caf2a` (`af1ff483`). It includes the
+stability, model-action, telemetry-safety, desktop UI, and accessible Arena
+listbox/test-contract batches after
 `75bf8266a7af257a028724365f627a31aa28af37`,
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2`,
 `bcf706e5c32568ba43ac24f7673074c6d230098`, and
-`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`). Documentation and
+`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`) and
+`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`). Documentation and
 checksum commits after this source target may advance the checkout HEAD; they
 do not change the reviewed source implementation.
 Overall native status:
@@ -29,10 +31,10 @@ check.
 | P0 freeze | PASS — blind response bounds/score state and generic blind telemetry errors are implemented and covered. | PENDING — freeze review with failure, cancellation, lock/reveal, and reopen flows. | `src/arena-runner.ts`, `src/App.tsx`, `src/arena-runner.test.ts` |
 | Score continuity | PASS — blind score state is local, bounded to 1–5, keyed by stable execution identity in the legacy Arena surface, and hidden until immutable lock. | PENDING — score with keyboard, lock/reveal, reopen. | `src/results-ui.ts`, `src/results-ui.test.ts` |
 | Model actions | PASS — typed availability gives active install operations DOWNLOADING/CANCEL precedence over stale catalog availability, with primary local actions covered by tests. | PENDING — discover, download/import, cancel/retry/use/remove where runtime permits. | `src/model-library.ts`, `src/model-library.test.ts` |
-| Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
-| Accessibility | PASS — semantic buttons, native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css` |
+| Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
+| Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate, and fresh NSIS packaging at source implementation HEAD 2ddea5c1b77d2132a091df43bf06bc2dd5947b5e passed after generated Cargo cleanup resolved the earlier STATUS_IN_PAGE_ERROR (0xc0000006). | COMPLETE — checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate, and fresh NSIS packaging at source implementation HEAD af1ff48361341fa661a296955e7186a72f7caf2a passed after generated Cargo cleanup resolved the earlier STATUS_IN_PAGE_ERROR (0xc0000006). | COMPLETE — checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native review |
 
 ## Application review
 
@@ -45,7 +47,7 @@ check.
 | PENDING_HUMAN_QA | Verify native select/button/details controls, focus order, disabled/loading states, and screen-reader semantics in the installed app. | `src/App.tsx`, `src/styles.css`; native gate pending |
 | PENDING_HUMAN_QA | In Models, verify primary installed/use actions, progressive Details metadata, hardware Platform/CPU/RAM/GPU/VRAM overview, and Advanced source/confidence diagnostics. | `src/App.tsx`; no installed visual session available |
 | PENDING_HUMAN_QA | In Settings, open and keyboard-navigate Advanced local controls; verify retention, diagnostics, and BYOK panels remain semantically reachable. | Native `<details>`/`<summary>` in `src/App.tsx` |
-| PENDING_HUMAN_QA | In Arena, verify horizontal desktop competitor comparison, narrow fallback, semantic live-monitor headers, blind identity/telemetry suppression, bounded response-pane scrolling, and no black-screen/reload recovery path. | `src/App.tsx`, `src/styles.css`, `src/results-ui.ts` |
+| PENDING_HUMAN_QA | In Arena, verify horizontal desktop competitor comparison, narrow fallback, semantic live-monitor headers, accessible Task/Case listbox keyboard/focus behavior, blind identity/telemetry suppression, bounded response-pane scrolling, and no black-screen/reload recovery path. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts`, `src/results-ui.ts` |
 | PENDING_HUMAN_QA | Run a small safe Arena if a local runtime exists. Verify progress, timing, totals, available token metrics, statuses, failure isolation, queued cancellation, persistence, reopen, and exports. | Loopback worker smoke passed, but no full Tauri Arena run/result is claimed |
 | PENDING_HUMAN_QA | Switch English ↔ `Português (Brasil)` and restart. Verify translated shipped strings and locale-formatted values change cleanly while identifiers and user content remain unchanged. | `src/i18n.ts`; restart/native gate pending |
 
@@ -64,8 +66,9 @@ check.
 
 ## Automated evidence recorded
 
-- `npm test` — passed: 17 files, 103 tests, including stable legacy blind lock
-  continuity and model action precedence.
+- `npm test` — passed: 19 files, 109 tests, including stable legacy blind lock
+  continuity, model action precedence, listbox navigation, and UI style
+  contracts.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; only the existing large-chunk warning was emitted.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:
@@ -90,27 +93,27 @@ with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
 For the current package checkout, `cargo clean --manifest-path
 src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
 command was retried. The retry passed at source implementation HEAD
-`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` for the reviewed source HEAD.
+`af1ff48361341fa661a296955e7186a72f7caf2a` for the reviewed source HEAD.
 Fresh artifact:
 `E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,756,859 bytes, SHA-256
-`97B41A805000FA6775703B13F59886D61D793E3EA7FEBC2E246E4C66E2D9B41A`.
+3,759,179 bytes, SHA-256
+`61727FB27548B69E6D113B534C64F8616DFB560DD5C0DBEC75F9755382DA2B01`.
 Bundle source:
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-3,756,859 bytes, SHA-256
-`97B41A805000FA6775703B13F59886D61D793E3EA7FEBC2E246E4C66E2D9B41A`.
+3,759,179 bytes, SHA-256
+`61727FB27548B69E6D113B534C64F8616DFB560DD5C0DBEC75F9755382DA2B01`.
 The fresh bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\prompt-arena-worker.exe`,
 2,567,680 bytes, SHA-256
-`7E72937C562922A78503E2B1285FE34B3094F314AC1929C9728B081A58364CDA`.
+`7C939E9C234FE3D0476F38D9FBCA3E96D2D617834D54959B678498B1DEED0742`.
 The tracked source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
 remains separately identified and is not the bundled-worker measurement above;
 it is 2,544,640 bytes, SHA-256
-`13F9231926998E00BE5373B4A06B16868638CE52CAB3AB839C9C3BAD65DF45C6`.
+`9D1C253668743ECC08752BB7D07ABCF78ACF1CAF68654677CC988D77D848912D`.
 Checksum manifest:
 `E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt`, SHA-256
-`06D40806D350C1D5F3A750605D1B973D7B9C5B3C0B5C50DAFB2461305E30D5F3`.
+`FA8BC8939FA8F3F0237A7B090550A504E8857ED044E971DACAFD4E1D2F663D41`.
 `package-verification.txt` records checksum pass, clean install pass,
 executable start pass, restart pass, and silent uninstall pass; the optional MSI
 artifact was unavailable. This is not visual or human QA.
@@ -128,7 +131,7 @@ evidence only. Remote CI is unconfirmed.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
 - `COMPLETE`: fresh NSIS packaging at source implementation HEAD
-  `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` passed after generated Cargo
+  `af1ff48361341fa661a296955e7186a72f7caf2a` passed after generated Cargo
   cleanup resolved `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle,
   bundled-worker, tracked source sidecar, checksum, and lifecycle evidence is
   recorded above. This does not

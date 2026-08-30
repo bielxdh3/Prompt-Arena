@@ -1,12 +1,14 @@
 # Product completion evidence matrix
 
 Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`). It includes the
-stability, model-action, telemetry-safety, and desktop UI batches after
+`af1ff48361341fa661a296955e7186a72f7caf2a` (`af1ff483`). It includes the
+stability, model-action, telemetry-safety, desktop UI, and accessible Arena
+listbox/test-contract batches after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
 `bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and
-`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`). Documentation and
+`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`) and
+`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`). Documentation and
 checksum commits after this source target may advance the checkout HEAD; they
 do not change the reviewed source implementation.
 
@@ -34,6 +36,7 @@ native-control, full Arena live-runtime, and human review remain
 | P2 Models progressive disclosure and hardware diagnostics | `src/App.tsx` keeps primary model identity/size/runtime and Use actions visible, moves extended metadata into Details, keeps hardware source/confidence in Advanced diagnostics, and uses compact fixed-size toolbar/actions without duplicate size copy. | `src/i18n.test.ts`, model-library tests, typecheck/build pass. | Installed Models visual/native control review | COMPLETE |
 | P2 Settings grouping | `src/App.tsx` groups retention, diagnostics, BYOK, storage/privacy policy, and no-secret guidance under semantic native `<details>`/`<summary>` disclosure; explicit secondary actions remain keyboard reachable. | Typecheck/build pass. | Keyboard, screen-reader, and persistence review | COMPLETE |
 | P2 i18n | `src/i18n.ts` adds the P2 disclosure, hardware, source, confidence, state, metrics, and storage/privacy strings for PT-BR; existing identity, telemetry, and user content remain data rather than translation keys. | `src/i18n.test.ts` covers critical PT-BR/English strings; full frontend suite passes. | Switch/restart and full-surface native language review | COMPLETE |
+| P2 primary Arena controls and UI contracts | `src/App.tsx` replaces the reported raw Task/Case dropdowns with accessible listboxes; `src/listbox-navigation.ts` centralizes keyboard transitions; static contracts guard comparison/live/Models overflow ownership and reduced-motion selectors. | Listbox navigation and UI contract tests pass; no browser harness is available. | Installed dropdown, keyboard, focus, and responsive visual review | COMPLETE |
 
 ## Product matrix
 
@@ -56,14 +59,14 @@ native-control, full Arena live-runtime, and human review remain
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at source implementation HEAD `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, bundled-worker, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at source implementation HEAD `af1ff48361341fa661a296955e7186a72f7caf2a` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, bundled-worker, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
-## Automated validation recorded for source implementation HEAD `2ddea5c` and current docs checkout
+## Automated validation recorded for source implementation HEAD `af1ff483` and current docs checkout
 
 - On the source implementation checkout, `npm test` — passed:
-  17 files, 103 tests, including stable legacy blind lock continuity and model action precedence.
+  19 files, 109 tests, including stable legacy blind lock continuity, model action precedence, listbox navigation, and UI style contracts.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:
@@ -84,7 +87,7 @@ The exact-source-HEAD NSIS command was previously attempted twice with
 '{"bundle":{"useLocalToolsDir":true}}'`; both attempts failed before bundling
 with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
 
-For the current package checkout at source implementation HEAD `2ddea5c`, `cargo clean --manifest-path
+For the current package checkout at source implementation HEAD `af1ff483`, `cargo clean --manifest-path
 src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
 command was retried. The retry passed and produced the fresh evidence below.
 
@@ -123,24 +126,24 @@ account `biel4`, role Executor, App Server/headless transport,
 ## Packaging and historical provenance
 
 Fresh exact-HEAD evidence: the reviewed source implementation and package
-checkout/source HEAD is `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e`.
+checkout/source HEAD is `af1ff48361341fa661a296955e7186a72f7caf2a`.
 The prepared NSIS artifact is
 `E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,756,859 bytes, SHA-256
-`97B41A805000FA6775703B13F59886D61D793E3EA7FEBC2E246E4C66E2D9B41A`.
+3,759,179 bytes, SHA-256
+`61727FB27548B69E6D113B534C64F8616DFB560DD5C0DBEC75F9755382DA2B01`.
 The bundle source is
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
 with the same size and SHA-256. The fresh bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\prompt-arena-worker.exe`,
 2,567,680 bytes, SHA-256
-`7E72937C562922A78503E2B1285FE34B3094F314AC1929C9728B081A58364CDA`.
+`7C939E9C234FE3D0476F38D9FBCA3E96D2D617834D54959B678498B1DEED0742`.
 The tracked source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
 remains separately identified and is not the bundled-worker measurement above;
 it is 2,544,640 bytes, SHA-256
-`13F9231926998E00BE5373B4A06B16868638CE52CAB3AB839C9C3BAD65DF45C6`.
+`9D1C253668743ECC08752BB7D07ABCF78ACF1CAF68654677CC988D77D848912D`.
 `E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt` has SHA-256
-`06D40806D350C1D5F3A750605D1B973D7B9C5B3C0B5C50DAFB2461305E30D5F3` and
+`FA8BC8939FA8F3F0237A7B090550A504E8857ED044E971DACAFD4E1D2F663D41` and
 records the artifact checksum. `package-verification.txt` records passed
 checksum verification, clean install, executable start, restart, and silent
 uninstall; the optional MSI artifact was unavailable. This package smoke is not
