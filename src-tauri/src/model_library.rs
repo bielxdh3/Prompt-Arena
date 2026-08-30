@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::{
     domain::{
@@ -12,6 +12,7 @@ use crate::{
         ModelRemovalEvidence, ModelSource, ModelSourceConfig, ModelSourceStatus,
     },
     ollama::{OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
+    openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleRuntime},
     runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
         now_marker, StorageError, StorageService, MAX_MANAGED_MODEL_BYTES, MAX_MODEL_NAME_BYTES,
@@ -866,14 +867,24 @@ fn discover_source_models(
 ) -> Result<Vec<ModelRecord>, ModelLibraryError> {
     let mut models = match config.backend {
         ModelBackend::Ollama => {
-            let provider = local_provider(endpoint.ok_or_else(|| {
-                ModelLibraryError::InvalidRequest("Ollama source endpoint is required".to_owned())
-            })?)?;
+            let provider = local_provider(
+                &config.backend,
+                endpoint.ok_or_else(|| {
+                    ModelLibraryError::InvalidRequest(
+                        "Ollama source endpoint is required".to_owned(),
+                    )
+                })?,
+            )?;
             provider
                 .list_models()?
                 .into_iter()
                 .map(|model| {
-                    model_record_from_info(source_id, &provider, ModelBackend::Ollama, model)
+                    model_record_from_info(
+                        source_id,
+                        provider.as_ref(),
+                        ModelBackend::Ollama,
+                        model,
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?
         }
@@ -886,17 +897,17 @@ fn discover_source_models(
                     "local model source endpoint or managed GGUF path is required".to_owned(),
                 ));
             };
-            let provider = local_provider(endpoint)?;
-            let value = provider.json_request(
-                "GET",
-                "/v1/models",
-                None,
-                &crate::runtime::CancellationToken::new(),
-            )?;
-            parse_openai_model_info(&value)?
+            let provider = local_provider(&config.backend, endpoint)?;
+            provider
+                .list_models()?
                 .into_iter()
                 .map(|model| {
-                    model_record_from_info(source_id, &provider, config.backend.clone(), model)
+                    model_record_from_info(
+                        source_id,
+                        provider.as_ref(),
+                        config.backend.clone(),
+                        model,
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?
         }
@@ -910,20 +921,33 @@ fn discover_source_models(
     Ok(models)
 }
 
-fn local_provider(endpoint: &str) -> Result<OllamaProvider, ModelLibraryError> {
+fn local_provider(
+    backend: &ModelBackend,
+    endpoint: &str,
+) -> Result<Box<dyn RuntimeProvider>, ModelLibraryError> {
     let normalized = validate_loopback_endpoint(endpoint)?;
-    OllamaProvider::new(OllamaConfig {
+    let config = OllamaConfig {
         endpoint: normalized,
         connect_timeout_ms: 250,
         read_timeout_ms: 500,
         read_deadline_ms: 2_000,
-    })
-    .map_err(Into::into)
+    };
+    match backend {
+        ModelBackend::Ollama => Ok(Box::new(OllamaProvider::new(config)?)),
+        ModelBackend::LmStudio => Ok(Box::new(OpenAiCompatibleProvider::new(
+            OpenAiCompatibleRuntime::LmStudio,
+            config,
+        )?)),
+        ModelBackend::LlamaCpp => Ok(Box::new(OpenAiCompatibleProvider::new(
+            OpenAiCompatibleRuntime::LlamaCpp,
+            config,
+        )?)),
+    }
 }
 
 fn model_record_from_info(
     source_id: &str,
-    provider: &OllamaProvider,
+    provider: &dyn RuntimeProvider,
     backend: ModelBackend,
     model: ModelInfo,
 ) -> Result<ModelRecord, ModelLibraryError> {
@@ -948,94 +972,6 @@ fn model_record_from_info(
         managed_path: None,
         metadata: model.metadata,
     })
-}
-
-fn parse_openai_model_info(value: &Value) -> Result<Vec<ModelInfo>, ModelLibraryError> {
-    let models = value
-        .get("data")
-        .and_then(Value::as_array)
-        .or_else(|| value.get("models").and_then(Value::as_array))
-        .ok_or_else(|| {
-            ModelLibraryError::Runtime(RuntimeError::Protocol {
-                message: "local model source did not contain a model array".to_owned(),
-            })
-        })?;
-    if models.len() > MAX_MODEL_RECORD_COUNT {
-        return Err(ModelLibraryError::Runtime(RuntimeError::Protocol {
-            message: "runtime model list exceeded the local item limit".to_owned(),
-        }));
-    }
-    models.iter().map(parse_openai_model).collect()
-}
-
-fn parse_openai_model(value: &Value) -> Result<ModelInfo, ModelLibraryError> {
-    let object = value.as_object().ok_or_else(|| {
-        ModelLibraryError::Runtime(RuntimeError::Protocol {
-            message: "local model source returned a non-object model".to_owned(),
-        })
-    })?;
-    let details = object.get("details").and_then(Value::as_object);
-    let name = first_string(object, &["id", "name", "model"]).ok_or_else(|| {
-        ModelLibraryError::Runtime(RuntimeError::Protocol {
-            message: "local model source returned a model without an identity".to_owned(),
-        })
-    })?;
-    let mut metadata = BTreeMap::new();
-    for (key, value) in object {
-        if !matches!(
-            key.as_str(),
-            "id" | "name"
-                | "model"
-                | "digest"
-                | "sha256"
-                | "hash"
-                | "size"
-                | "size_bytes"
-                | "modified_at"
-                | "updated_at"
-                | "family"
-                | "parameter_size"
-                | "parameterSize"
-                | "quantization_level"
-                | "quantizationLevel"
-                | "context_length"
-                | "contextLength"
-                | "details"
-        ) {
-            metadata.insert(key.clone(), value.clone());
-        }
-    }
-    if let Some(details) = object.get("details") {
-        metadata.insert("details".to_owned(), details.clone());
-    }
-
-    let model = ModelInfo {
-        name,
-        digest: first_string(object, &["digest", "sha256", "hash"]),
-        size_bytes: first_u64(object, &["size_bytes", "size"]),
-        modified_at: first_string(object, &["modified_at", "updated_at"]),
-        family: first_string(object, &["family"])
-            .or_else(|| details.and_then(|details| first_string(details, &["family"]))),
-        parameter_size: first_string(object, &["parameter_size", "parameterSize"])
-            .or_else(|| details.and_then(|details| first_string(details, &["parameter_size"]))),
-        quantization_level: first_string(object, &["quantization_level", "quantizationLevel"])
-            .or_else(|| details.and_then(|details| first_string(details, &["quantization_level"]))),
-        context_length: first_u64(object, &["context_length", "contextLength"])
-            .or_else(|| details.and_then(|details| first_u64(details, &["context_length"]))),
-        metadata,
-    };
-    crate::ollama::validate_model_info(&model)?;
-    Ok(model)
-}
-
-fn first_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str).map(str::to_owned))
-}
-
-fn first_u64(object: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_u64))
 }
 
 fn stable_model_id(source_id: &str, model: &ModelInfo, path: Option<&str>) -> String {
@@ -1684,7 +1620,7 @@ mod tests {
 
     #[test]
     fn openai_adapter_parses_normalized_metadata() {
-        let models = parse_openai_model_info(&json!({
+        let models = crate::openai_compatible::parse_openai_model_info(&json!({
             "data": [{
                 "id": "qwen2:7b-q4",
                 "digest": "sha256:abc",
