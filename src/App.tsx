@@ -1647,14 +1647,15 @@ function ModelsView() {
               <h3>{translate("Models")}</h3>
             </div>
             <div className="model-actions">
-              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!desktop || busy || operationStarting}>
+              <button className="secondary-button model-toolbar-button model-refresh-button" type="button" onClick={() => void refreshModels()} disabled={!desktop || busy || operationStarting}>
                 {translate("Refresh")}
               </button>
               <button
-                className="text-button"
+                className="secondary-button model-toolbar-button model-start-button"
                 type="button"
                 onClick={() => void handleStartOllama()}
                 disabled={!desktop || busy || operationStarting || ollamaStartState.status === "starting"}
+                aria-busy={ollamaStartState.status === "starting"}
               >
                 {ollamaStartState.status === "starting" ? translate("Starting Ollama…") : translate("Start Ollama")}
               </button>
@@ -1798,6 +1799,8 @@ function ModelsView() {
                         <p><strong>{translate("Endpoint")}</strong><br />{model.endpoint ?? translate("Not reported")}</p>
                         <p><strong>{translate("Path")}</strong><br />{model.managedPath ?? model.path ?? translate("Not reported")}</p>
                         <p><strong>{translate("Updated")}</strong><br />{model.modifiedAt ?? translate("Not reported")}</p>
+                        <p className="model-detail-copy">{translate(modelDownloadCapabilityLabel(model))}</p>
+                        <p className="model-detail-copy">{translate(modelRemovalCapabilityLabel(model))}</p>
                       </div>
                     </details>
                     {rowOperation && (
@@ -1808,7 +1811,6 @@ function ModelsView() {
                     )}
                   </div>
                   <div className="model-actions model-row-actions">
-                    <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
                     <span className={`run-status ${availability.state === "failed" ? "run-status-failure" : ""}`}>
                       {translate(modelAvailabilityLabel(availability.state))}
                     </span>
@@ -1862,8 +1864,6 @@ function ModelsView() {
                         {modelOperationActive ? translate("Removal blocked") : translate(modelActionLabel("remove"))}
                       </button>
                     )}
-                    <span className="field-help">{translate(modelDownloadCapabilityLabel(model))}</span>
-                    <span className="field-help">{translate(modelRemovalCapabilityLabel(model))}</span>
                   </div>
                 </article>
                 );
@@ -3080,19 +3080,27 @@ function ArenaExecutionMonitor({
           {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
         </div>
       )}
-      <div className="arena-live-table" aria-label={translate("Arena competitor execution status")}>
+      <div className="arena-live-table" role="table" aria-label={translate("Arena competitor execution status")}>
+        <div className="arena-live-header" role="row">
+          <span role="columnheader">{translate(blind ? "Competitor" : "Model")}</span>
+          <span role="columnheader">{translate("Status")}</span>
+          <span role="columnheader">{translate("Progress")}</span>
+          <span role="columnheader">{translate("Arena wall time")}</span>
+          <span role="columnheader">{translate("Metrics")}</span>
+        </div>
         {competitors.map((samples) => {
           const first = samples[0];
           const latest = [...samples].reverse().find((sample) => sample.status !== "queued") ?? first;
           const accumulated = samples.reduce((total, sample) => total + (sample.durationMs ?? 0), 0);
           const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
           const latestError = visibleArenaTelemetryError(latest.error, blind);
-          return <div className="arena-live-row" key={first.competitorId}>
-            <strong>{arenaTelemetryLabel(first, blind, locale)}</strong>
-             <span>{translate(latest.status)} · {formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)}</span>
-            <span>{blind ? translate("Timing hidden") : `${translate("Total")} ${formatArenaMs(accumulated)}`}</span>
-            <span>{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
-            {latestError && <em>{translate(latestError)}</em>}
+          return <div className="arena-live-row" role="row" key={first.competitorId}>
+            <strong role="cell">{arenaTelemetryLabel(first, blind, locale)}</strong>
+            <span role="cell">{translate(latest.status)}</span>
+            <span role="cell">{formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)} {translate("samples")}</span>
+            <span role="cell">{blind ? translate("Timing hidden") : `${translate("Total")} ${formatArenaMs(accumulated)}`}</span>
+            <span role="cell">{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
+            {latestError && <em role="cell">{translate(latestError)}</em>}
           </div>;
         })}
       </div>
@@ -4974,7 +4982,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                   </button>
                 </form>
 
-                <button className="text-button byok-remove-button" type="button" onClick={() => void handleRemove()} disabled={busy || !selectedMetadata.configured}>
+                <button className="secondary-button byok-remove-button" type="button" onClick={() => void handleRemove()} disabled={busy || !selectedMetadata.configured}>
                   {translate("Remove stored configuration")}
                 </button>
               </section>
@@ -5079,11 +5087,14 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
             <p className="eyebrow">{translate("Immutable local history")}</p>
             <h4 id="byok-history-heading">{translate("External generation evidence")}</h4>
           </div>
-          <button className="text-button" type="button" onClick={() => void refreshHistory()} disabled={!desktop || busy}>
+          <button className="secondary-button byok-history-refresh" type="button" onClick={() => void refreshHistory()} disabled={!desktop || busy}>
             {translate("Refresh history")}
           </button>
         </div>
-        <p className="field-help">{translate("History stores sanitized provider, model, identity, usage, cost, dated-price, budget, and network evidence only. Prompt text, returned text, API keys, credential blobs, and headers are never stored or exported.")}</p>
+        <details className="byok-policy-details">
+          <summary>{translate("Storage and privacy")}</summary>
+          <p className="field-help">{translate("History stores sanitized provider, model, identity, usage, cost, dated-price, budget, and network evidence only. Prompt text, returned text, API keys, credential blobs, and headers are never stored or exported.")}</p>
+        </details>
         {historyState.status === "loading" && <StateMessage icon="…" title={translate("Loading external history")} description={translate("Reading sanitized evidence from local app storage.")} />}
         {historyState.status === "unsupported" && <StateMessage icon="◇" title={translate("Browser preview / no history writes")} description={translate("External generation history is available only in the local desktop workspace.")} />}
         {historyState.status === "error" && <StateMessage icon="!" title={translate("External history unavailable")} description={historyState.message} error />}
@@ -5097,10 +5108,10 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         )}
       </section>
 
-      <div className="provider-safety-note byok-safety-note">
-        <p className="eyebrow">{translate("No-secret boundary")}</p>
+      <details className="provider-safety-note byok-safety-note">
+        <summary>{translate("No-secret boundary")}</summary>
         <p>{translate("API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Returned text is shown in memory only; local history persists sanitized usage, cost, identity, price, and network evidence without prompt or response text.")}</p>
-      </div>
+      </details>
     </section>
   );
 }
