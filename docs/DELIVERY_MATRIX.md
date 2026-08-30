@@ -1,14 +1,16 @@
 # Product completion evidence matrix
 
 Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`af1ff48361341fa661a296955e7186a72f7caf2a` (`af1ff483`). It includes the
+`5c5de64d749674a01c31a722945c90357dfb0c2d` (`5c5de64`). It includes the
 stability, model-action, telemetry-safety, desktop UI, and accessible Arena
 listbox/test-contract batches after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
 `bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and
 `37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`) and
-`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`). Documentation and
+`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`), followed by source
+commits `75178ac60a998c3bdaec3b7522dfb7b919ef2e94` (`75178ac`) and
+`5c5de64d749674a01c31a722945c90357dfb0c2d` (`5c5de64`). Documentation and
 checksum commits after this source target may advance the checkout HEAD; they
 do not change the reviewed source implementation.
 
@@ -59,14 +61,14 @@ native-control, full Arena live-runtime, and human review remain
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at source implementation HEAD `af1ff48361341fa661a296955e7186a72f7caf2a` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, bundled-worker, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`. Artifact, bundle, bundled-worker, tracked sidecar, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
-## Automated validation recorded for source implementation HEAD `af1ff483` and current docs checkout
+## Automated validation recorded for source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d` and current docs checkout
 
 - On the source implementation checkout, `npm test` — passed:
-  19 files, 109 tests, including stable legacy blind lock continuity, model action precedence, listbox navigation, and UI style contracts.
+  19 files, 111 tests, including stable legacy blind lock continuity, model action precedence, listbox navigation, UI style contracts, and centralized PT-BR live-monitor/finite-label coverage.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:
@@ -82,14 +84,11 @@ native-control, full Arena live-runtime, and human review remain
   were `8512/1220/928/4220/591/259`; zero worker processes remained and no
   listener was created by the smoke. No model state was changed.
 
-The exact-source-HEAD NSIS command was previously attempted twice with
+For this exact reviewed source HEAD, `cargo clean --manifest-path
+src-tauri/Cargo.toml` completed before
 `npm run tauri:build -- --bundles nsis --config
-'{"bundle":{"useLocalToolsDir":true}}'`; both attempts failed before bundling
-with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
-
-For the current package checkout at source implementation HEAD `af1ff483`, `cargo clean --manifest-path
-src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
-command was retried. The retry passed and produced the fresh evidence below.
+'{"bundle":{"useLocalToolsDir":true}}'`. The build passed and produced the
+fresh evidence below.
 
 These checks do not prove an installed Windows visual session, native control
 behavior, full Tauri Arena responsiveness/persistence/blind continuity, Docker
@@ -125,26 +124,30 @@ account `biel4`, role Executor, App Server/headless transport,
 
 ## Packaging and historical provenance
 
-Fresh exact-HEAD evidence: the reviewed source implementation and package
-checkout/source HEAD is `af1ff48361341fa661a296955e7186a72f7caf2a`.
+Fresh exact-HEAD evidence: the reviewed source implementation HEAD is
+`5c5de64d749674a01c31a722945c90357dfb0c2d`.
 The prepared NSIS artifact is
-`E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,759,179 bytes, SHA-256
-`61727FB27548B69E6D113B534C64F8616DFB560DD5C0DBEC75F9755382DA2B01`.
+`E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
+3,761,685 bytes, SHA-256
+`644EB56BEDF341869516F8C2E397DECA01BE6424F828B2060448D1D8560822F7`.
 The bundle source is
-`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-with the same size and SHA-256. The fresh bundled worker is
-`E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\prompt-arena-worker.exe`,
+`E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
+3,761,685 bytes, SHA-256
+`644EB56BEDF341869516F8C2E397DECA01BE6424F828B2060448D1D8560822F7`.
+The fresh bundled worker is
+`E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\prompt-arena-worker.exe`,
 2,567,680 bytes, SHA-256
-`7C939E9C234FE3D0476F38D9FBCA3E96D2D617834D54959B678498B1DEED0742`.
+`FC17A3D9EA80D74D0CFB5A084A5E54B0AA637AA8E619230D473DA5CA7C9E232B`.
 The tracked source sidecar at
-`E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
+`E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
 remains separately identified and is not the bundled-worker measurement above;
 it is 2,544,640 bytes, SHA-256
-`9D1C253668743ECC08752BB7D07ABCF78ACF1CAF68654677CC988D77D848912D`.
-`E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt` has SHA-256
-`FA8BC8939FA8F3F0237A7B090550A504E8857ED044E971DACAFD4E1D2F663D41` and
-records the artifact checksum. `package-verification.txt` records passed
+`22E02E062C03BA96B54284DC81B03108F9550A4DAC7398306D8D8175A00D529B`.
+`E:\Prompt Arena-live-telemetry-i18n-commit2\checksums-sha256.txt` has SHA-256
+`31DC7ECCBB699467A6F7F77811381E0B74CD1BE0E0D613AEC523C06E3F1ECB07` and
+records the artifact checksum. `E:\Prompt Arena-live-telemetry-i18n-commit2\package-verification.txt`
+has SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
+and records passed
 checksum verification, clean install, executable start, restart, and silent
 uninstall; the optional MSI artifact was unavailable. This package smoke is not
 visual or human QA. MSI remains unavailable (`BLOCKED LOCALLY`); Docker remains
