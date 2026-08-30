@@ -10,9 +10,11 @@ listbox/test-contract batches after
 `37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`) and
 `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`), followed by source
 commits `75178ac60a998c3bdaec3b7522dfb7b919ef2e94` (`75178ac`) and
-`8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). Documentation and
-checksum commits after this source target may advance the checkout HEAD; they
-do not change the reviewed source implementation.
+`8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). The focused PT-BR
+label correction is commit `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`
+(`4e471224`); the corrected checkout includes that correction on the reviewed
+baseline. Documentation and checksum commits after this corrected target may
+advance the checkout HEAD; they do not change the corrected implementation.
 Overall native status:
 `PENDING_HUMAN_QA`. No installed visual session, browser/component harness, or
 full Tauri Arena session was available for this review. A loopback Ollama
@@ -36,7 +38,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh incremental NSIS/package evidence was built from exact checkout source tree HEAD `21a9b5c7798a219fe6c6f318fb036f57ef7567eb`, whose production source implementation is reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh incremental NSIS/package evidence was built from corrected checkout HEAD `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`, containing baseline reviewed production implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` plus focused PT-BR label correction commit `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
 
 ## Application review
 
@@ -88,21 +90,22 @@ check.
   responsiveness, or human QA evidence.
 
 Fresh incremental exact-source-tree package evidence from the verified turn was
-built from checkout HEAD
-`21a9b5c7798a219fe6c6f318fb036f57ef7567eb`, whose production source
-implementation is reviewed source HEAD
-`8588a2dd66e386082e153c933b1b55891ac42657`. Target-workspace artifact:
+built from corrected checkout HEAD
+`4e471224d51bddef7f9d511f4dcce6df62f6a2ee`, containing baseline reviewed
+production source implementation HEAD
+`8588a2dd66e386082e153c933b1b55891ac42657` plus focused PT-BR label correction
+commit `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`. Target-workspace artifact:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,812,679 bytes, SHA-256
-`197F5A13D8C6200B0E29DF244CB577359E3BD5240726319F3E871F066285C714`.
+3,817,224 bytes, SHA-256
+`9C28A522592A2B7AFC56D08A2AB1C232412E91660B516ACF34E89EFF6F854C9C`.
 Bundle source:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-3,812,679 bytes, SHA-256
-`197F5A13D8C6200B0E29DF244CB577359E3BD5240726319F3E871F066285C714`.
+3,817,224 bytes, SHA-256
+`9C28A522592A2B7AFC56D08A2AB1C232412E91660B516ACF34E89EFF6F854C9C`.
 The bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\prompt-arena-worker.exe`,
 2,651,136 bytes, SHA-256
-`9461564D241F5DE47CFE1C3F0DBB288951D6988E41643ABCE16DF165AE8E4EB9`.
+`5A379CBCDF1D6C537504CA4D08323F84AA9A8DCB1B113715CBCC3A38E5EB932A`.
 The prepared source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
 is separately identified and is not the bundled-worker measurement above;
@@ -110,7 +113,7 @@ it is 2,629,120 bytes, SHA-256
 `352E09C15C9FD3ACAD1CF321F020597561FAF5A485D02B5A265C12A5FBAA3033`.
 Checksum manifest:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\checksums-sha256.txt`, SHA-256
-`0452E2A111C79292E3ED60BC5BB04178AA989517957049AA264408271ADAAB0C`.
+`5A4E1FE141F61E79BF522BBC8B98B3EB61F8F82C5836E10250B7F341F6D1209B`.
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-verification.txt` has
 SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
 and records checksum pass, clean install pass,
@@ -130,9 +133,10 @@ evidence only. Remote CI is unconfirmed.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
 - `COMPLETE`: fresh NSIS/package evidence was built from exact checkout source
-  tree HEAD `21a9b5c7798a219fe6c6f318fb036f57ef7567eb`, whose production source
-  implementation is reviewed source HEAD
-  `8588a2dd66e386082e153c933b1b55891ac42657`; checksum verification, clean
+  corrected checkout HEAD `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`, containing
+  baseline reviewed production implementation HEAD
+  `8588a2dd66e386082e153c933b1b55891ac42657` plus focused PT-BR label correction
+  `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`; checksum verification, clean
   install, executable start, restart, and silent uninstall passed. This does
   not close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review;
   packaging smoke is not visual or human QA, and the historical 57f02b3
