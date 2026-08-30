@@ -36,7 +36,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh NSIS/package evidence was built from exact checkout source tree HEAD `da36292cb8e19336d401f9a05f18c788985d647f`, whose production source implementation is reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh incremental NSIS/package evidence was built from exact checkout source tree HEAD `21a9b5c7798a219fe6c6f318fb036f57ef7567eb`, whose production source implementation is reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
 
 ## Application review
 
@@ -87,29 +87,30 @@ check.
   evidence only, not full Tauri Arena, persistence, blind-evaluation,
   responsiveness, or human QA evidence.
 
-Fresh exact-source-tree package evidence was built from checkout HEAD
-`da36292cb8e19336d401f9a05f18c788985d647f`, whose production source
+Fresh incremental exact-source-tree package evidence from the verified turn was
+built from checkout HEAD
+`21a9b5c7798a219fe6c6f318fb036f57ef7567eb`, whose production source
 implementation is reviewed source HEAD
 `8588a2dd66e386082e153c933b1b55891ac42657`. Target-workspace artifact:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,817,692 bytes, SHA-256
-`25DAF0F70B027005A2778188EBE3FE17CFB4D4EFAE4FE2482E474FAD2C73CC09`.
+3,812,679 bytes, SHA-256
+`197F5A13D8C6200B0E29DF244CB577359E3BD5240726319F3E871F066285C714`.
 Bundle source:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
-3,817,692 bytes, SHA-256
-`25DAF0F70B027005A2778188EBE3FE17CFB4D4EFAE4FE2482E474FAD2C73CC09`.
+3,812,679 bytes, SHA-256
+`197F5A13D8C6200B0E29DF244CB577359E3BD5240726319F3E871F066285C714`.
 The bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\target\release\prompt-arena-worker.exe`,
 2,651,136 bytes, SHA-256
-`5578F859D268568016AD9CD6CEC27C7EA96B884BD6CBDB170AC4EAFE4198E436`.
+`9461564D241F5DE47CFE1C3F0DBB288951D6988E41643ABCE16DF165AE8E4EB9`.
 The prepared source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n-commit2\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
 is separately identified and is not the bundled-worker measurement above;
 it is 2,629,120 bytes, SHA-256
-`E296B5637C25292D609B05C093BFF7AD157EA8CA501E9678050A7347B3D2DF5B`.
+`352E09C15C9FD3ACAD1CF321F020597561FAF5A485D02B5A265C12A5FBAA3033`.
 Checksum manifest:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\checksums-sha256.txt`, SHA-256
-`A1780E60AB87D0A1349C9A8ACBD1BC543EC8C4444040DFF9293BA3D037B11325`.
+`0452E2A111C79292E3ED60BC5BB04178AA989517957049AA264408271ADAAB0C`.
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-verification.txt` has
 SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
 and records checksum pass, clean install pass,
@@ -129,7 +130,7 @@ evidence only. Remote CI is unconfirmed.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
 - `COMPLETE`: fresh NSIS/package evidence was built from exact checkout source
-  tree HEAD `da36292cb8e19336d401f9a05f18c788985d647f`, whose production source
+  tree HEAD `21a9b5c7798a219fe6c6f318fb036f57ef7567eb`, whose production source
   implementation is reviewed source HEAD
   `8588a2dd66e386082e153c933b1b55891ac42657`; checksum verification, clean
   install, executable start, restart, and silent uninstall passed. This does
