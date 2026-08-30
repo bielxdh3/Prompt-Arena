@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attemptStatusLabel,
   attemptStatusTone,
+  BLIND_RESPONSE_MAX_HEIGHT_PX,
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
@@ -9,6 +10,7 @@ import {
   formatCount,
   formatDurationNs,
   objectiveVerificationEvidence,
+  updateBlindEvaluationScore,
 } from "./results-ui";
 
 describe("read-only results formatting", () => {
@@ -58,5 +60,24 @@ describe("read-only results formatting", () => {
     expect(blindEvaluationStatusLabel("unknown")).toBe("Evaluation unavailable");
     expect(blindEvaluationScoreLabel(5)).toBe("5/5");
     expect(blindEvaluationScoreLabel(0)).toBe("Not scored");
+  });
+
+  it("keeps score edits local, bounded, and prepared", () => {
+    const scores = { first: null, second: 2 };
+    expect(updateBlindEvaluationScore(scores, "first", "5")).toEqual({ first: 5, second: 2 });
+    expect(updateBlindEvaluationScore(scores, "first", "9")).toEqual(scores);
+    expect(blindReviewHidesAttemptEvidence("prepared")).toBe(true);
+  });
+
+  it("keeps blind results hidden until the immutable lock state", () => {
+    expect(blindEvaluationStatusLabel("prepared")).toBe("Ready for blind review");
+    expect(blindReviewHidesAttemptEvidence("prepared")).toBe(true);
+    expect(blindEvaluationStatusLabel("locked")).toBe("Locked and read-only");
+    expect(blindReviewHidesAttemptEvidence("locked")).toBe(false);
+  });
+
+  it("keeps the full response pane inside a bounded scroll region", () => {
+    expect(BLIND_RESPONSE_MAX_HEIGHT_PX).toBe(320);
+    expect(BLIND_RESPONSE_MAX_HEIGHT_PX).toBeGreaterThan(0);
   });
 });

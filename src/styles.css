@@ -1188,9 +1188,11 @@ h3 {
 
 .blind-response-text {
   min-height: 88px;
+  max-height: 320px;
   margin: 10px 0 16px;
   padding: 14px;
   white-space: pre-wrap;
+  overflow: auto;
   overflow-wrap: anywhere;
   color: var(--color-text);
   background: var(--color-surface);

@@ -190,4 +190,13 @@ describe("arena runner", () => {
     expect(results[1].cancelled).toBe(true);
     expect(events.map((event) => event.status)).toEqual(expect.arrayContaining(["failed", "cancelled"]));
   });
+
+  it("recovers from a rejected execution invoke before the next sample", async () => {
+    const results = await executeArena({ arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 }, async (plan) => {
+      if (plan.profileRevision.profileId === "one") throw new Error("mock invoke failure");
+      return execution(plan.runId, plan.profileRevision.profileRevisionId, "completed");
+    });
+    expect(results[0].error).toBe("mock invoke failure");
+    expect(results[1].execution?.attempt.status).toBe("completed");
+  });
 });
