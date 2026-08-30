@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -236,6 +236,7 @@ import {
   translate,
   useI18n,
 } from "./i18n";
+import { listboxNavigation } from "./listbox-navigation";
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -2807,8 +2808,8 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
             </div>
             <div className="arena-selection-grid">
                <ArenaSelect id="arena-version" label={translate("Published benchmark version")} value={selectedVersionId} options={versionOptions(records.versions)} placeholder={translate("Select an existing version")} disabled={busy} onChange={setSelectedVersionId} />
-               <ArenaSelect id="arena-task" label={translate("Task")} value={selectedTaskId} options={taskSelectionOptions} placeholder={translate("Select a task")} disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
-               <ArenaSelect id="arena-case" label={translate("Case")} value={selectedCaseId} options={caseSelectionOptions} placeholder={translate("Select a case")} disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
+               <ArenaSelect custom id="arena-task" label={translate("Task")} value={selectedTaskId} options={taskSelectionOptions} placeholder={translate("Select a task")} disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
+               <ArenaSelect custom id="arena-case" label={translate("Case")} value={selectedCaseId} options={caseSelectionOptions} placeholder={translate("Select a case")} disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
               <label className="arena-select-control" htmlFor="arena-repetitions">
                 <span className="field-label">{translate("Repetitions")}</span>
                 <select className="font-select" id="arena-repetitions" value={repetitions} disabled={busy} onChange={(event) => setRepetitions(Number(event.currentTarget.value))}>
@@ -3133,6 +3134,7 @@ function ArenaSelect({
   options,
   placeholder,
   disabled,
+  custom = false,
   onChange,
 }: {
   id: string;
@@ -3141,8 +3143,13 @@ function ArenaSelect({
   options: readonly { value: string; label: string; detail: string }[];
   placeholder: string;
   disabled: boolean;
+  custom?: boolean;
   onChange: (value: string) => void;
 }) {
+  if (custom) {
+    return <ArenaListbox id={id} label={label} value={value} options={options} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
+  }
+
   return (
     <label className="arena-select-control" htmlFor={id}>
       <span className="field-label">{translate(label)}</span>
@@ -3155,6 +3162,140 @@ function ArenaSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+function ArenaListbox({
+  id,
+  label,
+  value,
+  options,
+  placeholder,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: readonly { value: string; label: string; detail: string }[];
+  placeholder: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLLIElement | null>>([]);
+  const [open, setOpen] = useState(false);
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
+  const isDisabled = disabled || options.length === 0;
+  const labelId = `${id}-label`;
+  const valueId = `${id}-value`;
+  const buttonId = `${id}-button`;
+  const listboxId = `${id}-options`;
+
+  useEffect(() => {
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
+  }, [options.length, selectedIndex]);
+
+  useEffect(() => {
+    if (open) optionRefs.current[activeIndex]?.focus();
+  }, [activeIndex, open]);
+
+  useEffect(() => {
+    if (isDisabled) setOpen(false);
+  }, [isDisabled]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", handleOutsidePointer);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
+  }, [open]);
+
+  function closeAndFocusTrigger() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function selectOption(index: number) {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    closeAndFocusTrigger();
+  }
+
+  function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    const transition = listboxNavigation({ key: event.key, currentIndex: activeIndex, optionCount: options.length, open: false, disabled: isDisabled });
+    if (transition.action === "none") return;
+    event.preventDefault();
+    setActiveIndex(transition.index);
+    setOpen(true);
+  }
+
+  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLLIElement>) {
+    const index = Number(event.currentTarget.dataset.index);
+    const transition = listboxNavigation({ key: event.key, currentIndex: index, optionCount: options.length, open: true, disabled: isDisabled });
+    if (transition.action === "none") return;
+    event.preventDefault();
+    if (transition.action === "move") setActiveIndex(transition.index);
+    if (transition.action === "select") selectOption(transition.index);
+    if (transition.action === "close") closeAndFocusTrigger();
+  }
+
+  const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : undefined;
+  return (
+    <div className="arena-select-control arena-custom-listbox" ref={rootRef}>
+      <span className="field-label" id={labelId}>{translate(label)}</span>
+      <button
+        className="arena-listbox-trigger"
+        id={buttonId}
+        ref={triggerRef}
+        type="button"
+        disabled={isDisabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-labelledby={`${labelId} ${valueId}`}
+        onClick={() => {
+          if (open) closeAndFocusTrigger();
+          else {
+            setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
+            setOpen(true);
+          }
+        }}
+        onKeyDown={handleTriggerKeyDown}
+      >
+        <span className="arena-listbox-value" id={valueId}>
+          <strong>{selectedOption?.label ?? translate(placeholder)}</strong>
+          {selectedOption && <small>{selectedOption.detail}</small>}
+        </span>
+        <span aria-hidden="true">⌄</span>
+      </button>
+      {open && (
+        <ul className="arena-listbox-menu" id={listboxId} role="listbox" aria-labelledby={labelId}>
+          {options.map((option, index) => (
+            <li
+              className={`arena-listbox-option ${index === selectedIndex ? "is-selected" : ""}`}
+              data-index={index}
+              id={`${listboxId}-${index}`}
+              key={option.value}
+              ref={(element) => { optionRefs.current[index] = element; }}
+              role="option"
+              aria-selected={index === selectedIndex}
+              tabIndex={index === activeIndex ? 0 : -1}
+              onClick={() => selectOption(index)}
+              onKeyDown={handleOptionKeyDown}
+            >
+              <strong>{option.label}</strong>
+              <small>{option.detail}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
