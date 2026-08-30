@@ -1,7 +1,7 @@
 # Product completion evidence matrix
 
 Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`5c5de64d749674a01c31a722945c90357dfb0c2d` (`5c5de64`). It includes the
+`8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). It includes the
 stability, model-action, telemetry-safety, desktop UI, and accessible Arena
 listbox/test-contract batches after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
@@ -10,18 +10,22 @@ listbox/test-contract batches after
 `37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`) and
 `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`), followed by source
 commits `75178ac60a998c3bdaec3b7522dfb7b919ef2e94` (`75178ac`) and
-`5c5de64d749674a01c31a722945c90357dfb0c2d` (`5c5de64`). Documentation and
+`8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). Documentation and
 checksum commits after this source target may advance the checkout HEAD; they
 do not change the reviewed source implementation.
 
 `COMPLETE` means implementation and the cited automated evidence are present;
 it does not mean native or human acceptance. `PENDING_HUMAN_QA` means the
 installed Tauri/WebView or full application runtime gate was not performed.
+`PENDING_EXACT_HEAD_REBUILD` means recorded package evidence was built from an
+earlier source HEAD and must be rebuilt at the reviewed source HEAD before
+current package `COMPLETE` can be claimed.
 Unavailable Docker is `BLOCKED_EXTERNAL_RUNTIME`; bounded local Ollama
 worker-protocol evidence is recorded separately from full Tauri discovery and
-Arena review. Fresh exact-HEAD NSIS packaging is `COMPLETE`; visual,
-native-control, full Arena live-runtime, and human review remain
-`PENDING_HUMAN_QA`.
+Arena review. The recorded NSIS/package hashes below were built at prior source
+HEAD `5c5de64`; a fresh rebuild at exact source HEAD `8588a2d` is required
+before current package evidence can be `COMPLETE`. Visual, native-control, full
+Arena live-runtime, and human review remain `PENDING_HUMAN_QA`.
 
 ## P0/P1/P2 remediation evidence
 
@@ -61,18 +65,18 @@ native-control, full Arena live-runtime, and human review remain
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`. Artifact, bundle, bundled-worker, tracked sidecar, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Existing artifact, bundle, bundled-worker, tracked sidecar, and checksum evidence below were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`; rebuild at reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657` is required. | Prior checksum verification, clean install, executable start, restart, and silent uninstall passed; current exact-head packaging remains pending and packaging smoke is not visual or human QA | PENDING_EXACT_HEAD_REBUILD |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
-## Automated validation recorded for source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d` and current docs checkout
+## Automated validation recorded for source implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` and current docs checkout
 
 - On the source implementation checkout, `npm test` — passed:
-  19 files, 111 tests, including stable legacy blind lock continuity, model action precedence, listbox navigation, UI style contracts, and centralized PT-BR live-monitor/finite-label coverage.
+  19 files, 113 tests, including stable legacy blind lock continuity, model action precedence, listbox navigation, UI style contracts, and centralized PT-BR live-monitor/finite-label coverage.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:
-  109 tests plus two zero-test targets, including the live Ollama health test
+  113 tests plus two zero-test targets, including the live Ollama health test
   taking the healthy endpoint branch.
 - `git diff --check` — passed; line-ending warnings were emitted by Git, with
   no whitespace errors.
@@ -84,11 +88,11 @@ native-control, full Arena live-runtime, and human review remain
   were `8512/1220/928/4220/591/259`; zero worker processes remained and no
   listener was created by the smoke. No model state was changed.
 
-For this exact reviewed source HEAD, `cargo clean --manifest-path
-src-tauri/Cargo.toml` completed before
+For prior source implementation HEAD `5c5de64`, `cargo clean
+--manifest-path src-tauri/Cargo.toml` completed before the successful
 `npm run tauri:build -- --bundles nsis --config
-'{"bundle":{"useLocalToolsDir":true}}'`. The build passed and produced the
-fresh evidence below.
+'{"bundle":{"useLocalToolsDir":true}}'`. The package evidence below is
+historical; it must not be attributed to reviewed source HEAD `8588a2d`.
 
 These checks do not prove an installed Windows visual session, native control
 behavior, full Tauri Arena responsiveness/persistence/blind continuity, Docker
@@ -124,9 +128,11 @@ account `biel4`, role Executor, App Server/headless transport,
 
 ## Packaging and historical provenance
 
-Fresh exact-HEAD evidence: the reviewed source implementation HEAD is
-`5c5de64d749674a01c31a722945c90357dfb0c2d`.
-The prepared NSIS artifact is
+The recorded NSIS/package evidence was built at prior source implementation
+HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`, not reviewed source HEAD
+`8588a2dd66e386082e153c933b1b55891ac42657`. A fresh exact-head rebuild is
+required before this evidence can support current package `COMPLETE` status.
+The recorded NSIS artifact is
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
 3,761,685 bytes, SHA-256
 `644EB56BEDF341869516F8C2E397DECA01BE6424F828B2060448D1D8560822F7`.

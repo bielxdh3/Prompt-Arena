@@ -1,7 +1,7 @@
 # Windows native/human QA checklist
 
 Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`5c5de64d749674a01c31a722945c90357dfb0c2d` (`5c5de64`). It includes the
+`8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). It includes the
 stability, model-action, telemetry-safety, desktop UI, and accessible Arena
 listbox/test-contract batches after
 `75bf8266a7af257a028724365f627a31aa28af37`,
@@ -10,7 +10,7 @@ listbox/test-contract batches after
 `37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`) and
 `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`), followed by source
 commits `75178ac60a998c3bdaec3b7522dfb7b919ef2e94` (`75178ac`) and
-`5c5de64d749674a01c31a722945c90357dfb0c2d` (`5c5de64`). Documentation and
+`8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). Documentation and
 checksum commits after this source target may advance the checkout HEAD; they
 do not change the reviewed source implementation.
 Overall native status:
@@ -36,7 +36,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate, and fresh NSIS packaging at source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d` passed after generated Cargo cleanup. | COMPLETE — checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native review |
+| Packaging | PENDING — historical 57f02b3 evidence remains separate; the recorded NSIS/package hashes were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`, not reviewed source HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING — fresh NSIS rebuild at exact reviewed source HEAD is required before current package evidence can be COMPLETE; prior checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `PENDING_EXACT_HEAD_REBUILD`; `PENDING_HUMAN_QA` after rebuild for visual/native review |
 
 ## Application review
 
@@ -68,13 +68,13 @@ check.
 
 ## Automated evidence recorded
 
-- `npm test` — passed: 19 files, 111 tests, including stable legacy blind lock
+- `npm test` — passed: 19 files, 113 tests, including stable legacy blind lock
   continuity, model action precedence, listbox navigation, UI style contracts,
   and centralized PT-BR live-monitor/finite-label coverage.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; only the existing large-chunk warning was emitted.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:
-  109 tests plus two zero-test targets, including the live Ollama health test
+  113 tests plus two zero-test targets, including the live Ollama health test
   taking the healthy endpoint branch.
 - `git diff --check` — passed.
 
@@ -87,9 +87,11 @@ check.
   evidence only, not full Tauri Arena, persistence, blind-evaluation,
   responsiveness, or human QA evidence.
 
-For the exact reviewed source HEAD, `cargo clean --manifest-path
-src-tauri/Cargo.toml` completed before the previously successful NSIS build.
-Fresh target-workspace artifact:
+The previously successful NSIS build was performed at prior source
+implementation HEAD `5c5de64`, not the reviewed source HEAD
+`8588a2dd66e386082e153c933b1b55891ac42657`. A fresh exact-head rebuild is
+required before current package COMPLETE can be claimed. Recorded historical
+target-workspace artifact:
 `E:\Prompt Arena-live-telemetry-i18n-commit2\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
 3,761,685 bytes, SHA-256
 `644EB56BEDF341869516F8C2E397DECA01BE6424F828B2060448D1D8560822F7`.
@@ -127,13 +129,14 @@ evidence only. Remote CI is unconfirmed.
   persistence, blind-evaluation continuity, or human QA.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
-- `COMPLETE`: fresh NSIS packaging at source implementation HEAD
-  `5c5de64d749674a01c31a722945c90357dfb0c2d` passed after generated Cargo
-  cleanup resolved `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle,
-  bundled-worker, tracked source sidecar, checksum, and lifecycle evidence is
-  recorded above. This does not
-  close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review; the
-  historical 57f02b3 artifact is not current-head output.
+- `PENDING_EXACT_HEAD_REBUILD`: the recorded NSIS/package hashes were built at
+  prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`;
+  a fresh NSIS rebuild at reviewed source HEAD
+  `8588a2dd66e386082e153c933b1b55891ac42657` is required before current
+  package `COMPLETE` can be claimed. The prior artifact, bundle, bundled-worker,
+  tracked source sidecar, checksum, and lifecycle evidence is recorded above.
+  This does not close `PENDING_HUMAN_QA` for visual/accessibility/live Arena
+  review; the historical 57f02b3 artifact is not current-head output.
 - `BLOCKED LOCALLY`: Windows MSI remains unavailable because of the existing
   WiX `light.exe` failure.
 - `CI PENDING`: Linux deb/AppImage still requires the Linux runner.
