@@ -180,6 +180,31 @@ export function refreshArenaTelemetry(telemetry: ArenaTelemetry, timestampMs = D
   return { ...telemetry, wallElapsedMs: Math.max(0, timestampMs - telemetry.startedAtMs), samples, etaMs: telemetry.etaMs === null ? null : telemetry.etaMs, activeSampleIndex: active?.sampleIndex ?? telemetry.activeSampleIndex };
 }
 
+export type ArenaMonitorDisplay = {
+  currentSampleNumber: number | null;
+  totalSamples: number;
+  repetitionNumber: number | null;
+  repetitionsPerCompetitor: number | null;
+  competitorElapsedMs: number | null;
+  arenaElapsedMs: number | null;
+};
+
+export function arenaMonitorDisplay(telemetry: ArenaTelemetry, activeSampleIndex: number | null, blind: boolean): ArenaMonitorDisplay {
+  const active = telemetry.samples.find((sample) => sample.sampleIndex === activeSampleIndex);
+  const competitorSamples = active ? telemetry.samples.filter((sample) => sample.competitorId === active.competitorId) : [];
+  const measuredDurations = competitorSamples
+    .map((sample) => sample.durationMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
+  return {
+    currentSampleNumber: active ? active.sampleIndex + 1 : null,
+    totalSamples: telemetry.total,
+    repetitionNumber: active?.repetition ?? null,
+    repetitionsPerCompetitor: active ? competitorSamples.length : null,
+    competitorElapsedMs: blind || measuredDurations.length === 0 ? null : measuredDurations.reduce((total, value) => total + value, 0),
+    arenaElapsedMs: blind || !Number.isFinite(telemetry.wallElapsedMs) || telemetry.wallElapsedMs < 0 ? null : telemetry.wallElapsedMs,
+  };
+}
+
 export function telemetryMetricsFromExecution(execution: PersistedExecution | null): ArenaTelemetryMetrics {
   const summary = execution?.attempt.responseSummary;
   const timing = summary?.timing;

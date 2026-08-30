@@ -128,6 +128,7 @@ import {
   arenaExportCsv,
   arenaExportJson,
   arenaExportMarkdown,
+  arenaMonitorDisplay,
   arenaSummaryExportCsv,
   arenaSummaryExportJson,
   arenaSummaryExportMarkdown,
@@ -3060,11 +3061,12 @@ function ArenaExecutionMonitor({
   const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
     ?? [...telemetry.samples].reverse().find((sample) => sample.status !== "queued");
   const competitors = [...new Map(telemetry.samples.map((sample) => [sample.competitorId, telemetry.samples.filter((candidate) => candidate.competitorId === sample.competitorId)])).values()];
+  const activeDisplay = arenaMonitorDisplay(telemetry, active?.sampleIndex ?? null, blind);
   const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
   return (
     <div className="arena-execution-monitor" role="status" aria-live="polite">
       <div className="section-heading compact-heading">
-        <div><p className="eyebrow">{translate("Live execution monitor")}</p><h4>{saving ? translate("Saving measured evidence") : telemetry.state === "running" ? translate("Arena is running") : telemetry.state}</h4></div>
+        <div><p className="eyebrow">{translate("Live execution monitor")}</p><h4>{saving ? translate("Saving measured evidence") : telemetry.state === "running" ? translate("Arena is running") : translate(telemetry.state)}</h4></div>
         <span className="run-status run-status-neutral">{formatLocaleNumber(telemetry.completed)}/{formatLocaleNumber(telemetry.total)}</span>
       </div>
       <div className="arena-live-facts">
@@ -3076,7 +3078,7 @@ function ArenaExecutionMonitor({
       {active && (
         <div className="arena-live-current">
           <p className="eyebrow">{translate("Current sample")}</p>
-          <strong>{blind ? `${translate("Sample")} ${active.repetition}` : `${arenaTelemetryLabel(active, false, locale)} · ${translate("sample")} ${active.repetition}`}</strong>
+          <strong>{blind ? "" : `${arenaTelemetryLabel(active, false, locale)} · `}{translate("Sample")} {formatLocaleNumber(activeDisplay.currentSampleNumber ?? active.sampleIndex + 1)}/{formatLocaleNumber(activeDisplay.totalSamples)}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · ${translate("Repetition")} ${formatLocaleNumber(activeDisplay.repetitionNumber)}/${formatLocaleNumber(activeDisplay.repetitionsPerCompetitor)}` : ""}</strong>
            <span>{translate(active.status)} · {blind ? translate("Elapsed hidden during blind execution") : formatArenaMs(active.elapsedMs)}</span>
           {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
         </div>
@@ -3085,21 +3087,21 @@ function ArenaExecutionMonitor({
         <div className="arena-live-header" role="row">
           <span role="columnheader">{translate(blind ? "Competitor" : "Model")}</span>
           <span role="columnheader">{translate("Status")}</span>
-          <span role="columnheader">{translate("Progress")}</span>
+          <span role="columnheader">{translate("Competitor progress")}</span>
           <span role="columnheader">{translate("Arena wall time")}</span>
           <span role="columnheader">{translate("Metrics")}</span>
         </div>
         {competitors.map((samples) => {
           const first = samples[0];
           const latest = [...samples].reverse().find((sample) => sample.status !== "queued") ?? first;
-          const accumulated = samples.reduce((total, sample) => total + (sample.durationMs ?? 0), 0);
+          const rowDisplay = arenaMonitorDisplay(telemetry, first.sampleIndex, blind);
           const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
           const latestError = visibleArenaTelemetryError(latest.error, blind);
           return <div className="arena-live-row" role="row" key={first.competitorId}>
             <strong role="cell">{arenaTelemetryLabel(first, blind, locale)}</strong>
             <span role="cell">{translate(latest.status)}</span>
-            <span role="cell">{formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)} {translate("samples")}</span>
-            <span role="cell">{blind ? translate("Timing hidden") : `${translate("Total")} ${formatArenaMs(accumulated)}`}</span>
+            <span role="cell">{translate("Completed")} {formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)} {translate("samples")}</span>
+            <span role="cell">{blind ? translate("Timing hidden") : `${translate("Competitor total")} ${formatArenaMs(rowDisplay.competitorElapsedMs)} · ${translate("Arena total")} ${formatArenaMs(rowDisplay.arenaElapsedMs)}`}</span>
             <span role="cell">{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
             {latestError && <em role="cell">{translate(latestError)}</em>}
           </div>;
@@ -3792,7 +3794,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
                   <th scope="col">{translate("Status")}</th>
                   <th scope="col">{translate("Run / attempt")}</th>
                   <th scope="col">{translate("Duration")}</th>
-                  <th scope="col">Tokens/s</th>
+                  <th scope="col">{translate("Tokens/s")}</th>
                   <th scope="col">{translate("Completion tokens")}</th>
                   <th scope="col">{translate("Objective")}</th>
                 </tr>

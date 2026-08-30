@@ -9,6 +9,7 @@ import {
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
   applyArenaProgress,
+  arenaMonitorDisplay,
   arenaTelemetryLabel,
   createArenaTelemetry,
   visibleArenaTelemetryError,
@@ -178,6 +179,36 @@ describe("arena runner", () => {
     expect(arenaTelemetryLabel(telemetry.samples[0], true)).toBe("Competitor A");
     expect(arenaTelemetryLabel(telemetry.samples[1], true)).toBe("Competitor B");
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
+  });
+
+  it("exposes honest sample/repetition denominators and blind timing visibility", () => {
+    const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 3 };
+    const baseTelemetry = createArenaTelemetry(request, 10);
+    const telemetry = {
+      ...baseTelemetry,
+      wallElapsedMs: 900,
+      samples: baseTelemetry.samples.map((sample) => ({
+        ...sample,
+        durationMs: sample.competitorId === "two@1" && sample.repetition < 3 ? sample.repetition * 100 : null,
+      })),
+    };
+    expect(arenaMonitorDisplay(telemetry, 4, false)).toMatchObject({
+      currentSampleNumber: 5,
+      totalSamples: 6,
+      repetitionNumber: 2,
+      repetitionsPerCompetitor: 3,
+      competitorElapsedMs: 300,
+      arenaElapsedMs: 900,
+    });
+    expect(arenaMonitorDisplay(telemetry, 0, false).competitorElapsedMs).toBeNull();
+    expect(arenaMonitorDisplay(telemetry, 4, true)).toMatchObject({
+      currentSampleNumber: 5,
+      totalSamples: 6,
+      repetitionNumber: 2,
+      repetitionsPerCompetitor: 3,
+      competitorElapsedMs: null,
+      arenaElapsedMs: null,
+    });
   });
 
   it("keeps blind telemetry errors generic while retaining non-blind detail", () => {
