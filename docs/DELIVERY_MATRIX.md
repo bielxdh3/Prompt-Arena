@@ -1,15 +1,14 @@
 # Product completion evidence matrix
 
 Reviewed source HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`). Current checkout HEAD
-is the documentation-only commit
-`99485dec0f3f096b62fbe665c0085d8e7786579f` (`99485de`). The source HEAD is after
+`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`). The source HEAD is
+after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
 `bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and documentation commit
-`edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d` (`edb7b2d`). This documentation-only
-update records evidence for source HEAD `838d952`; it does not change the source
-target.
+`edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d` (`edb7b2d`). Subsequent
+documentation-only commits may advance the checkout HEAD; they do not change
+the reviewed source target.
 
 `COMPLETE` means implementation and the cited automated evidence are present;
 it does not mean native or human acceptance. `PENDING_HUMAN_QA` means the
