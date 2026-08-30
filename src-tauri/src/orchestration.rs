@@ -11,6 +11,7 @@ use crate::{
         ObjectiveVerifierKind, ObjectiveVerifierPolicy, ProfileRevision, Run,
     },
     ollama::{OllamaConfig, OllamaProvider},
+    openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleRuntime},
     runtime::{
         CancellationToken, GenerationChunk, GenerationRequest, GenerationResponse, ResponseSummary,
         RuntimeError, RuntimeProvider,
@@ -153,6 +154,18 @@ impl RuntimeRegistry {
             "ollama" => OllamaProvider::new(plan.runtime_config.clone())
                 .map(|provider| Box::new(provider) as Box<dyn RuntimeProvider>)
                 .map_err(OrchestrationError::Runtime),
+            "lm_studio" => OpenAiCompatibleProvider::new(
+                OpenAiCompatibleRuntime::LmStudio,
+                plan.runtime_config.clone(),
+            )
+            .map(|provider| Box::new(provider) as Box<dyn RuntimeProvider>)
+            .map_err(OrchestrationError::Runtime),
+            "llama_cpp" => OpenAiCompatibleProvider::new(
+                OpenAiCompatibleRuntime::LlamaCpp,
+                plan.runtime_config.clone(),
+            )
+            .map(|provider| Box::new(provider) as Box<dyn RuntimeProvider>)
+            .map_err(OrchestrationError::Runtime),
             runtime => Err(OrchestrationError::UnsupportedRuntime(runtime.to_owned())),
         }
     }
@@ -183,10 +196,47 @@ impl RunPlan {
                 "profile revision id does not match its immutable identity".to_owned(),
             ));
         }
-        if self.profile_revision.runtime != "ollama" {
+        if !matches!(
+            self.profile_revision.runtime.as_str(),
+            "ollama" | "lm_studio" | "llama_cpp"
+        ) {
             return Err(OrchestrationError::UnsupportedRuntime(
                 self.profile_revision.runtime.clone(),
             ));
+        }
+        let normalized_endpoint =
+            crate::ollama::OllamaEndpoint::parse(&self.runtime_config.endpoint)
+                .map_err(OrchestrationError::Runtime)?
+                .as_str()
+                .to_owned();
+        match self.profile_revision.extra.get("endpoint") {
+            Some(Value::Null) if self.profile_revision.runtime != "ollama" => {
+                return Err(OrchestrationError::InvalidPlan(
+                    "the selected local runtime requires a loopback endpoint".to_owned(),
+                ));
+            }
+            Some(value) => {
+                let endpoint = value.as_str().ok_or_else(|| {
+                    OrchestrationError::InvalidPlan(
+                        "profile endpoint must be a loopback URL".to_owned(),
+                    )
+                })?;
+                let profile_endpoint = crate::ollama::OllamaEndpoint::parse(endpoint)
+                    .map_err(OrchestrationError::Runtime)?
+                    .as_str()
+                    .to_owned();
+                if profile_endpoint != normalized_endpoint {
+                    return Err(OrchestrationError::InvalidPlan(
+                        "runtime config endpoint must match the profile endpoint".to_owned(),
+                    ));
+                }
+            }
+            None if self.profile_revision.runtime != "ollama" => {
+                return Err(OrchestrationError::InvalidPlan(
+                    "the selected local runtime requires a profile endpoint".to_owned(),
+                ));
+            }
+            None => {}
         }
         if self.profile_revision.model != self.generation.model {
             return Err(OrchestrationError::InvalidPlan(

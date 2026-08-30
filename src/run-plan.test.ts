@@ -162,6 +162,32 @@ describe("bounded run-plan contract", () => {
     })).toThrow("unsupported");
   });
 
+  it("accepts discovered OpenAI-compatible profiles and carries their endpoint", () => {
+    for (const runtime of ["lm_studio", "llama_cpp"] as const) {
+      const plan = buildRunPlan({
+        ...input(),
+        profileRevision: {
+          ...profile(),
+          runtime,
+          endpoint: runtime === "lm_studio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080",
+          backend: runtime,
+          sourceId: `${runtime}-source`,
+        },
+      });
+      expect(plan.profileRevision.runtime).toBe(runtime);
+      expect(plan.runtimeConfig.endpoint).toBe(
+        runtime === "lm_studio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080",
+      );
+    }
+  });
+
+  it("requires an explicit endpoint for non-Ollama local profiles", () => {
+    expect(() => buildRunPlan({
+      ...input(),
+      profileRevision: { ...profile(), runtime: "lm_studio" },
+    })).toThrow("loopback profile endpoint");
+  });
+
   it("rejects unsafe profile parameters and oversized plan content", () => {
     for (const parameter of ["unknown", "presencePenalty", "frequencyPenalty"]) {
       expect(() => buildRunPlan({
