@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -96,6 +96,7 @@ import {
 import {
   attemptStatusLabel,
   attemptStatusTone,
+  BLIND_RESPONSE_MAX_HEIGHT_PX,
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
@@ -103,6 +104,7 @@ import {
   formatCount,
   formatDurationNs,
   objectiveVerificationEvidence,
+  updateBlindEvaluationScore,
 } from "./results-ui";
 import { assessRunComparability } from "./comparability";
 import {
@@ -3610,6 +3612,36 @@ type BlindEvaluationState =
 
 type BlindEvaluationSurfaceStatus = BlindEvaluationState["status"];
 
+const BlindResponsePane = memo(function BlindResponsePane({
+  response,
+  score,
+  onScore,
+}: {
+  response: BlindEvaluationPreparation["responses"][number];
+  score: number | null;
+  onScore: (token: string, value: string) => void;
+}) {
+  return (
+    <article className="blind-response-card" key={response.token}>
+      <p className="eyebrow">{response.label}</p>
+      <div
+        className="blind-response-text"
+        tabIndex={0}
+        style={{ maxHeight: `${BLIND_RESPONSE_MAX_HEIGHT_PX}px`, overflowY: "auto" }}
+      >
+        {response.text}
+      </div>
+      <label className="blind-score-control">
+        <span>{translate("Overall score")}</span>
+        <select value={score ?? ""} onChange={(event) => onScore(response.token, event.currentTarget.value)}>
+          <option value="">{translate("Choose 1–5")}</option>
+          {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}
+        </select>
+      </label>
+    </article>
+  );
+});
+
 function BlindEvaluationPanel({
   runId,
   onStatusChange,
@@ -3675,14 +3707,16 @@ function BlindEvaluationPanel({
     }
   };
 
-  const setScore = (token: string, value: string) => {
-    if (state.status !== "prepared") return;
+  const setScore = useCallback((token: string, value: string) => {
     setValidationMessage("");
-    updateState({
-      ...state,
-      scores: { ...state.scores, [token]: value ? Number(value) : null },
+    setState((current) => {
+      if (current.status !== "prepared") return current;
+      return {
+        ...current,
+        scores: updateBlindEvaluationScore(current.scores, token, value),
+      };
     });
-  };
+  }, []);
 
   const setRankingToken = (index: number, token: string) => {
     if (state.status !== "prepared" || !state.rankingTokens) return;
@@ -3759,20 +3793,10 @@ function BlindEvaluationPanel({
       )}
       {isDesktopEnvironment() && state.status === "prepared" && (
         <div className="blind-review-content">
-           <p className="blind-review-warning">{translate("Responses below are untrusted plain text. They are rendered as text only; no identity metadata is available before lock.")}</p>
+          <p className="blind-review-warning">{translate("Responses below are untrusted plain text. They are rendered as text only; no identity metadata is available before lock.")}</p>
           <div className="blind-response-grid">
             {state.preparation.responses.map((response) => (
-              <article className="blind-response-card" key={response.token}>
-                <p className="eyebrow">{response.label}</p>
-                <div className="blind-response-text">{response.text}</div>
-                <label className="blind-score-control">
-                   <span>{translate("Overall score")}</span>
-                  <select value={state.scores[response.token] ?? ""} onChange={(event) => setScore(response.token, event.target.value)}>
-                     <option value="">{translate("Choose 1–5")}</option>
-                    {[1, 2, 3, 4, 5].map((score) => <option key={score} value={score}>{score}/5</option>)}
-                  </select>
-                </label>
-              </article>
+              <BlindResponsePane key={response.token} response={response} score={state.scores[response.token]} onScore={setScore} />
             ))}
           </div>
           <div className="blind-ranking-controls">

@@ -963,8 +963,31 @@ pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus
 
 /// Execute exactly one bounded generation in the app-owned worker, then persist
 /// its terminal outcome in the app-owned store.
+fn spawn_blocking_execution<F, R>(work: F) -> tauri::async_runtime::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+}
+
 #[tauri::command]
-pub fn execute_run_once(app: AppHandle, plan: RunPlan) -> Result<PersistedExecution, CommandError> {
+pub async fn execute_run_once(
+    app: AppHandle,
+    plan: RunPlan,
+) -> Result<PersistedExecution, CommandError> {
+    spawn_blocking_execution(move || execute_run_once_blocking(app, plan))
+        .await
+        .map_err(|_| CommandError {
+            code: "worker_failed",
+            message: "the run worker task failed".to_owned(),
+        })?
+}
+
+fn execute_run_once_blocking(
+    app: AppHandle,
+    plan: RunPlan,
+) -> Result<PersistedExecution, CommandError> {
     let outcome = invoke_worker_once(&app, &plan)?;
     persist_terminal_outcome(&storage_for(&app)?, &outcome, &now_marker()).map_err(Into::into)
 }
@@ -1239,14 +1262,15 @@ mod tests {
         fs,
         path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
+        thread,
     };
 
     use super::{
         app_status, background_process_creation_flags, ollama_server_command, ollama_spawn_error,
-        read_benchmark_version_from_storage, resolve_worker_executable, start_ollama_with,
-        worker_executable_name, worker_executable_path, worker_sidecar_resource_path,
-        OllamaStartStatus, StorageState, OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH,
-        WORKER_SIDECAR_TARGET_TRIPLE,
+        read_benchmark_version_from_storage, resolve_worker_executable, spawn_blocking_execution,
+        start_ollama_with, worker_executable_name, worker_executable_path,
+        worker_sidecar_resource_path, OllamaStartStatus, StorageState, OLLAMA_START_RETRIES,
+        WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
 
@@ -1257,6 +1281,24 @@ mod tests {
         let status = app_status();
         assert!(matches!(status.storage_state, StorageState::Local));
         assert_eq!(status.protocol_version, 1);
+    }
+
+    #[test]
+    fn execution_is_delegated_to_the_blocking_executor() {
+        let caller_thread = thread::current().id();
+        let worker_thread =
+            tauri::async_runtime::block_on(spawn_blocking_execution(|| thread::current().id()))
+                .expect("blocking task completes");
+        assert_ne!(caller_thread, worker_thread);
+    }
+
+    #[test]
+    fn blocking_execution_propagates_failure_without_deadlocking() {
+        let result = tauri::async_runtime::block_on(spawn_blocking_execution(|| {
+            Err::<(), _>("mock failure")
+        }))
+        .expect("blocking task completes");
+        assert_eq!(result, Err("mock failure"));
     }
 
     #[test]

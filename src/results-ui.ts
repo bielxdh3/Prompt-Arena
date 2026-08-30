@@ -3,6 +3,8 @@ import { formatLocaleNumber, translate } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
 
+export const BLIND_RESPONSE_MAX_HEIGHT_PX = 320;
+
 export function blindReviewHidesAttemptEvidence(status: string): boolean {
   switch (status.trim().toLowerCase()) {
     case "loading":
@@ -36,6 +38,16 @@ export function blindEvaluationScoreLabel(score: number | null | undefined): str
   return score !== null && score !== undefined && Number.isInteger(score) && score >= 1 && score <= 5
     ? `${score}/5`
     : "Not scored";
+}
+
+export function updateBlindEvaluationScore(
+  scores: Readonly<Record<string, number | null>>,
+  token: string,
+  value: string,
+): Record<string, number | null> {
+  const score = value === "" ? null : Number(value);
+  if (score !== null && (!Number.isInteger(score) || score < 1 || score > 5)) return { ...scores };
+  return { ...scores, [token]: score };
 }
 
 export function objectiveVerificationEvidence(value: unknown): ObjectiveVerificationEvidence | null {
