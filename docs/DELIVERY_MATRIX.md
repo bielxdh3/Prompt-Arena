@@ -1,14 +1,14 @@
 # Product completion evidence matrix
 
-Reviewed source HEAD on `completion/windows-qa-live-telemetry-i18n`:
-`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`). The source HEAD is
-after
+Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
+`2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` (`2ddea5c`). It includes the
+stability, model-action, telemetry-safety, and desktop UI batches after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
-`bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and documentation commit
-`edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d` (`edb7b2d`). Subsequent
-documentation-only commits may advance the checkout HEAD; they do not change
-the reviewed source target.
+`bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and
+`37dbafcabb03079927e6d2f1ee499269c1a6722f` (`37dbafc`). Documentation and
+checksum commits after this source target may advance the checkout HEAD; they
+do not change the reviewed source implementation.
 
 `COMPLETE` means implementation and the cited automated evidence are present;
 it does not mean native or human acceptance. `PENDING_HUMAN_QA` means the
@@ -30,10 +30,10 @@ native-control, full Arena live-runtime, and human review remain
 | P1 honest local discovery boundary | `src-tauri/src/model_library.rs`, `src-tauri/src/commands.rs`, `src/model-library.ts`, and `src/App.tsx` keep discovery local/explicit; browser preview invents no installed rows; managed GGUF remains bounded and app-owned. | Rust model-library/adapter/path-safety tests and the frontend model-library tests. | Tauri discovery and managed-GGUF native smoke remain pending; bounded Ollama worker evidence is recorded separately | COMPLETE |
 | P2 contrast and interaction | `src/styles.css` raises muted/subtle text contrast, gives controls stable affordances, visible focus, hover/active/disabled states, and keeps the active sidebar free of a persistent border/bar. | `npm test`, `npm run typecheck`, and `npm run build` pass. | Installed visual contrast, focus, keyboard, and resize review | COMPLETE |
 | P2 motion and reduced motion | `src/styles.css` centralizes transitions/surface entry motion and disables transitions/animations/scroll behavior for OS or app reduced-motion settings. | Typecheck/build pass; no visual audit is claimed. | OS preference and Settings reduced-motion review | COMPLETE |
-| P2 bounded shell and dense Arena surfaces | `src/styles.css` bounds shell children with `min-width: 0`, sets `.workspace` horizontal overflow hidden, leaves `.arena-competitor-results` as the intentional desktop comparison scroller, and supplies narrow fallbacks for comparison/live telemetry. | `git diff --check` passes; no browser layout harness is available. | Desktop/narrow installed layout review, including overflow markers | COMPLETE |
-| P2 Models progressive disclosure and hardware diagnostics | `src/App.tsx` keeps primary model identity/size/runtime and Use actions visible, moves extended metadata into Details, and keeps hardware source/confidence in Advanced diagnostics. | `src/i18n.test.ts`, model-library tests, typecheck/build pass. | Installed Models visual/native control review | COMPLETE |
-| P2 Settings grouping | `src/App.tsx` groups retention, diagnostics, and BYOK controls under semantic native `<details>`/`<summary>` disclosure. | Typecheck/build pass. | Keyboard, screen-reader, and persistence review | COMPLETE |
-| P2 i18n | `src/i18n.ts` adds the P2 disclosure, hardware, source, confidence, and state strings for PT-BR; existing identity, telemetry, and user content remain data rather than translation keys. | `src/i18n.test.ts` covers critical PT-BR/English strings; full frontend suite passes. | Switch/restart and full-surface native language review | COMPLETE |
+| P2 bounded shell and dense Arena surfaces | `src/styles.css` bounds shell children with `min-width: 0`, sets `.workspace` horizontal overflow hidden, leaves `.arena-competitor-results` as the intentional desktop comparison scroller, and supplies narrow fallbacks for comparison/live telemetry. Blind response/card grids use bounded equal-height panes on desktop with a mobile row fallback; the live monitor has semantic header/row/cell roles and local overflow. | `git diff --check` passes; no browser layout harness is available. | Desktop/narrow installed layout review, including overflow markers | COMPLETE |
+| P2 Models progressive disclosure and hardware diagnostics | `src/App.tsx` keeps primary model identity/size/runtime and Use actions visible, moves extended metadata into Details, keeps hardware source/confidence in Advanced diagnostics, and uses compact fixed-size toolbar/actions without duplicate size copy. | `src/i18n.test.ts`, model-library tests, typecheck/build pass. | Installed Models visual/native control review | COMPLETE |
+| P2 Settings grouping | `src/App.tsx` groups retention, diagnostics, BYOK, storage/privacy policy, and no-secret guidance under semantic native `<details>`/`<summary>` disclosure; explicit secondary actions remain keyboard reachable. | Typecheck/build pass. | Keyboard, screen-reader, and persistence review | COMPLETE |
+| P2 i18n | `src/i18n.ts` adds the P2 disclosure, hardware, source, confidence, state, metrics, and storage/privacy strings for PT-BR; existing identity, telemetry, and user content remain data rather than translation keys. | `src/i18n.test.ts` covers critical PT-BR/English strings; full frontend suite passes. | Switch/restart and full-surface native language review | COMPLETE |
 
 ## Product matrix
 
@@ -56,13 +56,13 @@ native-control, full Arena live-runtime, and human review remain
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at checkout/source HEAD `37dbafcabb03079927e6d2f1ee499269c1a6722f` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, bundled-worker, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Fresh package built at source implementation HEAD `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e` after generated Cargo cleanup resolved the earlier `STATUS_IN_PAGE_ERROR` (`0xc0000006`). Artifact, bundle, bundled-worker, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
-## Automated validation recorded for the reviewed source HEAD and current docs checkout
+## Automated validation recorded for source implementation HEAD `2ddea5c` and current docs checkout
 
-- On the current uncommitted source checkout, `npm test` — passed:
+- On the source implementation checkout, `npm test` — passed:
   17 files, 103 tests, including stable legacy blind lock continuity and model action precedence.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
@@ -84,7 +84,7 @@ The exact-source-HEAD NSIS command was previously attempted twice with
 '{"bundle":{"useLocalToolsDir":true}}'`; both attempts failed before bundling
 with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
 
-For the current package checkout, `cargo clean --manifest-path
+For the current package checkout at source implementation HEAD `2ddea5c`, `cargo clean --manifest-path
 src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
 command was retried. The retry passed and produced the fresh evidence below.
 
@@ -122,30 +122,33 @@ account `biel4`, role Executor, App Server/headless transport,
 
 ## Packaging and historical provenance
 
-Fresh exact-HEAD evidence: the reviewed source and package checkout/source HEAD
-is `37dbafcabb03079927e6d2f1ee499269c1a6722f`.
+Fresh exact-HEAD evidence: the reviewed source implementation and package
+checkout/source HEAD is `2ddea5c1b77d2132a091df43bf06bc2dd5947b5e`.
 The prepared NSIS artifact is
 `E:\Prompt Arena-live-telemetry-i18n\package-artifacts\prompt-arena-0.1.0-windows-nsis.exe`,
-3,757,226 bytes, SHA-256
-`68C4CCF7E7AB0B1D14501DCE1CF401A2DEECC0A8DB52228557B28E447F34AE6C`.
+3,756,859 bytes, SHA-256
+`97B41A805000FA6775703B13F59886D61D793E3EA7FEBC2E246E4C66E2D9B41A`.
 The bundle source is
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\bundle\nsis\Prompt Arena_0.1.0_x64-setup.exe`,
 with the same size and SHA-256. The fresh bundled worker is
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\target\release\prompt-arena-worker.exe`,
 2,567,680 bytes, SHA-256
-`80AB45BCEBE7009CD174B9C1E1B1D360D3D9BD029002EE15A6A0D279035BE078`.
+`7E72937C562922A78503E2B1285FE34B3094F314AC1929C9728B081A58364CDA`.
 The tracked source sidecar at
 `E:\Prompt Arena-live-telemetry-i18n\src-tauri\binaries\prompt-arena-worker-x86_64-pc-windows-msvc.exe`
-remains separately identified and is not the bundled-worker measurement above.
+remains separately identified and is not the bundled-worker measurement above;
+it is 2,544,640 bytes, SHA-256
+`13F9231926998E00BE5373B4A06B16868638CE52CAB3AB839C9C3BAD65DF45C6`.
 `E:\Prompt Arena-live-telemetry-i18n\checksums-sha256.txt` has SHA-256
-`D361EE0B0C0984A202BB392B6FC6732CBBEDCFF299385CF4955CB2889B9E5B52` and
+`06D40806D350C1D5F3A750605D1B973D7B9C5B3C0B5C50DAFB2461305E30D5F3` and
 records the artifact checksum. `package-verification.txt` records passed
 checksum verification, clean install, executable start, restart, and silent
-uninstall. This package smoke is not visual or human QA. MSI remains unavailable
-(`BLOCKED LOCALLY`); Docker remains `BLOCKED_EXTERNAL_RUNTIME`. Local Ollama
-worker-protocol evidence is `COMPLETE`; Tauri discovery and full Arena native
-runtime review remain `PENDING_HUMAN_QA`. Linux/remote CI and visual/native/full
-Tauri Arena human QA remain pending.
+uninstall; the optional MSI artifact was unavailable. This package smoke is not
+visual or human QA. MSI remains unavailable (`BLOCKED LOCALLY`); Docker remains
+`BLOCKED_EXTERNAL_RUNTIME`. Local Ollama worker-protocol evidence is
+`COMPLETE`; Tauri discovery and full Arena native runtime review remain
+`PENDING_HUMAN_QA`. Linux/remote CI and visual/native/full Tauri Arena human QA
+remain pending.
 
 The following NSIS evidence is historical and is not an artifact for the new
 reviewed HEAD. At `57f02b3`, the installer
