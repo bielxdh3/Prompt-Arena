@@ -29,7 +29,11 @@ describe("static UI style contracts", () => {
 
   it("covers literal translation calls in shipped UI sources", () => {
     const resourceKeys = new Set([...i18nSource.matchAll(/^(?:\s*)(?:"((?:[^"\\]|\\.)+)"|([A-Za-z][A-Za-z0-9_]*))\s*:/gm)].map((match) => match[1] ?? match[2]));
-    const missing = shippedUiSources.flatMap((source) => [...source.matchAll(/translate\(\s*"((?:[^"\\]|\\.)+)"\s*\)/g)].map((match) => JSON.parse(`"${match[1]}"`))).filter((message, index, calls) => !resourceKeys.has(message) && calls.indexOf(message) === index);
+    const missing = shippedUiSources.flatMap((source) => {
+      const directMessages = [...source.matchAll(/translate\(\s*"((?:[^"\\]|\\.)+)"\s*\)/g)].map((match) => JSON.parse(`"${match[1]}"`));
+      const conditionalMessages = [...source.matchAll(/translate\((?:[^()"']|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')*\?[^()]*\)/g)].flatMap((match) => [...match[0].matchAll(/(?:\?|:)\s*"((?:[^"\\]|\\.)+)"/g)].map((branch) => JSON.parse(`"${branch[1]}"`)));
+      return [...directMessages, ...conditionalMessages];
+    }).filter((message, index, calls) => !resourceKeys.has(message) && calls.indexOf(message) === index);
     expect(missing).toEqual([]);
   });
 });
