@@ -12,9 +12,11 @@ the reviewed source target.
 
 `COMPLETE` means implementation and the cited automated evidence are present;
 it does not mean native or human acceptance. `PENDING_HUMAN_QA` means the
-installed Tauri/WebView or real runtime gate was not performed. Unavailable
-Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD NSIS packaging is
-`COMPLETE`; visual, native-control, live-runtime, and human review remain
+installed Tauri/WebView or full application runtime gate was not performed.
+Unavailable Docker is `BLOCKED_EXTERNAL_RUNTIME`; bounded local Ollama
+worker-protocol evidence is recorded separately from full Tauri discovery and
+Arena review. Fresh exact-HEAD NSIS packaging is `COMPLETE`; visual,
+native-control, full Arena live-runtime, and human review remain
 `PENDING_HUMAN_QA`.
 
 ## P0/P1/P2 remediation evidence
@@ -25,7 +27,7 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD NSIS packaging is
 | P0 blind response safety | `src/results-ui.ts` bounds blind response panes at `BLIND_RESPONSE_MAX_HEIGHT_PX`, validates local 1–5 score state, and suppresses identity/telemetry until lock; `src/App.tsx` renders untrusted response text only. | `src/results-ui.test.ts` covers score bounds, hidden-before-lock/revealed-after-lock state, and the 320 px pane bound. | Native blind run, keyboard scoring, lock/reveal and reopen | COMPLETE |
 | P0 blind telemetry error safety | `visibleArenaTelemetryError` in `src/arena-runner.ts` replaces blind sample/Arena errors with the identity-free localized-safe message; `src/App.tsx` applies it to both live error surfaces while non-blind diagnostics retain bounded sanitized detail. | `src/arena-runner.test.ts` covers identity-bearing blind genericization and non-blind detail retention. | Installed blind failure run and reveal/diagnostic boundary | COMPLETE |
 | P1 model availability/actions | `src/model-library.ts` provides typed availability/action derivation, operation matching, bounded messages, and local request builders; `src/App.tsx` exposes primary Use/Download/Cancel/Retry/Remove actions from persisted state. | `src/model-library.test.ts` covers availability, operation matching, action requests, local path safety, duplicate evidence, and quantization distinction. | Real local discovery/operation smoke in Tauri | COMPLETE |
-| P1 honest local discovery boundary | `src-tauri/src/model_library.rs`, `src-tauri/src/commands.rs`, `src/model-library.ts`, and `src/App.tsx` keep discovery local/explicit; browser preview invents no installed rows; managed GGUF remains bounded and app-owned. | Rust model-library/adapter/path-safety tests and the frontend model-library tests. | Ollama endpoint and managed-GGUF native smoke | COMPLETE |
+| P1 honest local discovery boundary | `src-tauri/src/model_library.rs`, `src-tauri/src/commands.rs`, `src/model-library.ts`, and `src/App.tsx` keep discovery local/explicit; browser preview invents no installed rows; managed GGUF remains bounded and app-owned. | Rust model-library/adapter/path-safety tests and the frontend model-library tests. | Tauri discovery and managed-GGUF native smoke remain pending; bounded Ollama worker evidence is recorded separately | COMPLETE |
 | P2 contrast and interaction | `src/styles.css` raises muted/subtle text contrast, gives controls stable affordances, visible focus, hover/active/disabled states, and keeps the active sidebar free of a persistent border/bar. | `npm test`, `npm run typecheck`, and `npm run build` pass. | Installed visual contrast, focus, keyboard, and resize review | COMPLETE |
 | P2 motion and reduced motion | `src/styles.css` centralizes transitions/surface entry motion and disables transitions/animations/scroll behavior for OS or app reduced-motion settings. | Typecheck/build pass; no visual audit is claimed. | OS preference and Settings reduced-motion review | COMPLETE |
 | P2 bounded shell and dense Arena surfaces | `src/styles.css` bounds shell children with `min-width: 0`, sets `.workspace` horizontal overflow hidden, leaves `.arena-competitor-results` as the intentional desktop comparison scroller, and supplies narrow fallbacks for comparison/live telemetry. | `git diff --check` passes; no browser layout harness is available. | Desktop/narrow installed layout review, including overflow markers | COMPLETE |
@@ -47,7 +49,8 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD NSIS packaging is
 | JSON/Markdown/CSV exports | `src/arena-runner.ts`, `src/App.tsx` | Arena export tests | Installed save/open smoke | PENDING_HUMAN_QA |
 | Official packs and deterministic materialization | `packs/official`, `src-tauri/src/official_packs.rs`, `src/App.tsx` | Rust catalog/materialization and boundary tests | Inspect/materialize packs in Tauri | PENDING_HUMAN_QA |
 | Docker-required execution boundary | `src-tauri/src/official_packs.rs`, `src/run-plan.ts`, `src/App.tsx` | Rust boundary tests and `npm run check:boundaries` evidence | Docker runtime unavailable | BLOCKED_EXTERNAL_RUNTIME |
-| Ollama discovery/start | `src-tauri/src/ollama.rs`, `src-tauri/src/model_library.rs`, `src/App.tsx` | Rust adapter/model-library tests | No local Ollama endpoint was available for smoke | BLOCKED_EXTERNAL_RUNTIME |
+| Local Ollama worker protocol smoke | `src-tauri/src/bin/prompt-arena-worker.rs`, `src-tauri/src/protocol.rs`, `src-tauri/src/orchestration.rs` | HTTP 200 health plus six sequential `GenerateOnce` calls at checkout HEAD `73991b0`: `qwen3.5:0.8b` 3/3 and `llama3.2:1b` 3/3 completed, all exited 0 with usage/timing metrics; 8512/1220/928/4220/591/259 ms; no worker/listener leaks or model mutation | Worker/runtime evidence only; no Tauri Arena UI, persistence, blind-evaluation, responsiveness, or human QA claim | COMPLETE |
+| Ollama discovery/start | `src-tauri/src/ollama.rs`, `src-tauri/src/model_library.rs`, `src/App.tsx` | Rust adapter/model-library tests; the available loopback endpoint was also exercised by the bounded worker smoke above | Tauri discovery/start and full Arena native smoke remain pending; the worker smoke does not close this gate | PENDING_HUMAN_QA |
 | LM Studio and live llama.cpp adapters | Model source shape and managed GGUF import exist; live LM Studio/llama.cpp runtime adapters are not wired in this batch. | No live adapter evidence in this batch. | Required future implementation and native review | MISSING_IMPLEMENTATION |
 | Model downloads, managed removal, and duplicate evidence | `src-tauri/src/model_library.rs`, `src-tauri/src/commands.rs`, `src/model-library.ts`, `src/App.tsx` | Rust model-library tests plus `src/model-library.test.ts` | Real local operation and removal smoke | PENDING_HUMAN_QA |
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
@@ -63,12 +66,18 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD NSIS packaging is
   17 files, 100 tests, including blind telemetry error genericization.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
-- `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed for
-  the focused command/model-library coverage: `spawn_blocking` execution
-  delegation/failure propagation, local discovery, operations, path safety,
-  duplicates, and unavailable sources where applicable.
+- `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed:
+  109 tests plus two zero-test targets, including the live Ollama health test
+  taking the healthy endpoint branch.
 - `git diff --check` — passed; line-ending warnings were emitted by Git, with
   no whitespace errors.
+
+- Bounded live local worker smoke at checkout HEAD `73991b0`: the loopback
+  Ollama endpoint returned HTTP 200; six sequential packaged-worker
+  `GenerateOnce` calls completed, with `qwen3.5:0.8b` 3/3 and `llama3.2:1b`
+  3/3, all exit codes 0 and usage/timing metrics present. Elapsed milliseconds
+  were `8512/1220/928/4220/591/259`; zero worker processes remained and no
+  listener was created by the smoke. No model state was changed.
 
 The exact-source-HEAD NSIS command was previously attempted twice with
 `npm run tauri:build -- --bundles nsis --config
@@ -80,8 +89,9 @@ src-tauri/Cargo.toml` removed generated Cargo output before the same NSIS
 command was retried. The retry passed and produced the fresh evidence below.
 
 These checks do not prove an installed Windows visual session, native control
-behavior, a live Ollama endpoint, Docker execution, or human accessibility
-acceptance.
+behavior, full Tauri Arena responsiveness/persistence/blind continuity, Docker
+execution, or human accessibility acceptance. The worker smoke is runtime
+protocol evidence only.
 
 ## QA markers and provenance
 
@@ -129,7 +139,9 @@ with the same size and SHA-256. The worker sidecar is
 records the artifact checksum. `package-verification.txt` records passed
 checksum verification, clean install, executable start, restart, and silent
 uninstall. This package smoke is not visual or human QA. MSI remains
-`BLOCKED LOCALLY`; Ollama/Docker remain `BLOCKED_EXTERNAL_RUNTIME`.
+`BLOCKED LOCALLY`; Docker remains `BLOCKED_EXTERNAL_RUNTIME`. Local Ollama
+worker-protocol evidence is `COMPLETE`; Tauri discovery and full Arena native
+runtime review remain `PENDING_HUMAN_QA`.
 
 The following NSIS evidence is historical and is not an artifact for the new
 reviewed HEAD. At `57f02b3`, the installer
