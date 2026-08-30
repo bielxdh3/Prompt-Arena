@@ -809,8 +809,12 @@ mod tests {
         }
 
         fn provider(&self) -> OpenAiCompatibleProvider {
+            self.provider_for(OpenAiCompatibleRuntime::LmStudio)
+        }
+
+        fn provider_for(&self, runtime: OpenAiCompatibleRuntime) -> OpenAiCompatibleProvider {
             OpenAiCompatibleProvider::new(
-                OpenAiCompatibleRuntime::LmStudio,
+                runtime,
                 OllamaConfig {
                     endpoint: self.endpoint.clone(),
                     connect_timeout_ms: 1_000,
@@ -882,8 +886,14 @@ mod tests {
             ]
         }))
         .unwrap();
-        let server = MockServer::start(vec![(response(200, "application/json", &body), None)]);
-        let models = server.provider().list_models().unwrap();
+        let server = MockServer::start(vec![
+            (response(200, "application/json", &body), None),
+            (response(200, "application/json", &body), None),
+        ]);
+        let lm_studio = server.provider();
+        let llama_cpp = server.provider_for(OpenAiCompatibleRuntime::LlamaCpp);
+        let models = lm_studio.list_models().unwrap();
+        let llama_models = llama_cpp.list_models().unwrap();
         assert_eq!(
             models
                 .iter()
@@ -891,12 +901,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["alpha", "zeta"]
         );
+        assert_eq!(llama_models, models);
         assert_eq!(models[0].context_length, Some(4096));
-        assert!(server
-            .provider()
-            .capabilities()
-            .supports(Capability::ModelListing));
-        assert_ne!(server.provider().provider_id(), "ollama");
+        assert!(lm_studio.capabilities().supports(Capability::ModelListing));
+        assert!(llama_cpp.capabilities().supports(Capability::ModelListing));
+        assert_eq!(lm_studio.provider_id(), "lm_studio");
+        assert_eq!(llama_cpp.provider_id(), "llama_cpp");
         let _ = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     }
 
