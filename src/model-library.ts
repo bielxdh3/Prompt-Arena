@@ -42,6 +42,15 @@ export type ModelRecommendation = {
   explanation: string;
 };
 
+export type ModelAvailabilityState = "not_installed" | "downloading" | "installed" | "failed";
+export type ModelActionKind = "download" | "cancel" | "use" | "remove" | "retry";
+
+export type ModelAvailabilityView = {
+  state: ModelAvailabilityState;
+  operation: ModelOperation | null;
+  actions: ModelActionKind[];
+};
+
 export type ProfileFormState = {
   profileId: string;
   revision: string;
@@ -164,7 +173,22 @@ export function profileEmptyCopy(): string {
 }
 
 export function modelEmptyCopy(): string {
-  return "No catalog, download, or sample model data is shown; no matching models are reported by the configured local sources.";
+  return "No local model records are reported. Discovery reports installed local records only; no remote catalog or download option is invented.";
+}
+
+export function modelAvailabilityLabel(state: ModelAvailabilityState): string {
+  if (state === "not_installed") return "Not installed";
+  if (state === "downloading") return "Downloading";
+  if (state === "installed") return "Installed";
+  return "Failed";
+}
+
+export function modelActionLabel(action: ModelActionKind): string {
+  if (action === "download") return "Download";
+  if (action === "cancel") return "Cancel";
+  if (action === "use") return "Use in profile";
+  if (action === "remove") return "Remove";
+  return "Retry";
 }
 
 export function modelMetadataLabel(model: ModelInfo): string {
@@ -247,6 +271,58 @@ export function filterModelCatalog(catalog: ModelCatalog, query: string): ModelR
 
 export function isActiveModelOperation(operation: ModelOperation): boolean {
   return operation.status === "queued" || operation.status === "running";
+}
+
+export function findModelOperation(
+  model: ModelRecord,
+  operations: readonly ModelOperation[],
+): ModelOperation | null {
+  for (let index = operations.length - 1; index >= 0; index -= 1) {
+    const operation = operations[index];
+    if (
+      operation.modelId === model.modelId
+      || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
+      || (operation.kind === "import" && operation.managedPath !== null && operation.managedPath === (model.managedPath ?? model.path))
+    ) return operation;
+  }
+  return null;
+}
+
+function isInstallOperation(operation: ModelOperation): boolean {
+  return operation.kind === "download" || operation.kind === "import";
+}
+
+function canRetryModelOperation(model: ModelRecord, operation: ModelOperation): boolean {
+  if (operation.kind === "download") return model.backend === "ollama" && model.endpoint !== null;
+  return operation.kind === "import" && operation.managedPath !== null;
+}
+
+export function deriveModelAvailability(
+  model: ModelRecord,
+  operation: ModelOperation | null = null,
+): ModelAvailabilityView {
+  if (model.availability === "available") {
+    const actions: ModelActionKind[] = ["use"];
+    if (model.backend === "llama_cpp" && model.managed && model.managedPath !== null) actions.push("remove");
+    return { state: "installed", operation, actions };
+  }
+  if (operation && isInstallOperation(operation) && isActiveModelOperation(operation)) {
+    return { state: "downloading", operation, actions: ["cancel"] };
+  }
+  if (operation?.status === "failed" && canRetryModelOperation(model, operation)) {
+    return { state: "failed", operation, actions: ["retry"] };
+  }
+  return {
+    state: "not_installed",
+    operation,
+    actions: model.backend === "ollama" && model.endpoint !== null ? ["download"] : [],
+  };
+}
+
+export function modelOperationMessage(operation: ModelOperation | null): string | null {
+  if (!operation?.message) return null;
+  const sanitized = operation.message.replace(/[\u0000-\u001F\u007F]/gu, " ").trim().slice(0, 512);
+  return sanitized || null;
 }
 
 export function modelOperationStatusLabel(status: ModelOperation["status"]): string {

@@ -16,8 +16,12 @@ import {
   DEFAULT_RECOMMENDATION_THRESHOLDS,
   EMPTY_PROFILE_FORM,
   filterModelCatalog,
+  deriveModelAvailability,
   hardwarePreviewCopy,
+  findModelOperation,
   isActiveModelOperation,
+  modelActionLabel,
+  modelAvailabilityLabel,
   modelBackendLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
@@ -25,6 +29,7 @@ import {
   modelEmptyCopy,
   modelMetadataLabel,
   modelOperationProgressLabel,
+  modelOperationMessage,
   modelOperationStatusLabel,
   modelPreviewCopy,
   modelRecordMetadataValue,
@@ -264,6 +269,44 @@ describe("model library profile boundary", () => {
     expect(isActiveModelOperation(modelOperation({ status: "completed" }))).toBe(false);
   });
 
+  it("derives installed, downloading, unavailable, and failed model actions from local evidence", () => {
+    const installed = modelRecord();
+    expect(deriveModelAvailability(installed)).toMatchObject({ state: "installed", actions: ["use"] });
+    expect(deriveModelAvailability(installed, modelOperation({ status: "failed", message: "stale pull failure" }))).toMatchObject({ state: "installed", actions: ["use"] });
+
+    const unavailable = modelRecord({ availability: "unavailable" });
+    expect(deriveModelAvailability(unavailable)).toMatchObject({ state: "not_installed", actions: ["download"] });
+    expect(deriveModelAvailability(unavailable, modelOperation({ status: "queued" }))).toMatchObject({ state: "downloading", actions: ["cancel"] });
+    expect(deriveModelAvailability(unavailable, modelOperation({ status: "running" }))).toMatchObject({ state: "downloading", actions: ["cancel"] });
+    expect(deriveModelAvailability(unavailable, modelOperation({ status: "cancelled" }))).toMatchObject({ state: "not_installed", actions: ["download"] });
+    expect(deriveModelAvailability(unavailable, modelOperation({ status: "failed", message: "runtime\nfailed" }))).toMatchObject({ state: "failed", actions: ["retry"] });
+    expect(deriveModelAvailability(unavailable, modelOperation({ status: "completed" }))).toMatchObject({ state: "not_installed", actions: ["download"] });
+    expect(modelOperationMessage(modelOperation({ message: "  failure\nwith\tcontrol  " }))).toBe("failure with control");
+    expect(modelOperationMessage(modelOperation({ message: null }))).toBeNull();
+
+    expect(findModelOperation(installed, [modelOperation({ status: "completed" }), modelOperation({ operationId: "operation-2", status: "running" })])?.operationId).toBe("operation-2");
+    expect(modelAvailabilityLabel("not_installed")).toBe("Not installed");
+    expect(modelAvailabilityLabel("downloading")).toBe("Downloading");
+    expect(modelAvailabilityLabel("installed")).toBe("Installed");
+    expect(modelAvailabilityLabel("failed")).toBe("Failed");
+    expect(modelActionLabel("download")).toBe("Download");
+    expect(modelActionLabel("cancel")).toBe("Cancel");
+    expect(modelActionLabel("use")).toBe("Use in profile");
+    expect(modelActionLabel("remove")).toBe("Remove");
+    expect(modelActionLabel("retry")).toBe("Retry");
+  });
+
+  it("keeps managed installed models removable without inventing downloads", () => {
+    const managed = modelRecord({
+      backend: "llama_cpp",
+      endpoint: null,
+      path: "models/model.gguf",
+      managed: true,
+      managedPath: "models/model.gguf",
+    });
+    expect(deriveModelAvailability(managed)).toMatchObject({ state: "installed", actions: ["use", "remove"] });
+  });
+
   it("derives immutable profile revision identity and fixed runtime", () => {
     const revision = profileRevisionFromForm({
       profileId: " local-default ",
@@ -332,7 +375,7 @@ describe("model library profile boundary", () => {
     expect(profilePreviewCopy()).toContain("does not list or register");
     expect(modelPreviewCopy()).toContain("does not query Ollama or invent");
     expect(hardwarePreviewCopy()).toContain("does not read or invent");
-    expect(modelEmptyCopy()).toContain("No catalog, download, or sample");
+    expect(modelEmptyCopy()).toContain("Discovery reports installed local records only");
   });
 
   it("classifies model pressure deterministically from bounded local facts", () => {

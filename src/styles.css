@@ -2821,6 +2821,21 @@ button.official-pack-row:hover,
   white-space: nowrap;
 }
 
+.model-row-actions {
+  align-items: flex-start;
+  justify-content: flex-end;
+  min-width: 220px;
+}
+
+.model-action-button {
+  min-width: 112px;
+  min-height: 36px;
+}
+
+.model-row-actions .field-help {
+  flex-basis: 100%;
+}
+
 .model-recommendation {
   display: grid;
   gap: 5px;

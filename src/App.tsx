@@ -194,16 +194,21 @@ import {
   classifyModelRecommendation,
   DEFAULT_MODEL_SOURCE_CONFIGS,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
+  deriveModelAvailability,
   filterModelCatalog,
+  findModelOperation,
   EMPTY_PROFILE_FORM,
   hardwarePreviewCopy,
   isActiveModelOperation,
   modelBackendLabel,
+  modelActionLabel,
+  modelAvailabilityLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
   modelDownloadCapabilityLabel,
   modelEmptyCopy,
   modelOperationProgressLabel,
+  modelOperationMessage,
   modelOperationStatusLabel,
   modelPreviewCopy,
   modelRecordMetadataLabel,
@@ -1340,7 +1345,6 @@ function ModelsView() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [operationStarting, setOperationStarting] = useState(false);
-  const [operationAction, setOperationAction] = useState<string | null>(null);
   const [cancellingOperation, setCancellingOperation] = useState<string | null>(null);
   const [ollamaStartState, setOllamaStartState] = useState<OllamaStartState>({ status: "idle" });
   const ollamaStartInFlight = useRef(false);
@@ -1418,7 +1422,6 @@ function ModelsView() {
   async function launchOperation(request: ModelOperationRequest) {
     if (!desktop) return;
     setOperationStarting(true);
-    setOperationAction(request.operationId);
     try {
       const operation = await startModelOperation(request);
       const subject = operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model";
@@ -1434,7 +1437,6 @@ function ModelsView() {
     } finally {
       await refreshModels();
       setOperationStarting(false);
-      setOperationAction(null);
     }
   }
 
@@ -1448,6 +1450,27 @@ function ModelsView() {
   function handleDownload(model: ModelRecord) {
     try {
       void launchOperation(buildDownloadModelOperationRequest(nextOperationId("download"), model));
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  function handleUseModel(model: ModelRecord) {
+    setSelectedProfileModelId(model.modelId);
+    setForm((current) => ({ ...current, model: model.name }));
+    setFeedback({ kind: "info", message: `${model.name}: ${translate("selected for profile")}.` });
+  }
+
+  function handleRetry(model: ModelRecord, operation: ModelOperation) {
+    try {
+      const operationId = nextOperationId(operation.kind === "import" ? "import" : "download");
+      const request = operation.kind === "import" && operation.managedPath
+        ? buildImportModelOperationRequest(operationId, operation.managedPath)
+        : operation.kind === "download"
+          ? buildDownloadModelOperationRequest(operationId, model)
+          : null;
+      if (!request) throw new Error("This model operation cannot be retried from the available local evidence.");
+      void launchOperation(request);
     } catch (error: unknown) {
       showModelActionError(error);
     }
@@ -1733,30 +1756,28 @@ function ModelsView() {
           {modelState.status === "ready" && visibleModels.length === 0 && (
             <EmptyState
               title={query.trim() ? "No matching models" : "No local models"}
-              description={modelEmptyCopy()}
+              description={translate(modelEmptyCopy())}
             />
           )}
           {modelState.status === "ready" && visibleModels.length > 0 && (
             <div className="model-list">
               {visibleModels.map((model) => {
-                const rowOperation = [...modelState.operations].reverse().find((operation) => (
-                  operation.modelId === model.modelId
-                  || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
-                ));
+                const rowOperation = findModelOperation(model, modelState.operations);
+                const availability = deriveModelAvailability(model, rowOperation);
+                const sourceLabel = modelState.catalog.sources.find((source) => source.sourceId === model.sourceId)?.label ?? model.sourceId;
                 const recommendation = classifyModelRecommendation(
                   model,
                   hardwareState.status === "ready" ? hardwareState.snapshot : null,
                   thresholds,
                 );
-                const canDownload = model.backend === "ollama";
-                const canRemove = model.backend === "llama_cpp" && model.managed && model.managedPath !== null;
                 const modelOperationActive = rowOperation ? isActiveModelOperation(rowOperation) : false;
+                const operationMessage = modelOperationMessage(rowOperation);
                 return (
                 <article className="model-row" key={model.modelId}>
                   <div>
                     <h3>{model.name}</h3>
                     <p className="model-meta">
-                      {translate(modelBackendLabel(model.backend))} · {translate(modelRecordMetadataLabel(model))} · {translate(modelRecordQuantizationLabel(model))}
+                      {sourceLabel} · {translate(modelBackendLabel(model.backend))} · {translate(modelRecordMetadataLabel(model))} · {translate(modelRecordQuantizationLabel(model))}
                     </p>
                     <p className="model-meta">
                       {model.contentHash
@@ -1775,30 +1796,63 @@ function ModelsView() {
                     {rowOperation && (
                       <p className="model-meta">
                         {translate("Operation")} {translate(modelOperationStatusLabel(rowOperation.status).toLowerCase())} · {modelOperationProgressLabel(rowOperation)}
-                        {rowOperation.message ? ` · ${rowOperation.message}` : ""}
+                        {operationMessage ? ` · ${operationMessage}` : ""}
                       </p>
                     )}
                   </div>
-                  <div className="model-actions">
+                  <div className="model-actions model-row-actions">
                     <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
-                    {canDownload && (
+                    <span className={`run-status ${availability.state === "failed" ? "run-status-failure" : ""}`}>
+                      {translate(modelAvailabilityLabel(availability.state))}
+                    </span>
+                    {availability.actions.includes("use") && (
                       <button
-                        className="text-button"
+                        className="secondary-button model-action-button"
+                        type="button"
+                        onClick={() => handleUseModel(model)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {translate(modelActionLabel("use"))}
+                      </button>
+                    )}
+                    {availability.actions.includes("download") && (
+                      <button
+                        className="secondary-button model-action-button"
                         type="button"
                         onClick={() => handleDownload(model)}
                         disabled={!desktop || busy || operationStarting}
                       >
-                        {operationAction === rowOperation?.operationId ? translate("Starting…") : translate("Download")}
+                        {translate(modelActionLabel("download"))}
                       </button>
                     )}
-                    {canRemove && (
+                    {availability.actions.includes("cancel") && rowOperation && (
                       <button
-                        className="text-button"
+                        className="secondary-button model-action-button"
+                        type="button"
+                        onClick={() => void handleCancel(rowOperation.operationId)}
+                        disabled={!desktop || busy || cancellingOperation === rowOperation.operationId}
+                      >
+                        {cancellingOperation === rowOperation.operationId ? translate("Cancelling…") : translate(modelActionLabel("cancel"))}
+                      </button>
+                    )}
+                    {availability.actions.includes("retry") && rowOperation && (
+                      <button
+                        className="secondary-button model-action-button"
+                        type="button"
+                        onClick={() => handleRetry(model, rowOperation)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {translate(modelActionLabel("retry"))}
+                      </button>
+                    )}
+                    {availability.actions.includes("remove") && (
+                      <button
+                        className="secondary-button model-action-button"
                         type="button"
                         onClick={() => handleRemove(model)}
                         disabled={!desktop || busy || operationStarting || modelOperationActive}
                       >
-                        {modelOperationActive ? translate("Removal blocked") : operationAction === rowOperation?.operationId ? translate("Working…") : translate("Remove")}
+                        {modelOperationActive ? translate("Removal blocked") : translate(modelActionLabel("remove"))}
                       </button>
                     )}
                     <span className="field-help">{translate(modelDownloadCapabilityLabel(model))}</span>
@@ -1826,7 +1880,7 @@ function ModelsView() {
                     <article className="profile-record-row" key={operation.operationId}>
                       <span>
                         <strong>{operation.kind} · {operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model"}</strong>
-                        <small>{translate(modelBackendLabel(operation.backend))} · {translate(modelOperationStatusLabel(operation.status))} · {modelOperationProgressLabel(operation)}{operation.message ? ` · ${operation.message}` : ""}</small>
+                        <small>{translate(modelBackendLabel(operation.backend))} · {translate(modelOperationStatusLabel(operation.status))} · {modelOperationProgressLabel(operation)}{modelOperationMessage(operation) ? ` · ${modelOperationMessage(operation)}` : ""}</small>
                       </span>
                       {isActiveModelOperation(operation) ? (
                         <button className="text-button" type="button" onClick={() => void handleCancel(operation.operationId)} disabled={cancellingOperation === operation.operationId}>
