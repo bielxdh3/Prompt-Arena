@@ -1201,7 +1201,13 @@ h3 {
 
 .blind-response-grid {
   display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(300px, 1fr);
   gap: 16px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 5px;
+  align-items: stretch;
 }
 
 .blind-response-card {
@@ -1212,7 +1218,8 @@ h3 {
 }
 
 .blind-response-text {
-  min-height: 88px;
+  height: clamp(160px, 24vw, 320px);
+  min-height: 160px;
   max-height: 320px;
   margin: 10px 0 16px;
   padding: 14px;
@@ -1741,6 +1748,12 @@ button:disabled {
   padding: 0;
 }
 
+.byok-history-refresh {
+  justify-content: center;
+  min-width: 140px;
+  min-height: 40px;
+}
+
 .byok-history-list {
   display: grid;
   gap: 16px;
@@ -1812,8 +1825,40 @@ button:disabled {
 }
 
 .byok-remove-button {
+  justify-content: center;
+  min-width: 220px;
+  min-height: 45px;
   margin-top: 20px;
   color: var(--color-danger);
+}
+
+.byok-policy-details {
+  padding: 0 12px 10px;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.byok-policy-details summary,
+.provider-safety-note summary {
+  padding: 10px 0;
+  color: var(--color-accent-strong);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+
+.byok-policy-details summary:hover,
+.byok-policy-details summary:focus-visible,
+.provider-safety-note summary:hover,
+.provider-safety-note summary:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-soft);
+}
+
+.byok-policy-details .field-help {
+  margin: 2px 0 0;
 }
 
 .byok-price-section {
@@ -2271,6 +2316,14 @@ button.official-pack-row:hover,
   align-items: stretch;
 }
 
+.blind-card-grid {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(300px, 1fr);
+  overflow-x: auto;
+  padding-bottom: 5px;
+  align-items: stretch;
+}
+
 .competitor-result-card,
 .blind-response-card {
   display: grid;
@@ -2288,6 +2341,8 @@ button.official-pack-row:hover,
 }
 
 .arena-response-text {
+  height: clamp(160px, 24vw, 320px);
+  min-height: 160px;
   max-height: 320px;
   margin: 0;
   padding: 14px;
@@ -2395,10 +2450,28 @@ button.official-pack-row:hover,
   display: grid;
   gap: 8px;
   min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 5px;
+}
+
+.arena-live-header,
+.arena-live-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) repeat(4, minmax(130px, 1fr));
+  gap: 5px;
+}
+
+.arena-live-header {
+  align-items: center;
+  padding: 0 14px 2px;
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .arena-live-row {
-  grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(130px, 1fr));
   align-items: center;
 }
 
@@ -2885,12 +2958,14 @@ button.official-pack-row:hover,
 }
 
 .model-row {
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.85fr);
+  align-items: start;
   padding: 20px 0;
 }
 
 .model-row > div:first-child {
-  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .model-row h3 {
@@ -2902,13 +2977,6 @@ button.official-pack-row:hover,
   margin: 5px 0 0;
   color: var(--color-text-subtle);
   font-size: 12px;
-}
-
-.model-size {
-  flex: 0 0 auto;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  white-space: nowrap;
 }
 
 .model-details {
@@ -2955,6 +3023,10 @@ button.official-pack-row:hover,
   color: var(--color-text);
 }
 
+.model-detail-copy {
+  grid-column: 1 / -1;
+}
+
 .model-row-actions {
   align-items: flex-start;
   justify-content: flex-end;
@@ -2970,6 +3042,21 @@ button.official-pack-row:hover,
 .model-list-panel > .section-heading .model-actions .text-button {
   min-width: 94px;
   margin-top: 0;
+}
+
+.model-toolbar-button {
+  justify-content: center;
+  min-height: 38px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.model-refresh-button {
+  min-width: 94px;
+}
+
+.model-start-button {
+  min-width: 142px;
 }
 
 .advanced-settings {
@@ -3180,7 +3267,7 @@ button.official-pack-row:hover,
   }
 
   .model-row {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .model-row-actions {
@@ -3320,10 +3407,18 @@ button.official-pack-row:hover,
     overflow-x: visible;
   }
 
+  .blind-card-grid,
+  .blind-response-grid {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow-x: visible;
+  }
+
   .arena-live-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .arena-live-header,
   .arena-live-row {
     grid-template-columns: 1fr;
   }
