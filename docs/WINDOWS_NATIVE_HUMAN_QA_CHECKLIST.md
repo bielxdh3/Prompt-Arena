@@ -36,7 +36,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PENDING — historical 57f02b3 evidence remains separate; the recorded NSIS/package hashes were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`, not reviewed source HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING — fresh NSIS rebuild at exact reviewed source HEAD is required before current package evidence can be COMPLETE; prior checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `PENDING_EXACT_HEAD_REBUILD`; `PENDING_HUMAN_QA` after rebuild for visual/native review |
+| Packaging | PENDING — historical 57f02b3 evidence remains separate; the recorded NSIS/package hashes were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`, not reviewed source HEAD `8588a2dd66e386082e153c933b1b55891ac42657`. | PENDING — fresh NSIS rebuild at exact reviewed source HEAD is required before current package evidence can be COMPLETE; prior checksum verification, clean install, executable start, restart, and silent uninstall passed. This is packaging smoke, not visual or human QA; MSI remains unavailable. | `PARTIAL_IMPLEMENTATION`; `PENDING_HUMAN_QA` after rebuild for visual/native review |
 
 ## Application review
 
@@ -129,7 +129,7 @@ evidence only. Remote CI is unconfirmed.
   persistence, blind-evaluation continuity, or human QA.
 - `BLOCKED_EXTERNAL_RUNTIME`: no Docker runtime was available for the
   Docker-required boundary. This is not an implementation failure.
-- `PENDING_EXACT_HEAD_REBUILD`: the recorded NSIS/package hashes were built at
+- `PARTIAL_IMPLEMENTATION`: the recorded NSIS/package hashes were built at
   prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`;
   a fresh NSIS rebuild at reviewed source HEAD
   `8588a2dd66e386082e153c933b1b55891ac42657` is required before current
