@@ -4655,7 +4655,7 @@ function ResponsePreview({ text }: { text: string }) {
   return (
     <div className="response-preview-block">
       <pre className="attempt-response">{visible}</pre>
-      {truncated && <p className="field-help">Response preview is bounded at {formatLocaleNumber(maxCharacters)} characters. The verified byte count and hash cover the complete artifact.</p>}
+      {truncated && <p className="field-help">{translate("Response preview is bounded at")} {formatLocaleNumber(maxCharacters)} {translate("characters. The verified byte count and hash cover the complete artifact.")}</p>}
     </div>
   );
 }

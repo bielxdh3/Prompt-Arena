@@ -53,6 +53,64 @@ describe("i18n", () => {
     expect(translateText("pt-BR", "Local models")).toBe("Modelos locais");
   });
 
+  it("covers AST-audited PT-BR fallback literals", () => {
+    const messages = {
+      "Reading runs, Arena summaries, profile revisions, and local model inventory.": "Lendo execuções, resumos da Arena, revisões de perfis e inventário de modelos locais.",
+      "The browser preview does not read desktop records or invent counts. Open the desktop app to see local workspace data.": "A prévia do navegador não lê registros do desktop nem inventa contagens. Abra o aplicativo desktop para ver os dados do espaço de trabalho local.",
+      "Workspace data unavailable": "Dados do espaço de trabalho indisponíveis",
+      "Complete an Arena in the desktop app to see its aggregate evidence here. No sample records are bundled.": "Conclua uma Arena no aplicativo desktop para ver suas evidências agregadas aqui. Nenhum registro de amostra é incluído.",
+      "Benchmark records unavailable": "Registros de benchmark indisponíveis",
+      "Loading official catalog": "Carregando catálogo oficial",
+      "Validating bundled benchmark-v1 documents at the desktop boundary.": "Validando os documentos benchmark-v1 empacotados no limite do desktop.",
+      "Official catalog unavailable": "Catálogo oficial indisponível",
+      "Inspect a bundled pack": "Inspecione um pacote empacotado",
+      "Choose an official pack to read its metadata and canonical document.": "Escolha um pacote oficial para ler seus metadados e o documento canônico.",
+      "Loading pack document": "Carregando documento do pacote",
+      "Reading the validated bundled source record.": "Lendo o registro de origem empacotado e validado.",
+      "Pack document unavailable": "Documento do pacote indisponível",
+      Version: "Versão",
+      "Canonical bytes": "Bytes canônicos",
+      Capability: "Capacidade",
+      Sandbox: "Sandbox",
+      Evaluation: "Avaliação",
+      "This pack requires Docker, which is unavailable in this build. Host execution is never used.": "Este pacote requer Docker, que está indisponível nesta compilação. A execução no host nunca é usada.",
+      "Pack execution unavailable": "Execução do pacote indisponível",
+      "The declared execution boundary is unavailable; no fallback runtime is used.": "O limite de execução declarado está indisponível; nenhum runtime alternativo é usado.",
+      "Materializing official pack": "Materializando pacote oficial",
+      "Deriving deterministic case seeds and writing one immutable local evidence record.": "Derivando sementes determinísticas de casos e gravando um registro local de evidência imutável.",
+      "Materialization unavailable": "Materialização indisponível",
+      "Materialization ID": "ID da materialização",
+      "Materialized content hash": "Hash do conteúdo materializado",
+      "Seeded cases": "Casos semeados",
+      "Filter catalog": "Filtrar catálogo",
+      "Relative path under the managed model root": "Caminho relativo sob a raiz de modelos gerenciados",
+      "Checking local sources": "Verificando fontes locais",
+      "Local model catalog unavailable": "Catálogo de modelos locais indisponível",
+      "Profile ID": "ID do perfil",
+      Revision: "Revisão",
+      "Loading profiles": "Carregando perfis",
+      "Reading immutable profile revisions from SQLite.": "Lendo revisões imutáveis de perfis do SQLite.",
+      "Profiles unavailable": "Perfis indisponíveis",
+      "Reading hardware baseline": "Lendo a linha de base do hardware",
+      "Hardware baseline unavailable": "Linha de base do hardware indisponível",
+      "Benchmark version": "Versão do benchmark",
+      Uncertainty: "Incerteza",
+      "Tie margin": "Margem de empate",
+      "Benchmark version identity": "Identidade da versão do benchmark",
+      "Terminal status": "Status terminal",
+      "Profile/runtime/model": "Perfil/runtime/modelo",
+      "Completed attempts": "Tentativas concluídas",
+      "Objective exact-text evidence": "Evidência de texto exato do objetivo",
+      "SHA-256": "SHA-256",
+      "Response preview is bounded at": "A prévia da resposta é limitada a",
+      "characters. The verified byte count and hash cover the complete artifact.": "caracteres. A contagem de bytes e o hash verificados abrangem o artefato completo.",
+    };
+
+    for (const [message, translation] of Object.entries(messages)) {
+      expect(translateText("pt-BR", message)).toBe(translation);
+    }
+  });
+
   it("keeps critical P2 controls translated without exposing internal labels", () => {
     expect(translateText("pt-BR", "Advanced local controls")).toBe("Controles locais avançados");
     expect(translateText("pt-BR", "Advanced diagnostics")).toBe("Diagnóstico avançado");
