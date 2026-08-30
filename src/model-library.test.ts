@@ -269,10 +269,26 @@ describe("model library profile boundary", () => {
     expect(isActiveModelOperation(modelOperation({ status: "completed" }))).toBe(false);
   });
 
+  it("keeps an active install visible when newer terminal history matches", () => {
+    const installed = modelRecord();
+    const activeInstall = modelOperation({ operationId: "active-install", status: "running", updatedAt: "2026-08-27T00:00:01Z" });
+    const newerTerminal = modelOperation({ operationId: "newer-terminal", status: "completed", updatedAt: "2026-08-27T00:00:02Z" });
+    const operation = findModelOperation(installed, [activeInstall, newerTerminal]);
+
+    expect(operation?.operationId).toBe("active-install");
+    expect(deriveModelAvailability(installed, operation)).toMatchObject({ state: "downloading", actions: ["cancel"] });
+
+    const managed = modelRecord({ backend: "llama_cpp", sourceId: "managed-source", endpoint: null, path: "models/model.gguf", managed: true, managedPath: "models/model.gguf" });
+    const activeImport = modelOperation({ operationId: "active-import", kind: "import", backend: "llama_cpp", sourceId: "managed-source", modelName: null, managedPath: "models/model.gguf", status: "queued", updatedAt: "2026-08-27T00:00:01Z" });
+    const newerTerminalImport = modelOperation({ operationId: "newer-terminal-import", kind: "import", backend: "llama_cpp", sourceId: "managed-source", modelName: null, managedPath: "models/model.gguf", status: "completed", updatedAt: "2026-08-27T00:00:02Z" });
+    expect(findModelOperation(managed, [activeImport, newerTerminalImport])?.operationId).toBe("active-import");
+  });
+
   it("derives installed, downloading, unavailable, and failed model actions from local evidence", () => {
     const installed = modelRecord();
     expect(deriveModelAvailability(installed)).toMatchObject({ state: "installed", actions: ["use"] });
     expect(deriveModelAvailability(installed, modelOperation({ status: "failed", message: "stale pull failure" }))).toMatchObject({ state: "installed", actions: ["use"] });
+    expect(deriveModelAvailability(installed, modelOperation({ status: "running" }))).toMatchObject({ state: "downloading", actions: ["cancel"] });
 
     const unavailable = modelRecord({ availability: "unavailable" });
     expect(deriveModelAvailability(unavailable)).toMatchObject({ state: "not_installed", actions: ["download"] });

@@ -277,15 +277,19 @@ export function findModelOperation(
   model: ModelRecord,
   operations: readonly ModelOperation[],
 ): ModelOperation | null {
+  let latestMatch: ModelOperation | null = null;
   for (let index = operations.length - 1; index >= 0; index -= 1) {
     const operation = operations[index];
     if (
       operation.modelId === model.modelId
       || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
       || (operation.kind === "import" && operation.managedPath !== null && operation.managedPath === (model.managedPath ?? model.path))
-    ) return operation;
+    ) {
+      latestMatch ??= operation;
+      if (isInstallOperation(operation) && isActiveModelOperation(operation)) return operation;
+    }
   }
-  return null;
+  return latestMatch;
 }
 
 function isInstallOperation(operation: ModelOperation): boolean {
@@ -301,13 +305,13 @@ export function deriveModelAvailability(
   model: ModelRecord,
   operation: ModelOperation | null = null,
 ): ModelAvailabilityView {
+  if (operation && isInstallOperation(operation) && isActiveModelOperation(operation)) {
+    return { state: "downloading", operation, actions: ["cancel"] };
+  }
   if (model.availability === "available") {
     const actions: ModelActionKind[] = ["use"];
     if (model.backend === "llama_cpp" && model.managed && model.managedPath !== null) actions.push("remove");
     return { state: "installed", operation, actions };
-  }
-  if (operation && isInstallOperation(operation) && isActiveModelOperation(operation)) {
-    return { state: "downloading", operation, actions: ["cancel"] };
   }
   if (operation?.status === "failed" && canRetryModelOperation(model, operation)) {
     return { state: "failed", operation, actions: ["retry"] };
