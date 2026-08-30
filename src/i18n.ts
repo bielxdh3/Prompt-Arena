@@ -93,6 +93,7 @@ const PT_BR_MESSAGES_BASE = {
   "Metrics hidden": "Métricas ocultas",
   "Cancel queued work": "Cancelar trabalho enfileirado",
   "Failure recorded": "Falha registrada",
+  "Execution failed; details withheld.": "Falha na execução; detalhes ocultos.",
   "Cancellation recorded. Queued samples were skipped; completed evidence was retained.": "Cancelamento registrado. As amostras enfileiradas foram ignoradas; as evidências concluídas foram mantidas.",
   "One or more samples failed. Other sequential competitors continued where possible.": "Uma ou mais amostras falharam. Os demais concorrentes sequenciais continuaram quando possível.",
   "Sample time is measured from Arena dispatch to terminal result. Generation metrics use authoritative runtime values; unsupported values show unavailable. Local execution remains sequential.": "O tempo da amostra é medido do despacho da Arena ao resultado final. As métricas de geração usam valores autorizados pelo runtime; valores sem suporte aparecem como indisponíveis. A execução local permanece sequencial.",
