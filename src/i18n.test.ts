@@ -49,6 +49,14 @@ describe("i18n", () => {
     expect(translateText("pt-BR", "Not in the catalog")).toBe("Not in the catalog");
   });
 
+  it("keeps critical P2 controls translated without exposing internal labels", () => {
+    expect(translateText("pt-BR", "Advanced local controls")).toBe("Controles locais avançados");
+    expect(translateText("pt-BR", "Advanced diagnostics")).toBe("Diagnóstico avançado");
+    expect(translateText("pt-BR", "Local measurement")).toBe("Medição local");
+    expect(translateText("pt-BR", "Windows system API")).toBe("API do sistema Windows");
+    expect(translateText("en", "Advanced local controls")).toBe("Advanced local controls");
+  });
+
   it("formats numbers, percentages, currencies, and durations per locale", () => {
     expect(formatLocaleNumber(1234.56, "en")).toBe("1,234.56");
     expect(formatLocaleNumber(1234.56, "pt-BR")).toBe("1.234,56");
