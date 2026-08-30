@@ -211,7 +211,6 @@ import {
   modelOperationMessage,
   modelOperationStatusLabel,
   modelPreviewCopy,
-  modelRecordMetadataLabel,
   modelRecordMetadataValue,
   modelRecordQuantizationLabel,
   modelRemovalCapabilityLabel,
@@ -1777,22 +1776,27 @@ function ModelsView() {
                   <div>
                     <h3>{model.name}</h3>
                     <p className="model-meta">
-                      {sourceLabel} · {translate(modelBackendLabel(model.backend))} · {translate(modelRecordMetadataLabel(model))} · {translate(modelRecordQuantizationLabel(model))}
-                    </p>
-                    <p className="model-meta">
-                      {model.contentHash
-                        ? `SHA-256 ${model.contentHash.slice(0, 12)}…`
-                        : model.digest ? `Digest ${model.digest.slice(0, 12)}…` : translate("Digest unavailable")}
-                      {model.managedPath ? ` · managed/${model.managedPath}` : ""}
-                      {model.modifiedAt ? ` · ${translate("updated")} ${model.modifiedAt}` : ""}
-                    </p>
-                    <p className="model-meta">
-                      {translate("Format")}: {translate(modelRecordMetadataValue(model, "format"))} · {translate("License")}: {translate(modelRecordMetadataValue(model, "license"))} · {translate("Source")}: {translate(modelRecordMetadataValue(model, "source"))} · {translate("Location")}: {translate(modelRecordMetadataValue(model, "location"))}
+                      {translate(modelRecordQuantizationLabel(model))} · {formatModelSize(model.sizeBytes)} · {translate(modelBackendLabel(model.backend))}
                     </p>
                     <div className="model-recommendation">
                       <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{translate(recommendation.label)}</span>
                       <p className="model-meta">{translate(recommendation.explanation)}</p>
                     </div>
+                    <details className="model-details">
+                      <summary>{translate("Details")}</summary>
+                      <div className="model-detail-grid">
+                        <p><strong>{translate("Source")}</strong><br />{sourceLabel} · {translate(modelBackendLabel(model.backend))}</p>
+                        <p><strong>{translate("Model ID")}</strong><br />{model.modelId}</p>
+                        <p><strong>{translate("Digest")}</strong><br />{model.digest ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Content hash")}</strong><br />{model.contentHash ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Format")}</strong><br />{translate(modelRecordMetadataValue(model, "format"))}</p>
+                        <p><strong>{translate("License")}</strong><br />{translate(modelRecordMetadataValue(model, "license"))}</p>
+                        <p><strong>{translate("Location")}</strong><br />{translate(modelRecordMetadataValue(model, "location"))}</p>
+                        <p><strong>{translate("Endpoint")}</strong><br />{model.endpoint ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Path")}</strong><br />{model.managedPath ?? model.path ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Updated")}</strong><br />{model.modifiedAt ?? translate("Not reported")}</p>
+                      </div>
+                    </details>
                     {rowOperation && (
                       <p className="model-meta">
                         {translate("Operation")} {translate(modelOperationStatusLabel(rowOperation.status).toLowerCase())} · {modelOperationProgressLabel(rowOperation)}
@@ -2011,13 +2015,22 @@ function ModelsView() {
         {hardwareState.status === "ready" && (
           <>
             <div className="hardware-grid">
-              <HardwareMetricRow label="Platform" value={hardwareState.snapshot.platform} detail="compile-time target" />
-              <HardwareMetricRow label="Logical CPUs" metric={hardwareState.snapshot.logicalCpuCount} format={formatHardwareCount} />
-              <HardwareMetricRow label="RAM" metric={hardwareState.snapshot.memoryBytes} format={formatHardwareBytes} />
-              <HardwareMetricRow label="GPU" metric={hardwareState.snapshot.gpuName} format={(value) => value} />
-              <HardwareMetricRow label="VRAM" metric={hardwareState.snapshot.vramBytes} format={formatHardwareBytes} />
+              <HardwareMetricRow label="Platform" value={hardwareState.snapshot.platform} detail="Local target" showDetail={false} />
+              <HardwareMetricRow label="Logical CPUs" metric={hardwareState.snapshot.logicalCpuCount} format={formatHardwareCount} showDetail={false} />
+              <HardwareMetricRow label="RAM" metric={hardwareState.snapshot.memoryBytes} format={formatHardwareBytes} showDetail={false} />
+              <HardwareMetricRow label="GPU" metric={hardwareState.snapshot.gpuName} format={(value) => value} showDetail={false} />
+              <HardwareMetricRow label="VRAM" metric={hardwareState.snapshot.vramBytes} format={formatHardwareBytes} showDetail={false} />
             </div>
-            <p className="field-help">{translate("Each metric reports its source and confidence. Unavailable values stay null and are never guessed.")}</p>
+            <details className="hardware-advanced">
+              <summary>{translate("Advanced diagnostics")}</summary>
+              <div className="results-facts">
+                <BoundaryRow label={translate("CPU source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.logicalCpuCount.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.logicalCpuCount.confidence))}`} />
+                <BoundaryRow label={translate("Memory source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.memoryBytes.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.memoryBytes.confidence))}`} />
+                <BoundaryRow label={translate("GPU source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.gpuName.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.gpuName.confidence))}`} />
+                <BoundaryRow label={translate("VRAM source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.vramBytes.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.vramBytes.confidence))}`} />
+              </div>
+              <p className="field-help">{translate("Unavailable values stay null and are never guessed.")}</p>
+            </details>
             <div className="recommendation-settings">
               <p className="eyebrow">{translate("Recommendation thresholds · session only")}</p>
               <p className="field-help">{translate("Recommendations compare reported model size with detected RAM. These bounds are UI state only; they are not persisted or empirical performance measurements.")}</p>
@@ -2057,17 +2070,21 @@ function HardwareMetricRow<T>({
   format,
   value,
   detail,
+  showDetail = true,
 }: {
   label: string;
   metric?: HardwareMetric<T>;
   format?: (value: T) => string;
   value?: string;
   detail?: string;
+  showDetail?: boolean;
 }) {
   const metricValue = metric && metric.status === "available" && metric.value !== null && format
     ? format(metric.value)
     : value ?? translate("Unavailable");
-  const metricDetail = detail ? translate(detail) : metric ? `${translate(metric.source)} · ${translate("confidence")} ${metric.confidence}` : translate("Not detected");
+  const metricDetail = !showDetail
+    ? translate(metricValue === translate("Unavailable") ? "Not detected" : "Local measurement")
+    : detail ? translate(detail) : metric ? `${translate(metric.source)} · ${translate("confidence")} ${metric.confidence}` : translate("Not detected");
   return (
     <div className="hardware-metric">
       <span>{translate(label)}</span>
@@ -2083,6 +2100,21 @@ function formatHardwareCount(value: number): string {
 
 function formatHardwareBytes(value: number): string {
   return formatByteCount(value);
+}
+
+function hardwareSourceLabel(source: HardwareSnapshot["logicalCpuCount"]["source"]): string {
+  if (source === "windows_kernel32") return "Windows system API";
+  if (source === "windows_dxgi") return "Windows graphics API";
+  if (source === "linux_procfs") return "Linux system files";
+  if (source === "not_detected") return "Not detected";
+  return "Standard library";
+}
+
+function hardwareConfidenceLabel(confidence: HardwareSnapshot["logicalCpuCount"]["confidence"]): string {
+  if (confidence === "high") return "High";
+  if (confidence === "medium") return "Medium";
+  if (confidence === "low") return "Low";
+  return "Unavailable";
 }
 
 function formatArenaMetric(value: number | null): string {
@@ -4407,11 +4439,14 @@ function Settings({
         </div>
       </section>
 
-      <StorageRetentionControls desktop={desktop} />
-
-      <DiagnosticsSurface connection={connection} desktop={desktop} />
-
-      <ByokPanel desktop={desktop} />
+      <details className="advanced-settings">
+        <summary>{translate("Advanced local controls")}</summary>
+        <div className="advanced-settings-content">
+          <StorageRetentionControls desktop={desktop} />
+          <DiagnosticsSurface connection={connection} desktop={desktop} />
+          <ByokPanel desktop={desktop} />
+        </div>
+      </details>
     </div>
   );
 }
