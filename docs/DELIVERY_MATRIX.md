@@ -17,7 +17,7 @@ do not change the reviewed source implementation.
 `COMPLETE` means implementation and the cited automated evidence are present;
 it does not mean native or human acceptance. `PENDING_HUMAN_QA` means the
 installed Tauri/WebView or full application runtime gate was not performed.
-`PENDING_EXACT_HEAD_REBUILD` means recorded package evidence was built from an
+`PARTIAL_IMPLEMENTATION` means recorded package evidence was built from an
 earlier source HEAD and must be rebuilt at the reviewed source HEAD before
 current package `COMPLETE` can be claimed.
 Unavailable Docker is `BLOCKED_EXTERNAL_RUNTIME`; bounded local Ollama
@@ -65,7 +65,7 @@ Arena live-runtime, and human review remain `PENDING_HUMAN_QA`.
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Existing artifact, bundle, bundled-worker, tracked sidecar, and checksum evidence below were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`; rebuild at reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657` is required. | Prior checksum verification, clean install, executable start, restart, and silent uninstall passed; current exact-head packaging remains pending and packaging smoke is not visual or human QA | PENDING_EXACT_HEAD_REBUILD |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Existing artifact, bundle, bundled-worker, tracked sidecar, and checksum evidence below were built at prior source implementation HEAD `5c5de64d749674a01c31a722945c90357dfb0c2d`; rebuild at reviewed HEAD `8588a2dd66e386082e153c933b1b55891ac42657` is required. | Prior checksum verification, clean install, executable start, restart, and silent uninstall passed; current exact-head packaging remains pending and packaging smoke is not visual or human QA | PARTIAL_IMPLEMENTATION |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
