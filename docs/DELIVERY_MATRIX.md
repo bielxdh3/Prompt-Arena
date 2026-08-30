@@ -1,10 +1,13 @@
 # Product completion evidence matrix
 
 Target: `completion/windows-qa-live-telemetry-i18n` at exact reviewed HEAD
-`bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`). The reviewed remediation
-chain is `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
-`1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`), and the current
-`bcf706e` (`bcf706e`).
+`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`), the source HEAD after
+`75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
+`1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
+`bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and documentation commit
+`edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d` (`edb7b2d`). This documentation-only
+update records evidence for that source HEAD; it does not change the source
+target.
 
 `COMPLETE` means implementation and the cited automated evidence are present;
 it does not mean native or human acceptance. `PENDING_HUMAN_QA` means the
@@ -18,6 +21,7 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD packaging is
 | --- | --- | --- | --- | --- |
 | P0 async execution | `src-tauri/src/commands.rs`: `execute_run_once` awaits `spawn_blocking_execution`; the blocking worker performs one bounded invocation and persistence. | Focused Rust command tests cover delegation to a blocking thread and failure propagation; `src/arena-runner.test.ts` covers invoke rejection followed by the next sample. | Installed Tauri run and responsiveness check | COMPLETE |
 | P0 blind response safety | `src/results-ui.ts` bounds blind response panes at `BLIND_RESPONSE_MAX_HEIGHT_PX`, validates local 1–5 score state, and suppresses identity/telemetry until lock; `src/App.tsx` renders untrusted response text only. | `src/results-ui.test.ts` covers score bounds, hidden-before-lock/revealed-after-lock state, and the 320 px pane bound. | Native blind run, keyboard scoring, lock/reveal and reopen | COMPLETE |
+| P0 blind telemetry error safety | `visibleArenaTelemetryError` in `src/arena-runner.ts` replaces blind sample/Arena errors with the identity-free localized-safe message; `src/App.tsx` applies it to both live error surfaces while non-blind diagnostics retain bounded sanitized detail. | `src/arena-runner.test.ts` covers identity-bearing blind genericization and non-blind detail retention. | Installed blind failure run and reveal/diagnostic boundary | COMPLETE |
 | P1 model availability/actions | `src/model-library.ts` provides typed availability/action derivation, operation matching, bounded messages, and local request builders; `src/App.tsx` exposes primary Use/Download/Cancel/Retry/Remove actions from persisted state. | `src/model-library.test.ts` covers availability, operation matching, action requests, local path safety, duplicate evidence, and quantization distinction. | Real local discovery/operation smoke in Tauri | COMPLETE |
 | P1 honest local discovery boundary | `src-tauri/src/model_library.rs`, `src-tauri/src/commands.rs`, `src/model-library.ts`, and `src/App.tsx` keep discovery local/explicit; browser preview invents no installed rows; managed GGUF remains bounded and app-owned. | Rust model-library/adapter/path-safety tests and the frontend model-library tests. | Ollama endpoint and managed-GGUF native smoke | COMPLETE |
 | P2 contrast and interaction | `src/styles.css` raises muted/subtle text contrast, gives controls stable affordances, visible focus, hover/active/disabled states, and keeps the active sidebar free of a persistent border/bar. | `npm test`, `npm run typecheck`, and `npm run build` pass. | Installed visual contrast, focus, keyboard, and resize review | COMPLETE |
@@ -53,7 +57,7 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD packaging is
 
 ## Automated validation recorded for the reviewed source HEAD
 
-- `npm test` — passed: 17 files, 99 tests.
+- `npm test` — passed: 17 files, 100 tests, including blind telemetry error genericization.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed for
@@ -79,6 +83,19 @@ Canonical BL4 provenance for this isolated worktree is control-plane metadata:
 account `biel4`, role Executor, App Server/headless transport,
 `workspace-write`, Windows elevated readiness `ready`, and approval policy
 `never`. Remote CI is unconfirmed. No visual audit or human QA is claimed.
+
+## Security and publication review
+
+- `COMPLETE`: the reviewed source fix routes blind live-telemetry sample and
+  Arena-level errors through `visibleArenaTelemetryError` before rendering;
+  blind identity/score/reveal protections, local model path safety, bounded
+  sanitized errors, async worker isolation, and no-secrets source/test checks
+  remain covered. No new confirmed source leak was found in the targeted review.
+- Publication verdict: `Create a sanitized public copy`. Reachable internal
+  evidence/history includes local usernames, absolute paths, and operational
+  provenance. This internal evidence remains unsanitized here; any public copy
+  must redact those details. No publication, push, tag, release, or deploy
+  occurred.
 
 ## Packaging and historical provenance
 
