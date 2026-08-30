@@ -1,36 +1,64 @@
 # Windows native/human QA checklist
 
-Target: exact reviewed commit
-`57f02b35abacce6a0a1ed64a5f952d29a710614a` (`57f02b3`). Overall status:
-`PENDING_HUMAN_QA`. Automated NSIS lifecycle and temporary installed-tree
-sidecar proof passed, but no item below is complete. MSI is `BLOCKED LOCALLY`,
-Linux is `CI PENDING`, and remote CI is unconfirmed.
+Target: exact reviewed HEAD
+`bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`) after
+`75bf8266a7af257a028724365f627a31aa28af37` and
+`1b7c7ce2898881375bfdd61af3c782ed2d7359d2`. Overall native status:
+`PENDING_HUMAN_QA`. No installed visual session, browser/component harness, or
+local Ollama endpoint was available for this review. Automated tests are not
+human UI evidence.
 
-For each item record `PASS`/`FAIL`, action, expected result, evidence path, and
-the applicable marker. Automated tests are not human UI evidence.
+Status rules: `PASS` is limited to implementation/automated evidence;
+`PENDING` means the native or human gate remains; `BLOCKED` means the required
+external runtime or local packaging tool was unavailable. Record action,
+expected result, evidence path, and the applicable marker for every native
+check.
+
+## Evidence-backed stability and product rows
+
+| Area | Automated/implementation result | Native/human result | Evidence or marker |
+| --- | --- | --- | --- |
+| Core stability | PASS — async `execute_run_once` delegates blocking work; Arena rejection/failure/cancel tests pass. | PENDING — run and resize installed Tauri app. | `src-tauri/src/commands.rs`, `src/arena-runner.test.ts` |
+| Score continuity | PASS — blind score state is local, bounded to 1–5, and hidden until immutable lock. | PENDING — score with keyboard, lock/reveal, reopen. | `src/results-ui.ts`, `src/results-ui.test.ts` |
+| Model actions | PASS — typed availability and primary local actions are covered by model-library tests. | PENDING — discover, download/import, cancel/retry/use/remove where runtime permits. | `src/model-library.ts`, `src/model-library.test.ts` |
+| Primary UI | PASS — shell sizing, active sidebar, control affordances, comparison density, telemetry layout, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
+| Accessibility | PASS — semantic buttons, native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css` |
+| i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
+| Packaging | PASS — historical 57f02b3 NSIS lifecycle evidence is preserved only as historical evidence. | PENDING — rebuild exact-HEAD NSIS and run automated/native package gates. | `PENDING_AUTOMATED_NATIVE_QA` |
 
 ## Application review
 
-- [ ] Launch and resize the installed release. Expected: one Prompt Arena
-  window, no console window, no unwanted horizontal overflow, usable local
-  scrollbars, and compact sidebar/settings/provider/model layouts. Markers:
-  `WINDOWS_QA_FINDING_UNWANTED_CONSOLE_WINDOW_ON_LAUNCH`,
-  `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`,
-  `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS`.
-- [ ] Switch English ↔ `Português (Brasil)` and restart. Expected: shipped UI
-  strings and locale-formatted numbers/dates change cleanly, identifiers and
-  user content remain unchanged, PT-BR persists, and English remains clean.
-- [ ] Run a small safe Arena if a local runtime already exists. Expected: live
-  progress, timing, totals, available token metrics, statuses, blind hiding,
-  failure isolation, cancellation, and persisted reopen behavior are accurate.
+| Status | Action and expected result | Evidence path / marker |
+| --- | --- | --- |
+| PENDING_HUMAN_QA | Launch and resize the installed release: one Prompt Arena window, no console, bounded shell, no unwanted shell/sidebar/content horizontal scroll, styled scrollbars, and usable sidebar/settings/provider/model layouts. | `WINDOWS_QA_FINDING_UNWANTED_CONSOLE_WINDOW_ON_LAUNCH`; `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`; `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
+| PENDING_HUMAN_QA | Verify active sidebar selection has no persistent border or left bar; focus remains visible and keyboard navigation is coherent. | `src/styles.css` active-nav/focus rules |
+| PENDING_HUMAN_QA | Verify contrast, hover/active/disabled/loading affordances, OS reduced motion, and the Settings reduced-motion preference. | `src/styles.css`; no visual audit claimed |
+| PENDING_HUMAN_QA | In Models, verify primary installed/use actions, progressive Details metadata, hardware Platform/CPU/RAM/GPU/VRAM overview, and Advanced source/confidence diagnostics. | `src/App.tsx`; no installed visual session available |
+| PENDING_HUMAN_QA | In Settings, open and keyboard-navigate Advanced local controls; verify retention, diagnostics, and BYOK panels remain semantically reachable. | Native `<details>`/`<summary>` in `src/App.tsx` |
+| PENDING_HUMAN_QA | In Arena, verify horizontal desktop competitor comparison, narrow fallback, blind identity/telemetry suppression, and response-pane scrolling. | `src/App.tsx`, `src/styles.css`, `src/results-ui.ts` |
+| PENDING_HUMAN_QA | Run a small safe Arena if a local runtime exists. Verify progress, timing, totals, available token metrics, statuses, failure isolation, queued cancellation, persistence, reopen, and exports. | Live runtime unavailable in this review; no result is claimed |
+| PENDING_HUMAN_QA | Switch English ↔ `Português (Brasil)` and restart. Verify translated shipped strings and locale-formatted values change cleanly while identifiers and user content remain unchanged. | `src/i18n.ts`; restart/native gate pending |
 
-## Automated package evidence
+## External runtime and packaging gates
 
-Automated evidence already passed for the exact reviewed commit: NSIS build with
-`bundle.useLocalToolsDir=true`, checksum verification, clean install, launch,
-restart, silent uninstall, and installed-tree presence/disappearance of both
-executables. This does not prove visual or native-human acceptance.
+- `BLOCKED_EXTERNAL_RUNTIME`: no local Ollama listener was available for
+  discovery/start or a real Arena run; no Docker runtime was available for the
+  Docker-required boundary. These are not implementation failures.
+- `PENDING_AUTOMATED_NATIVE_QA`: build a new NSIS package from exact HEAD
+  `bcf706e` before recording fresh checksum/install/launch/restart/uninstall
+  evidence. The 57f02b3 artifact is not current-head output.
+- `BLOCKED LOCALLY`: Windows MSI remains blocked by the existing WiX
+  `light.exe` failure.
+- `CI PENDING`: Linux deb/AppImage still requires the Linux runner.
+- Remote CI is unconfirmed.
 
-The installer is `package-artifacts/prompt-arena-0.1.0-windows-nsis.exe`;
-checksum and lifecycle evidence are recorded in `checksums-sha256.txt` and
-`package-verification.txt`. Do not mark any human item complete from automation.
+## Historical package evidence
+
+At historical commit `57f02b3`, NSIS automation passed for
+`package-artifacts/prompt-arena-0.1.0-windows-nsis.exe` (3,744,774 bytes,
+SHA-256
+`755BC8C48FD8912A4C8E07BB4C8ED11938D5022F63DBE800800BE69CCD05991C`), including
+checksum verification, clean install, launch, restart, silent uninstall, and
+temporary installed-tree proof for both executables. The sidecar and installed
+hashes remain recorded in `docs/DELIVERY_MATRIX.md`; none of that evidence is
+claimed for the new reviewed HEAD.
