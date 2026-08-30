@@ -1,12 +1,15 @@
 # Windows native/human QA checklist
 
-Target: exact reviewed HEAD
-`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`) after
+Reviewed source HEAD:
+`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`). Current checkout HEAD
+is the documentation-only commit
+`99485dec0f3f096b62fbe665c0085d8e7786579f` (`99485de`). The source HEAD is after
 `75bf8266a7af257a028724365f627a31aa28af37`,
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2`,
 `bcf706e5c32568ba43ac24f7673074c6d230098`, and documentation commit
-`edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d`. This checklist records the source
-HEAD under review; the documentation-only update does not change that target.
+`edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d` (`edb7b2d`). This checklist records the
+source HEAD under review; the documentation-only update does not change that
+target.
 Overall native status:
 `PENDING_HUMAN_QA`. No installed visual session, browser/component harness, or
 local Ollama endpoint was available for this review. Automated tests are not
@@ -29,7 +32,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, comparison density, telemetry layout, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 NSIS lifecycle evidence is preserved only as historical evidence. | PENDING — rebuild exact source HEAD 838d952 NSIS and run automated/native package gates. | `PENDING_AUTOMATED_NATIVE_QA` |
+| Packaging | PASS — historical 57f02b3 NSIS lifecycle evidence is preserved only as historical evidence. | PENDING_AUTOMATED_NATIVE_QA — NSIS was attempted twice at checkout HEAD 99485de with the local-tools override; Rust compilation failed before bundling with Windows STATUS_IN_PAGE_ERROR (0xc0000006). No package preparation, verification, or install/launch/restart/uninstall smoke ran, and no current artifact evidence exists. | `PENDING_AUTOMATED_NATIVE_QA` |
 
 ## Application review
 
@@ -48,6 +51,7 @@ check.
 
 ## Security and publication status
 
+- Phase verdict: `Approved with reservations`.
 - `COMPLETE`: `visibleArenaTelemetryError` now genericizes blind sample and
   Arena-level telemetry errors before rendering. Blind identity/score/reveal,
   local model path safety, bounded sanitized errors, async worker isolation, and
@@ -66,6 +70,11 @@ check.
 - `npm run build` — passed; only the existing large-chunk warning was emitted.
 - `git diff --check` — passed.
 
+The exact-source-HEAD NSIS command was attempted twice with
+`npm run tauri:build -- --bundles nsis --config
+'{"bundle":{"useLocalToolsDir":true}}'`; both attempts failed before bundling
+with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
+
 These checks do not prove visual, native control, live-runtime, or human
 accessibility acceptance. Remote CI is unconfirmed.
 
@@ -74,9 +83,11 @@ accessibility acceptance. Remote CI is unconfirmed.
 - `BLOCKED_EXTERNAL_RUNTIME`: no local Ollama listener was available for
   discovery/start or a real Arena run; no Docker runtime was available for the
   Docker-required boundary. These are not implementation failures.
-- `PENDING_AUTOMATED_NATIVE_QA`: build a new NSIS package from exact source HEAD
-  `838d952` before recording fresh checksum/install/launch/restart/uninstall
-  evidence. The 57f02b3 artifact is not current-head output.
+- `PENDING_AUTOMATED_NATIVE_QA`: resolve the Rust `STATUS_IN_PAGE_ERROR`
+  (`0xc0000006`) blocker, then build a new NSIS package from exact source HEAD
+  `838d952` and run package preparation, verification, and install/launch/
+  restart/uninstall smoke. No current artifact/checksum/sidecar evidence exists;
+  the 57f02b3 artifact is not current-head output.
 - `BLOCKED LOCALLY`: Windows MSI remains blocked by the existing WiX
   `light.exe` failure.
 - `CI PENDING`: Linux deb/AppImage still requires the Linux runner.

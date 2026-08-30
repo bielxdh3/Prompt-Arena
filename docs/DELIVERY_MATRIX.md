@@ -1,12 +1,14 @@
 # Product completion evidence matrix
 
-Target: `completion/windows-qa-live-telemetry-i18n` at exact reviewed HEAD
-`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`), the source HEAD after
+Reviewed source HEAD on `completion/windows-qa-live-telemetry-i18n`:
+`838d952b2c352404eabdf082ce37847f5f3a1cb4` (`838d952`). Current checkout HEAD
+is the documentation-only commit
+`99485dec0f3f096b62fbe665c0085d8e7786579f` (`99485de`). The source HEAD is after
 `75bf8266a7af257a028724365f627a31aa28af37` (`75bf826`),
 `1b7c7ce2898881375bfdd61af3c782ed2d7359d2` (`1b7c7ce`),
 `bcf706e5c32568ba43ac24f7673074c6d230098` (`bcf706e`), and documentation commit
 `edb7b2d1ca1b24c000d101f3b74e7e42a5a4f14d` (`edb7b2d`). This documentation-only
-update records evidence for that source HEAD; it does not change the source
+update records evidence for source HEAD `838d952`; it does not change the source
 target.
 
 `COMPLETE` means implementation and the cited automated evidence are present;
@@ -51,13 +53,14 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD packaging is
 | Advanced rankings/regression/tournament/calibration | `src/advanced-arena.ts`, `src/advanced-arena-ui.ts`, `src/advanced-arena-view.tsx` | Advanced Arena UI/view tests | Tauri workflow and reopen review | PENDING_HUMAN_QA |
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
-| Windows NSIS at exact reviewed HEAD | Tauri bundle/workflow | Fresh exact-HEAD package has not been built for this batch | Fresh install/launch/restart/uninstall and visual review required | PENDING_AUTOMATED_NATIVE_QA |
+| Windows NSIS at exact reviewed source HEAD | Tauri bundle/workflow | Attempted twice at checkout HEAD `99485de` with the local-tools override; Rust compilation failed before bundling with Windows `STATUS_IN_PAGE_ERROR` (`0xc0000006`). `package:artifacts`, `verify:package`, and install/launch/restart/uninstall smoke were not run; no current artifact/checksum/sidecar evidence exists. | Fresh package and native smoke remain blocked; no visual/human QA is claimed | PENDING_AUTOMATED_NATIVE_QA |
 | Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
 | Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
 
-## Automated validation recorded for the reviewed source HEAD
+## Automated validation recorded for the reviewed source HEAD and current docs checkout
 
-- `npm test` — passed: 17 files, 100 tests, including blind telemetry error genericization.
+- At checkout `99485de` (source unchanged from `838d952`), `npm test` — passed:
+  17 files, 100 tests, including blind telemetry error genericization.
 - `npm run typecheck` — passed.
 - `npm run build` — passed; Vite emitted only the existing large-chunk warning.
 - `cargo test --manifest-path src-tauri/Cargo.toml --all-targets` — passed for
@@ -66,6 +69,11 @@ Ollama/Docker is `BLOCKED_EXTERNAL_RUNTIME`. Fresh exact-HEAD packaging is
   duplicates, and unavailable sources where applicable.
 - `git diff --check` — passed; line-ending warnings were emitted by Git, with
   no whitespace errors.
+
+The exact-source-HEAD NSIS command was attempted twice with
+`npm run tauri:build -- --bundles nsis --config
+'{"bundle":{"useLocalToolsDir":true}}'`; both attempts failed before bundling
+with Rust `STATUS_IN_PAGE_ERROR` (`0xc0000006`).
 
 These checks do not prove an installed Windows visual session, native control
 behavior, a live Ollama endpoint, Docker execution, or human accessibility
@@ -86,6 +94,7 @@ account `biel4`, role Executor, App Server/headless transport,
 
 ## Security and publication review
 
+- Phase verdict: `Approved with reservations`.
 - `COMPLETE`: the reviewed source fix routes blind live-telemetry sample and
   Arena-level errors through `visibleArenaTelemetryError` before rendering;
   blind identity/score/reveal protections, local model path safety, bounded
