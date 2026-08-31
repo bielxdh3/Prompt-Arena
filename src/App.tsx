@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -175,6 +175,7 @@ import {
 import {
   ACCENT_OPTIONS,
   APPEARANCE_STORAGE_KEY,
+  CONTRAST_OPTIONS,
   DEFAULT_APPEARANCE,
   MAX_APPEARANCE_PAYLOAD_BYTES,
   RADIUS_OPTIONS,
@@ -228,6 +229,7 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
+import { AccessibleListbox, type AccessibleListboxOption } from "./accessible-listbox";
 import {
   formatLocaleDate,
   formatLocaleDuration,
@@ -237,7 +239,6 @@ import {
   translate,
   useI18n,
 } from "./i18n";
-import { listboxNavigation } from "./listbox-navigation";
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -323,6 +324,7 @@ function AppShell() {
       data-accent={appearance.accentId}
       data-radius={appearance.radiusId}
       data-surface={appearance.surfaceId}
+      data-contrast={appearance.contrastId}
       data-reduced-motion={appearance.reducedMotion ? "true" : "false"}
     >
       <a className="skip-link" href="#main-content">
@@ -372,7 +374,7 @@ function AppShell() {
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
-            <span className="version-chip">v0.1.0</span>
+            <span className="version-chip">v0.1.2</span>
           </div>
         </header>
 
@@ -389,21 +391,23 @@ function AppShell() {
         )}
 
         <main className="main-content" id="main-content">
-          {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
-          {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
-          {activeView === "advanced-arena" && <AdvancedArenaView />}
-          {activeView === "benchmarks" && <BenchmarksView />}
-          {activeView === "models" && <ModelsView />}
-          {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
-          {activeView === "settings" && (
-            <Settings
-              appearance={appearance}
-              desktop={isDesktopEnvironment()}
-              connection={connection}
-              onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
-              onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
-            />
-          )}
+          <div key={activeView} className="page-transition">
+            {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
+            {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
+            {activeView === "advanced-arena" && <AdvancedArenaView />}
+            {activeView === "benchmarks" && <BenchmarksView />}
+            {activeView === "models" && <ModelsView />}
+            {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
+            {activeView === "settings" && (
+              <Settings
+                appearance={appearance}
+                desktop={isDesktopEnvironment()}
+                connection={connection}
+                onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
+                onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
+              />
+            )}
+          </div>
         </main>
       </div>
     </div>
@@ -1036,15 +1040,22 @@ function BenchmarksView() {
             </div>
           </fieldset>
           <fieldset className="form-section">
-            <legend>{translate("Rubric")}</legend>
+            <legend>{translate("Evaluation criteria")}</legend>
+            <p className="field-help form-section-help">{translate("Define the criteria used to evaluate and score responses.")}</p>
             <div className="form-grid form-grid-three">
-              <FormInput id="rubric-id" label="Rubric ID" required error={draftValidation?.errors.rubricId} value={form.rubricId} onChange={(value) => updateField("rubricId", value)} />
-              <FormInput id="rubric-name" label="Rubric name" required error={draftValidation?.errors.rubricName} value={form.rubricName} onChange={(value) => updateField("rubricName", value)} />
-              <FormInput id="criterion-id" label="Criterion ID" required error={draftValidation?.errors.criterionId} value={form.criterionId} onChange={(value) => updateField("criterionId", value)} />
-              <FormInput id="criterion-name" label="Criterion name" required error={draftValidation?.errors.criterionName} value={form.criterionName} onChange={(value) => updateField("criterionName", value)} />
+              <FormInput id="rubric-name" label="Evaluation name" required error={draftValidation?.errors.rubricName} value={form.rubricName} onChange={(value) => updateField("rubricName", value)} />
+              <FormInput id="criterion-name" label="Criterion" required error={draftValidation?.errors.criterionName} value={form.criterionName} onChange={(value) => updateField("criterionName", value)} />
               <FormInput id="criterion-weight" label="Criterion weight" type="number" min="0.000001" step="any" required error={draftValidation?.errors.criterionWeight} value={form.criterionWeight} onChange={(value) => updateField("criterionWeight", value)} />
               <FormTextArea className="form-span-three" id="criterion-description" label="Criterion description (optional)" value={form.criterionDescription} onChange={(value) => updateField("criterionDescription", value)} />
             </div>
+            <details className="criteria-advanced" open={Boolean(draftValidation?.errors.rubricId || draftValidation?.errors.criterionId)}>
+              <summary>{translate("Advanced IDs")}</summary>
+              <p className="field-help">{translate("These IDs preserve compatibility with stored benchmark data.")}</p>
+              <div className="form-grid form-grid-two">
+                <FormInput id="rubric-id" label="Rubric ID" required error={draftValidation?.errors.rubricId} value={form.rubricId} onChange={(value) => updateField("rubricId", value)} />
+                <FormInput id="criterion-id" label="Criterion ID" required error={draftValidation?.errors.criterionId} value={form.criterionId} onChange={(value) => updateField("criterionId", value)} />
+              </div>
+            </details>
           </fieldset>
           <div className="editor-actions">
             {draftActionMessage && <p className="form-feedback form-feedback-error draft-action-feedback" role="alert">{draftActionMessage}</p>}
@@ -1941,25 +1952,23 @@ function ModelsView() {
           <div className="profile-form form-section">
             <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
-            <label className="advanced-field" htmlFor="profile-discovered-model">
-              <span className="field-label">{translate("Discovered local model (optional)")}</span>
-              <select
-                className="font-select"
-                id="profile-discovered-model"
-                value={selectedProfileModelId}
-                onChange={(event) => {
-                  const modelId = event.currentTarget.value;
-                  setSelectedProfileModelId(modelId);
-                  const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
-                  if (model) updateField("model", model.name);
-                }}
-              >
-                <option value="">{translate("Manual Ollama model")}</option>
-                {modelState.status === "ready" && modelState.catalog.models.map((model) => (
-                <option key={model.modelId} value={model.modelId}>{model.name} · {translate(modelBackendLabel(model.backend))} · {translate(modelRecordQuantizationLabel(model))}</option>
-                ))}
-              </select>
-            </label>
+            <AccessibleListbox
+              id="profile-discovered-model"
+              className="advanced-field"
+              label={translate("Discovered local model (optional)")}
+              value={selectedProfileModelId}
+              placeholder={translate("Manual Ollama model")}
+              options={modelState.status === "ready" ? modelState.catalog.models.map((model) => ({
+                value: model.modelId,
+                label: model.name,
+                detail: `${translate(modelBackendLabel(model.backend))} · ${translate(modelRecordQuantizationLabel(model))}`,
+              })) : []}
+              onChange={(modelId) => {
+                setSelectedProfileModelId(modelId);
+                const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
+                if (model) updateField("model", model.name);
+              }}
+            />
             <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
             <p className="field-help">
               {selectedProfileModel
@@ -2809,14 +2818,17 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
             </div>
             <div className="arena-selection-grid">
                <ArenaSelect id="arena-version" label={translate("Published benchmark version")} value={selectedVersionId} options={versionOptions(records.versions)} placeholder={translate("Select an existing version")} disabled={busy} onChange={setSelectedVersionId} />
-               <ArenaSelect custom id="arena-task" label={translate("Task")} value={selectedTaskId} options={taskSelectionOptions} placeholder={translate("Select a task")} disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
-               <ArenaSelect custom id="arena-case" label={translate("Case")} value={selectedCaseId} options={caseSelectionOptions} placeholder={translate("Select a case")} disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
-              <label className="arena-select-control" htmlFor="arena-repetitions">
-                <span className="field-label">{translate("Repetitions")}</span>
-                <select className="font-select" id="arena-repetitions" value={repetitions} disabled={busy} onChange={(event) => setRepetitions(Number(event.currentTarget.value))}>
-                  {ARENA_REPETITION_OPTIONS.map((value) => <option key={value} value={value}>{value} {translate(value === 1 ? "sample" : "samples per competitor")}</option>)}
-                </select>
-              </label>
+               <ArenaSelect id="arena-task" label={translate("Task")} value={selectedTaskId} options={taskSelectionOptions} placeholder={translate("Select a task")} disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
+               <ArenaSelect id="arena-case" label={translate("Case")} value={selectedCaseId} options={caseSelectionOptions} placeholder={translate("Select a case")} disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
+              <AccessibleListbox
+                id="arena-repetitions"
+                label={translate("Repetitions")}
+                value={String(repetitions)}
+                placeholder={translate("Select repetitions")}
+                options={ARENA_REPETITION_OPTIONS.map((value) => ({ value: String(value), label: String(value), detail: translate(value === 1 ? "sample" : "samples per competitor") }))}
+                disabled={busy}
+                onChange={(value) => setRepetitions(Number(value))}
+              />
               <label className="arena-select-control arena-blind-toggle">
                 <span className="field-label">{translate("Evaluation visibility")}</span>
                 <span className="field-help"><input type="checkbox" checked={blindExecution} disabled={busy} onChange={(event) => setBlindExecution(event.currentTarget.checked)} /> {translate("Blind execution labels and metrics")}</span>
@@ -3036,12 +3048,17 @@ const LegacyBlindResponseCard = memo(function LegacyBlindResponseCard({
     <article className="blind-response-card">
       <p className="eyebrow">{card.label}</p>
       <div className="arena-response-text" tabIndex={0}>{card.text}</div>
-      <label className="field-label" htmlFor={`score-${card.token}`}>
-        {translate("Overall score (1–5)")}
-        <select className="font-select" id={`score-${card.token}`} value={score} disabled={disabled} onChange={(event) => onScore(card.executionKey, event.currentTarget.value)}>
-          {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}
-        </select>
-      </label>
+      <div className="blind-score-control">
+        <AccessibleListbox
+          id={`score-${card.token}`}
+          label={translate("Overall score (1–5)")}
+          value={String(score)}
+          placeholder={translate("Choose a score")}
+          options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: String(value) }))}
+          disabled={disabled}
+          onChange={(value) => onScore(card.executionKey, value)}
+        />
+      </div>
     </article>
   );
 });
@@ -3136,169 +3153,17 @@ function ArenaSelect({
   options,
   placeholder,
   disabled,
-  custom = false,
   onChange,
 }: {
   id: string;
   label: string;
   value: string;
-  options: readonly { value: string; label: string; detail: string }[];
-  placeholder: string;
-  disabled: boolean;
-  custom?: boolean;
-  onChange: (value: string) => void;
-}) {
-  if (custom) {
-    return <ArenaListbox id={id} label={label} value={value} options={options} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
-  }
-
-  return (
-    <label className="arena-select-control" htmlFor={id}>
-      <span className="field-label">{translate(label)}</span>
-      <select className="font-select" id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.currentTarget.value)}>
-        <option value="">{translate(placeholder)}</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label} — {option.detail}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function ArenaListbox({
-  id,
-  label,
-  value,
-  options,
-  placeholder,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  options: readonly { value: string; label: string; detail: string }[];
+  options: readonly AccessibleListboxOption[];
   placeholder: string;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLLIElement | null>>([]);
-  const [open, setOpen] = useState(false);
-  const selectedIndex = options.findIndex((option) => option.value === value);
-  const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
-  const isDisabled = disabled || options.length === 0;
-  const labelId = `${id}-label`;
-  const valueId = `${id}-value`;
-  const buttonId = `${id}-button`;
-  const listboxId = `${id}-options`;
-
-  useEffect(() => {
-    setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
-  }, [options.length, selectedIndex]);
-
-  useEffect(() => {
-    if (open) optionRefs.current[activeIndex]?.focus();
-  }, [activeIndex, open]);
-
-  useEffect(() => {
-    if (isDisabled) setOpen(false);
-  }, [isDisabled]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", handleOutsidePointer);
-    return () => document.removeEventListener("pointerdown", handleOutsidePointer);
-  }, [open]);
-
-  function closeAndFocusTrigger() {
-    setOpen(false);
-    triggerRef.current?.focus();
-  }
-
-  function selectOption(index: number) {
-    const option = options[index];
-    if (!option) return;
-    onChange(option.value);
-    closeAndFocusTrigger();
-  }
-
-  function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
-    const transition = listboxNavigation({ key: event.key, currentIndex: activeIndex, optionCount: options.length, open: false, disabled: isDisabled });
-    if (transition.action === "none") return;
-    event.preventDefault();
-    setActiveIndex(transition.index);
-    setOpen(true);
-  }
-
-  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLLIElement>) {
-    const index = Number(event.currentTarget.dataset.index);
-    const transition = listboxNavigation({ key: event.key, currentIndex: index, optionCount: options.length, open: true, disabled: isDisabled });
-    if (transition.action === "none") return;
-    event.preventDefault();
-    if (transition.action === "move") setActiveIndex(transition.index);
-    if (transition.action === "select") selectOption(transition.index);
-    if (transition.action === "close") closeAndFocusTrigger();
-  }
-
-  const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : undefined;
-  return (
-    <div className="arena-select-control arena-custom-listbox" ref={rootRef}>
-      <span className="field-label" id={labelId}>{translate(label)}</span>
-      <button
-        className="arena-listbox-trigger"
-        id={buttonId}
-        ref={triggerRef}
-        type="button"
-        disabled={isDisabled}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={listboxId}
-        aria-labelledby={`${labelId} ${valueId}`}
-        onClick={() => {
-          if (open) closeAndFocusTrigger();
-          else {
-            setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
-            setOpen(true);
-          }
-        }}
-        onKeyDown={handleTriggerKeyDown}
-      >
-        <span className="arena-listbox-value" id={valueId}>
-          <strong>{selectedOption?.label ?? translate(placeholder)}</strong>
-          {selectedOption && <small>{selectedOption.detail}</small>}
-        </span>
-        <span aria-hidden="true">⌄</span>
-      </button>
-      {open && (
-        <ul className="arena-listbox-menu" id={listboxId} role="listbox" aria-labelledby={labelId}>
-          {options.map((option, index) => (
-            <li
-              className={`arena-listbox-option ${index === selectedIndex ? "is-selected" : ""}`}
-              data-index={index}
-              id={`${listboxId}-${index}`}
-              key={option.value}
-              ref={(element) => { optionRefs.current[index] = element; }}
-              role="option"
-              aria-selected={index === selectedIndex}
-              tabIndex={index === activeIndex ? 0 : -1}
-              onClick={() => selectOption(index)}
-              onKeyDown={handleOptionKeyDown}
-            >
-              <strong>{option.label}</strong>
-              <small>{option.detail}</small>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
 }
 
 function ArenaExecutionResult({
@@ -3913,13 +3778,16 @@ const BlindResponsePane = memo(function BlindResponsePane({
       >
         {response.text}
       </div>
-      <label className="blind-score-control">
-        <span>{translate("Overall score")}</span>
-        <select value={score ?? ""} onChange={(event) => onScore(response.token, event.currentTarget.value)}>
-          <option value="">{translate("Choose 1–5")}</option>
-          {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}/5</option>)}
-        </select>
-      </label>
+      <div className="blind-score-control">
+        <AccessibleListbox
+          id={`blind-score-${response.token}`}
+          label={translate("Overall score")}
+          value={score === null ? "" : String(score)}
+          placeholder={translate("Choose 1–5")}
+          options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: `${value}/5` }))}
+          onChange={(value) => onScore(response.token, value)}
+        />
+      </div>
     </article>
   );
 });
@@ -4097,15 +3965,19 @@ function BlindEvaluationPanel({
               const current = state.preparation.responses.find((response) => response.token === token);
               const usedElsewhere = new Set(state.rankingTokens?.filter((_, position) => position !== index));
               return (
-                <label className="blind-score-control" key={`${token}-${index}`}>
-                   <span>{translate("Rank")} {index + 1}</span>
-                  <select value={token} onChange={(event) => setRankingToken(index, event.target.value)}>
-                    {state.preparation.responses
+                <div className="blind-score-control" key={`${token}-${index}`}>
+                  <AccessibleListbox
+                    id={`blind-rank-${index}`}
+                    label={`${translate("Rank")} ${index + 1}`}
+                    value={token}
+                    placeholder={translate("Choose a response")}
+                    options={state.preparation.responses
                       .filter((response) => response.token === token || !usedElsewhere.has(response.token))
-                      .map((response) => <option key={response.token} value={response.token}>{response.label}</option>)}
-                  </select>
+                      .map((response) => ({ value: response.token, label: response.label }))}
+                    onChange={(value) => setRankingToken(index, value)}
+                  />
                   <span className="sr-only">{current?.label}</span>
-                </label>
+                </div>
               );
             })}
           </div>
@@ -4448,9 +4320,6 @@ function Settings({
       <section className="panel page-intro">
         <p className="eyebrow">{translate("Appearance and boundaries")}</p>
         <h2>{translate("Settings")}</h2>
-        <p>
-          {translate("Shape this local workspace for reading comfort. Changes preview immediately and stay inside the current installation; there is no account, cloud sync, external font, or theme service.")}
-        </p>
       </section>
 
       <section className="panel settings-card language-settings" aria-labelledby="language-heading">
@@ -4461,12 +4330,14 @@ function Settings({
           </div>
           <span className="section-index">L</span>
         </div>
-        <label className="field-label" htmlFor="interface-language">{translate("Interface language")}</label>
-        <select className="font-select" id="interface-language" value={locale} onChange={(event) => setLocale(event.currentTarget.value as typeof locale)}>
-          <option value="en">{translate("English")}</option>
-          <option value="pt-BR">{translate("Português (Brasil)")}</option>
-        </select>
-        <p className="field-help">{translate("The language is saved locally in this desktop webview and does not change stored evidence or credentials.")}</p>
+        <AccessibleListbox
+          id="interface-language"
+          label={translate("Interface language")}
+          value={locale}
+          placeholder={translate("Choose your language")}
+          options={[{ value: "en", label: translate("English") }, { value: "pt-BR", label: translate("Português (Brasil)") }]}
+          onChange={(value) => setLocale(value as typeof locale)}
+        />
       </section>
 
       <section className="appearance-grid">
@@ -4479,18 +4350,14 @@ function Settings({
             <span className="section-index">A</span>
           </div>
 
-          <label className="field-label" htmlFor="font-choice">{translate("Interface font")}</label>
-          <select
-            className="font-select"
+          <AccessibleListbox
             id="font-choice"
+            label={translate("Interface font")}
             value={appearance.fontId}
-            onChange={(event) => updateAppearance("fontId", event.target.value)}
-          >
-            {FONT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{translate(option.label)}</option>)}
-          </select>
-          <p className="field-help">
-            {translate("Seven local system stacks are available. Times New Roman remains the default intent, with honest Linux fallbacks when a font is not installed.")}
-          </p>
+            placeholder={translate("Choose an interface font")}
+            options={FONT_OPTIONS.map((option) => ({ value: option.id, label: translate(option.label) }))}
+            onChange={(value) => updateAppearance("fontId", value)}
+          />
 
           <div className="appearance-field">
             <div className="field-label-row">
@@ -4563,6 +4430,23 @@ function Settings({
             </div>
           </fieldset>
 
+          <fieldset className="appearance-fieldset">
+            <legend className="field-label">{translate("Contrast")}</legend>
+            <div className="appearance-choice-grid appearance-choice-grid-two">
+              {CONTRAST_OPTIONS.map((option) => (
+                <button
+                  className={`appearance-choice appearance-choice-wide ${appearance.contrastId === option.id ? "is-selected" : ""}`}
+                  key={option.id}
+                  type="button"
+                  aria-pressed={appearance.contrastId === option.id}
+                  onClick={() => updateAppearance("contrastId", option.id)}
+                >
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
           <label className="appearance-toggle">
             <input
               type="checkbox"
@@ -4591,29 +4475,7 @@ function Settings({
           </div>
         </div>
 
-        <div className="panel settings-card appearance-preview-card">
-          <div className="section-heading compact-heading">
-            <div>
-              <p className="eyebrow">{translate("Live preview")}</p>
-              <h3>{translate("Read it before you keep it")}</h3>
-            </div>
-            <span className="section-index">B</span>
-          </div>
-
-          <div className="appearance-preview" aria-live="polite">
-            <p className="eyebrow">{translate("Current presentation")}</p>
-            <h3>{translate("Evidence over noise.")}</h3>
-            <p>{translate("One quiet surface for inspecting prompts, runs, and local records.")}</p>
-            <div className="preview-sample-row">
-              <span className="status-chip is-ready">{translate("Local only")}</span>
-              <button className="primary-button" type="button">{translate("Sample action")} <span aria-hidden="true">→</span></button>
-            </div>
-          </div>
-
-          <p className="field-help preview-note">
-            {translate("This sample uses the current font, scale, accent, surface, corner, and motion settings. It is a visual preview only; it creates no record.")}
-          </p>
-
+        <div className="panel settings-card appearance-status-card">
           <div className="storage-notice" role="status">
             <span className="storage-notice-mark" aria-hidden="true">{desktop ? "✓" : "◇"}</span>
             <div>
@@ -4990,6 +4852,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
   }
 
   return (
+    <div className="byok-stack">
     <section className="panel provider-panel byok-panel" aria-labelledby="provider-controls-heading">
       <div className="section-heading compact-heading">
         <div>
@@ -5093,7 +4956,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                       <h4>{translate("Cost policy")}</h4>
                     </div>
                   </div>
-                  <div className="byok-form-grid">
+                  <div className="byok-form-grid byok-policy-fields">
                     <label className="form-control" htmlFor="byok-confirmation-threshold">
                       <span className="field-label">{translate("Confirmation threshold (USD)")}</span>
                       <input
@@ -5224,6 +5087,8 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         </>
       )}
 
+    </section>
+
       <section className="panel byok-history-card" aria-labelledby="byok-history-heading">
         <div className="section-heading compact-heading">
           <div>
@@ -5255,7 +5120,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         <summary>{translate("No-secret boundary")}</summary>
         <p>{translate("API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Returned text is shown in memory only; local history persists sanitized usage, cost, identity, price, and network evidence without prompt or response text.")}</p>
       </details>
-    </section>
+    </div>
   );
 }
 

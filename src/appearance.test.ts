@@ -25,6 +25,7 @@ describe("appearance preferences", () => {
       accentId: "sage",
       radiusId: "compact",
       surfaceId: "paper",
+      contrastId: "high",
       reducedMotion: true,
     })).toEqual({
       fontId: "arial",
@@ -32,6 +33,7 @@ describe("appearance preferences", () => {
       accentId: "sage",
       radiusId: "compact",
       surfaceId: "paper",
+      contrastId: "high",
       reducedMotion: true,
     });
   });
@@ -43,6 +45,7 @@ describe("appearance preferences", () => {
       accentId: "--dangerous-color",
       radiusId: "999px",
       surfaceId: "linear-gradient(red, blue)",
+      contrastId: "--low-contrast",
       reducedMotion: "false",
     })).toEqual(DEFAULT_APPEARANCE);
   });
@@ -62,6 +65,7 @@ describe("appearance preferences", () => {
       accentId: "plum",
       radiusId: "rounded",
       surfaceId: "warm",
+      contrastId: "high",
       reducedMotion: false,
       futureField: "ignored",
     });
@@ -70,6 +74,7 @@ describe("appearance preferences", () => {
       fontScale: 90,
       accentId: "plum",
       surfaceId: "warm",
+      contrastId: "high",
     });
     expect(parseAppearancePreferences("not-json")).toEqual(DEFAULT_APPEARANCE);
   });
@@ -81,6 +86,7 @@ describe("appearance preferences", () => {
       accentId: "sage",
       radiusId: "compact",
       surfaceId: "paper",
+      contrastId: "high",
       reducedMotion: true,
       apiKey: "must-not-export",
       headers: { Authorization: "must-not-export" },
@@ -94,6 +100,7 @@ describe("appearance preferences", () => {
         accentId: "sage",
         radiusId: "compact",
         surfaceId: "paper",
+        contrastId: "high",
         reducedMotion: true,
       },
     });

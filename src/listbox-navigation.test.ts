@@ -17,9 +17,15 @@ describe("listbox keyboard navigation", () => {
     expect(listboxNavigation({ key: "Home", currentIndex: 2, optionCount: 3, open: true })).toEqual({ action: "move", index: 0 });
     expect(listboxNavigation({ key: "End", currentIndex: 0, optionCount: 3, open: true })).toEqual({ action: "move", index: 2 });
     expect(listboxNavigation({ key: "Enter", currentIndex: 1, optionCount: 3, open: true })).toEqual({ action: "select", index: 1 });
+    expect(listboxNavigation({ key: " ", currentIndex: 2, optionCount: 3, open: true })).toEqual({ action: "select", index: 2 });
     expect(listboxNavigation({ key: "Spacebar", currentIndex: 1, optionCount: 3, open: true })).toEqual({ action: "select", index: 1 });
     expect(listboxNavigation({ key: "Escape", currentIndex: 1, optionCount: 3, open: true })).toEqual({ action: "close", index: 1 });
     expect(listboxNavigation({ key: "PageDown", currentIndex: 1, optionCount: 3, open: true })).toEqual({ action: "none", index: 1 });
+  });
+
+  it("starts from a safe option when focus has no valid index", () => {
+    expect(listboxNavigation({ key: "ArrowDown", currentIndex: -1, optionCount: 3, open: true })).toEqual({ action: "move", index: 1 });
+    expect(listboxNavigation({ key: "ArrowUp", currentIndex: 9, optionCount: 3, open: true })).toEqual({ action: "move", index: 2 });
   });
 
   it("does nothing for disabled and empty listboxes", () => {
