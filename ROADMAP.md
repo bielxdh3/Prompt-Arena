@@ -104,10 +104,10 @@ price/usage history; CI never calls a paid API.
 ### P6 — Product polish — IN PROGRESS
 
 Responsive shell, accessibility focus states, reduced motion, local appearance controls, local diagnostics, dashboard
-counts/recent summaries, persisted run and Arena-summary history, verified response reads, and bounded sanitized
-JSON/Markdown/CSV exports exist. Storage cleanup/retention, richer appearance import/export, and full
-accessibility/native review remain. Native acceptance, security review, and publication gates are still pending, so P6
-remains IN PROGRESS.
+counts/recent summaries, persisted run and Arena-summary history, verified response reads, bounded sanitized
+JSON/Markdown/CSV exports, preview-first bounded cleanup of derived history, and versioned bounded appearance
+import/export exist. Full accessibility/native review remains. Native acceptance, security review, and publication gates
+are still pending, so P6 remains IN PROGRESS.
 
 Acceptance: the primary flow reads as a model-comparison laboratory, not developer scaffolding, on supported desktop sizes.
 
@@ -120,8 +120,16 @@ target-specific worker sidecar hook remains deterministic. `package:artifacts` n
 runner has the required platform tooling. The workflow records an explicit MSI outcome while keeping NSIS mandatory,
 uploads unsigned artifacts, and creates no GitHub Release.
 
-Real clean-install, start/restart, uninstall, and Linux launch evidence has not yet been confirmed for this revision, so
-P7 remains IN PROGRESS even though the configuration and automated verification path are present.
+Workflow run [33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890) passed frontend/Rust
+validation, the mandatory Windows NSIS build, Windows checksum normalization and clean-install/start/restart/
+silent-uninstall smoke, and Linux DEB/AppImage builds, checksum normalization, and package/app smoke. MSI was
+attempted but unavailable, with zero MSI artifacts. This CI evidence does not replace final native/manual desktop
+acceptance, so P7 remains IN PROGRESS while MSI remains unavailable if technically viable and that acceptance remains
+separate.
+
+The BL4 native diagnostic for this revision proved only Vite/Tauri startup; its harness did not exercise native UI,
+bridge, app-owned sidecar, restart, or reopen flows. P1–P6 therefore remain IN PROGRESS pending their separate native
+acceptance and review gates.
 
 Acceptance: Windows clean-install/start/restart/uninstall smoke and Linux package/launch smoke pass, with exact artifact
 names/checksums and no Node/Rust/terminal requirement for end users.
