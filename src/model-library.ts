@@ -11,6 +11,7 @@ import type {
   ModelSourceStatus,
   ProfileRevision,
 } from "./bridge";
+import { translate } from "./i18n";
 
 export const PROFILE_RUNTIME = "ollama" as const;
 export const MAX_PROFILE_ID_BYTES = 128;
@@ -342,7 +343,7 @@ export function modelOperationProgressLabel(operation: ModelOperation): string {
     return `${Math.max(0, Math.min(100, Math.round(operation.progressPercent)))}%`;
   }
   if (operation.bytesTotal !== null && operation.bytesTotal > 0) {
-    return `${operation.bytesCompleted} / ${operation.bytesTotal} bytes`;
+    return `${operation.bytesCompleted} / ${operation.bytesTotal} ${translate("bytes")}`;
   }
   return modelOperationStatusLabel(operation.status);
 }

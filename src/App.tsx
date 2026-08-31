@@ -275,6 +275,37 @@ function AppShell() {
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
+  const mainRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const scrollRoot = root.closest<HTMLElement>(".workspace");
+    if (!scrollRoot) return;
+    const targets = Array.from(root.querySelectorAll<HTMLElement>(".view-stack > *, .models-layout > *, .settings-grid > *, .advanced-settings"));
+    targets.forEach((target) => target.classList.add("scroll-reveal"));
+    const reduced = root.closest<HTMLElement>(".app-shell")?.dataset.reducedMotion === "true"
+      || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || typeof IntersectionObserver === "undefined") {
+      targets.forEach((target) => target.classList.add("is-visible"));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, root: scrollRoot, rootMargin: "0px 0px -8% 0px" });
+    targets.forEach((target) => {
+      const targetRect = target.getBoundingClientRect();
+      const scrollRootRect = scrollRoot.getBoundingClientRect();
+      if (targetRect.top < scrollRootRect.bottom && targetRect.bottom > scrollRootRect.top) target.classList.add("is-visible");
+      else observer.observe(target);
+    });
+    return () => observer.disconnect();
+  }, [activeView]);
 
   useEffect(() => {
     let current = true;
@@ -374,7 +405,7 @@ function AppShell() {
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
-            <span className="version-chip">v0.1.2</span>
+            <span className="version-chip">v0.1.3</span>
           </div>
         </header>
 
@@ -385,12 +416,12 @@ function AppShell() {
             </span>
             <div>
               <strong>{translate("Desktop bridge unavailable")}</strong>
-              <p>{connection.message} {translate("The content below remains an honest local preview.")}</p>
+              <p>{translate(connection.message)} {translate("The content below remains an honest local preview.")}</p>
             </div>
           </div>
         )}
 
-        <main className="main-content" id="main-content">
+        <main className="main-content" id="main-content" ref={mainRef}>
           <div key={activeView} className="page-transition">
             {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
             {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
@@ -480,7 +511,7 @@ function Overview({
   }, []);
 
   const count = (items: readonly unknown[] | undefined) => {
-    if (state.status === "preview") return "Preview";
+    if (state.status === "preview") return translate("Preview");
     if (state.status !== "ready" || !items) return state.status === "loading" ? "…" : "—";
     return formatLocaleNumber(items.length);
   };
@@ -757,7 +788,7 @@ function BenchmarksView() {
 
   async function handleSave() {
     if (!isDesktopEnvironment()) {
-      setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
+      setFeedback({ kind: "info", message: translate(benchmarkPreviewCopy()) });
       return;
     }
     if (!validateBeforeDraftAction()) return;
@@ -792,7 +823,7 @@ function BenchmarksView() {
 
   async function handleValidate() {
     if (!isDesktopEnvironment()) {
-      setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
+      setFeedback({ kind: "info", message: translate(benchmarkPreviewCopy()) });
       return;
     }
     if (!validateBeforeDraftAction()) return;
@@ -816,7 +847,7 @@ function BenchmarksView() {
 
   async function handlePublish() {
     if (!isDesktopEnvironment()) {
-      setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
+      setFeedback({ kind: "info", message: translate(benchmarkPreviewCopy()) });
       return;
     }
     if (!form.draftId) {
@@ -955,7 +986,7 @@ function BenchmarksView() {
             </button>
           </div>
           {surface === "preview" && (
-            <StateMessage icon="◇" title="Browser preview" description={benchmarkPreviewCopy()} />
+            <StateMessage icon="◇" title="Browser preview" description={translate(benchmarkPreviewCopy())} />
           )}
           {surface === "error" && state.status === "error" && (
             <StateMessage icon="!" title="Benchmark records unavailable" description={state.message} error />
@@ -1007,7 +1038,7 @@ function BenchmarksView() {
             </div>
             <span className="section-index">05</span>
           </div>
-          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{translate(feedback.message)}</p>}
           <fieldset className="form-section">
             <legend>{translate("Pack")}</legend>
             <div className="form-grid form-grid-three">
@@ -1048,7 +1079,7 @@ function BenchmarksView() {
               <FormInput id="criterion-weight" label="Criterion weight" type="number" min="0.000001" step="any" required error={draftValidation?.errors.criterionWeight} value={form.criterionWeight} onChange={(value) => updateField("criterionWeight", value)} />
               <FormTextArea className="form-span-three" id="criterion-description" label="Criterion description (optional)" value={form.criterionDescription} onChange={(value) => updateField("criterionDescription", value)} />
             </div>
-            <details className="criteria-advanced" open={Boolean(draftValidation?.errors.rubricId || draftValidation?.errors.criterionId)}>
+            <details className="criteria-advanced motion-disclosure" open={Boolean(draftValidation?.errors.rubricId || draftValidation?.errors.criterionId)}>
               <summary>{translate("Advanced IDs")}</summary>
               <p className="field-help">{translate("These IDs preserve compatibility with stored benchmark data.")}</p>
               <div className="form-grid form-grid-two">
@@ -1058,7 +1089,7 @@ function BenchmarksView() {
             </details>
           </fieldset>
           <div className="editor-actions">
-            {draftActionMessage && <p className="form-feedback form-feedback-error draft-action-feedback" role="alert">{draftActionMessage}</p>}
+            {draftActionMessage && <p className="form-feedback form-feedback-error draft-action-feedback" role="alert">{translate(draftActionMessage)}</p>}
             <button className="primary-button" type="button" onClick={() => void handleSave()} disabled={busy || !isDesktopEnvironment()}>
               {translate("Save draft")}
             </button>
@@ -1082,7 +1113,7 @@ function BenchmarksView() {
           <span className="run-status run-status-neutral">{translate("source + evidence")}</span>
         </div>
         {surface === "preview" && (
-          <StateMessage icon="◇" title="Browser preview" description={officialPacksPreviewCopy()} />
+          <StateMessage icon="◇" title="Browser preview" description={translate(officialPacksPreviewCopy())} />
         )}
         {state.status === "loading" && (
           <StateMessage icon="…" title="Loading official catalog" description="Validating bundled benchmark-v1 documents at the desktop boundary." />
@@ -1201,7 +1232,7 @@ function BenchmarksView() {
                           <BoundaryRow label="Saved outcome" value={officialPackMaterialization.materialization.savedOutcome} />
                           <BoundaryRow label="Seeded cases" value={String(parseDeterministicMaterializationMetadata(officialPackMaterialization.materialization.documentJson)?.caseSeeds.length ?? 0)} />
                         </div>
-                        <details className="official-pack-document-block">
+                        <details className="official-pack-document-block motion-disclosure">
                           <summary className="eyebrow">{translate("Materialized canonical document")}</summary>
                           <pre className="official-pack-document">{officialPackMaterialization.materialization.documentJson}</pre>
                         </details>
@@ -1617,7 +1648,7 @@ function ModelsView() {
 
   async function handleRegister() {
     if (!desktop) {
-      setFeedback({ kind: "info", message: profilePreviewCopy() });
+      setFeedback({ kind: "info", message: translate(profilePreviewCopy()) });
       return;
     }
     setBusy(true);
@@ -1711,7 +1742,7 @@ function ModelsView() {
             </p>
           )}
           {modelState.status === "preview" && (
-            <StateMessage icon="◇" title="Browser preview" description={modelPreviewCopy()} />
+            <StateMessage icon="◇" title="Browser preview" description={translate(modelPreviewCopy())} />
           )}
           {modelState.status === "loading" && (
             <StateMessage icon="…" title="Checking local sources" description="Reading model metadata from the configured loopback runtimes and managed model root." />
@@ -1732,8 +1763,8 @@ function ModelsView() {
                 {modelState.catalog.sources.map((source) => (
                   <article className="profile-record-row" key={source.sourceId}>
                     <span>
-                      <strong>{source.label} · {translate(modelBackendLabel(source.backend))}</strong>
-                      <small>{source.message ?? `${source.models.length} ${translate("models reported")}`}</small>
+                      <strong>{translate(source.label)} · {translate(modelBackendLabel(source.backend))}</strong>
+                      <small>{translate(source.message ?? `${source.models.length} ${translate("models reported")}`)}</small>
                     </span>
                     <span className={`run-status ${source.status === "error" ? "run-status-failure" : source.status === "unavailable" ? "run-status-neutral" : ""}`}>
                       {translate(modelSourceStatusLabel(source.status))}
@@ -1799,10 +1830,10 @@ function ModelsView() {
                       <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{translate(recommendation.label)}</span>
                       <p className="model-meta">{translate(recommendation.explanation)}</p>
                     </div>
-                    <details className="model-details">
+                    <details className="model-details motion-disclosure">
                       <summary>{translate("Details")}</summary>
                       <div className="model-detail-grid">
-                        <p><strong>{translate("Source")}</strong><br />{sourceLabel} · {translate(modelBackendLabel(model.backend))}</p>
+                        <p><strong>{translate("Source")}</strong><br />{translate(sourceLabel)} · {translate(modelBackendLabel(model.backend))}</p>
                         <p><strong>{translate("Model ID")}</strong><br />{model.modelId}</p>
                         <p><strong>{translate("Digest")}</strong><br />{model.digest ?? translate("Not reported")}</p>
                         <p><strong>{translate("Content hash")}</strong><br />{model.contentHash ?? translate("Not reported")}</p>
@@ -1819,7 +1850,7 @@ function ModelsView() {
                     {rowOperation && (
                       <p className="model-meta">
                         {translate("Operation")} {translate(modelOperationStatusLabel(rowOperation.status).toLowerCase())} · {modelOperationProgressLabel(rowOperation)}
-                        {operationMessage ? ` · ${operationMessage}` : ""}
+                        {operationMessage ? ` · ${translate(operationMessage)}` : ""}
                       </p>
                     )}
                   </div>
@@ -1900,7 +1931,7 @@ function ModelsView() {
                     <article className="profile-record-row" key={operation.operationId}>
                       <span>
                         <strong>{operation.kind} · {operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model"}</strong>
-                        <small>{translate(modelBackendLabel(operation.backend))} · {translate(modelOperationStatusLabel(operation.status))} · {modelOperationProgressLabel(operation)}{modelOperationMessage(operation) ? ` · ${modelOperationMessage(operation)}` : ""}</small>
+                        <small>{translate(modelBackendLabel(operation.backend))} · {translate(modelOperationStatusLabel(operation.status))} · {translate(modelOperationProgressLabel(operation))}{modelOperationMessage(operation) ? ` · ${translate(modelOperationMessage(operation) ?? "")}` : ""}</small>
                       </span>
                       {isActiveModelOperation(operation) ? (
                         <button className="text-button" type="button" onClick={() => void handleCancel(operation.operationId)} disabled={cancellingOperation === operation.operationId}>
@@ -1948,7 +1979,7 @@ function ModelsView() {
             </div>
             <span className="section-index">06</span>
           </div>
-          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{translate(feedback.message)}</p>}
           <div className="profile-form form-section">
             <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
@@ -1979,7 +2010,7 @@ function ModelsView() {
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>
               {translate("Register immutable revision")}
             </button>
-            {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
+            {!isDesktopEnvironment() && <p className="field-help">{translate(profilePreviewCopy())}</p>}
           </div>
 
           <div className="profile-records">
@@ -1992,10 +2023,10 @@ function ModelsView() {
                 {translate("Refresh")}
               </button>
             </div>
-            {profileState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={profilePreviewCopy()} />}
+            {profileState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={translate(profilePreviewCopy())} />}
             {profileState.status === "loading" && <StateMessage icon="…" title="Loading profiles" description="Reading immutable profile revisions from SQLite." />}
             {profileState.status === "error" && <StateMessage icon="!" title="Profiles unavailable" description={profileState.message} error />}
-            {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title="No registered profiles" description={profileEmptyCopy()} />}
+            {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title="No registered profiles" description={translate(profileEmptyCopy())} />}
             {profileState.status === "ready" && profileState.profiles.length > 0 && (
               <div className="profile-record-list">
                 {profileState.profiles.map((profile) => (
@@ -2023,7 +2054,7 @@ function ModelsView() {
             {translate("Refresh")}
           </button>
         </div>
-        {hardwareState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={hardwarePreviewCopy()} />}
+        {hardwareState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={translate(hardwarePreviewCopy())} />}
         {hardwareState.status === "loading" && <StateMessage icon="…" title="Reading hardware baseline" description="Detecting only bounded local CPU and memory facts; GPU and VRAM may be unavailable." />}
         {hardwareState.status === "error" && <StateMessage icon="!" title="Hardware baseline unavailable" description={hardwareState.message} error />}
         {hardwareState.status === "ready" && (
@@ -2035,7 +2066,7 @@ function ModelsView() {
               <HardwareMetricRow label="GPU" metric={hardwareState.snapshot.gpuName} format={(value) => value} showDetail={false} />
               <HardwareMetricRow label="VRAM" metric={hardwareState.snapshot.vramBytes} format={formatHardwareBytes} showDetail={false} />
             </div>
-            <details className="hardware-advanced">
+            <details className="hardware-advanced motion-disclosure">
               <summary>{translate("Advanced diagnostics")}</summary>
               <div className="results-facts">
                 <BoundaryRow label={translate("CPU source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.logicalCpuCount.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.logicalCpuCount.confidence))}`} />
@@ -2358,7 +2389,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
   async function handleExecute() {
     if (!isDesktopEnvironment()) {
-      setExecution({ status: "error", message: arenaPreviewCopy() });
+      setExecution({ status: "error", message: translate(arenaPreviewCopy()) });
       return;
     }
     if (!activeDocument || !selectedProfile || !selectedTaskId || !selectedCaseId) {
@@ -2399,7 +2430,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
       {records.status === "preview" && (
         <section className="panel arena-state-panel" aria-live="polite">
-          <StateMessage icon="◇" title={translate("Browser preview / no writes")} description={arenaPreviewCopy()} />
+          <StateMessage icon="◇" title={translate("Browser preview / no writes")} description={translate(arenaPreviewCopy())} />
         </section>
       )}
       {records.status === "loading" && (
@@ -2414,8 +2445,8 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       )}
       {recordsAreEmpty && (
         <section className="panel arena-empty-grid" aria-live="polite">
-          {records.versions.length === 0 && <EmptyState title={translate("No benchmark versions")} description={arenaEmptyCopy("versions")} />}
-          {records.profiles.length === 0 && <EmptyState title={translate("No profile revisions")} description={arenaEmptyCopy("profiles")} />}
+          {records.versions.length === 0 && <EmptyState title={translate("No benchmark versions")} description={translate(arenaEmptyCopy("versions"))} />}
+          {records.profiles.length === 0 && <EmptyState title={translate("No profile revisions")} description={translate(arenaEmptyCopy("profiles"))} />}
         </section>
       )}
 
@@ -2479,10 +2510,10 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
               <StateMessage icon="!" title={translate("Version unavailable")} description={documentState.message} error />
             )}
             {activeDocument && taskSelectionOptions.length === 0 && (
-              <EmptyState title={translate("No usable tasks")} description={arenaEmptyCopy("tasks")} />
+              <EmptyState title={translate("No usable tasks")} description={translate(arenaEmptyCopy("tasks"))} />
             )}
             {activeDocument && taskSelectionOptions.length > 0 && caseSelectionOptions.length === 0 && (
-              <EmptyState title={translate("No usable cases")} description={arenaEmptyCopy("cases")} />
+              <EmptyState title={translate("No usable cases")} description={translate(arenaEmptyCopy("cases"))} />
             )}
           </section>
 
@@ -2804,10 +2835,10 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
         <p>{translate("Choose a published task, two or more immutable competitors, and repetitions. Runs execute sequentially for fair local speed metrics; a failed competitor stays visible without discarding the others.")}</p>
       </section>
 
-      {records.status === "preview" && <section className="panel arena-state-panel"><StateMessage icon="◇" title={translate("Browser preview / no writes")} description={arenaPreviewCopy()} /></section>}
+      {records.status === "preview" && <section className="panel arena-state-panel"><StateMessage icon="◇" title={translate("Browser preview / no writes")} description={translate(arenaPreviewCopy())} /></section>}
       {records.status === "loading" && <section className="panel arena-state-panel"><StateMessage icon="…" title={translate("Loading Arena records")} description={translate("Reading immutable versions and profile revisions from the local store.")} /></section>}
       {records.status === "error" && <section className="panel arena-state-panel"><StateMessage icon="!" title={translate("Arena records unavailable")} description={records.message} error /></section>}
-      {recordsAreEmpty && <section className="panel arena-empty-grid"><EmptyState title={translate(records.versions.length === 0 ? "No benchmark versions" : "Need two competitors")} description={records.versions.length === 0 ? arenaEmptyCopy("versions") : translate("Register at least two immutable profile revisions in Models before starting an Arena.")} /></section>}
+      {recordsAreEmpty && <section className="panel arena-empty-grid"><EmptyState title={translate(records.versions.length === 0 ? "No benchmark versions" : "Need two competitors")} description={records.versions.length === 0 ? translate(arenaEmptyCopy("versions")) : translate("Register at least two immutable profile revisions in Models before starting an Arena.")} /></section>}
 
       {hasRecords && (
         <div className="arena-layout">
@@ -3163,7 +3194,13 @@ function ArenaSelect({
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
+  const { t } = useI18n();
+  const translatedOptions = useMemo(() => options.map((option) => ({
+    ...option,
+    label: t(option.label),
+    detail: option.detail ? t(option.detail) : option.detail,
+  })), [options, t]);
+  return <AccessibleListbox id={id} label={label} value={value} options={translatedOptions} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
 }
 
 function ArenaExecutionResult({
@@ -3197,8 +3234,8 @@ function ArenaExecutionResult({
           <ul className="arena-progress-list">
             {execution.progress.map((event) => (
               <li key={`${event.sequence}-${event.kind}`}>
-                <strong>#{event.sequence} {event.kind}</strong>
-                {event.text ? ` · ${event.text}` : ""}
+                <strong>#{event.sequence} {translate(event.kind)}</strong>
+                {event.text ? ` · ${translate(event.text)}` : ""}
               </li>
             ))}
           </ul>
@@ -3451,7 +3488,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                     </div>
                   )}
                    {responsesState.status === "loading" && <StateMessage icon="…" title={translate("Reading verified responses")} description={translate("Opening only hash-verified response artifacts from the selected run.")} />}
-                  {responsesState.status === "partial" && <p className="field-help" role="status">{responsesState.message} {translate("Available response artifacts remain visible below.")}</p>}
+                  {responsesState.status === "partial" && <p className="field-help" role="status">{translate(responsesState.message)} {translate("Available response artifacts remain visible below.")}</p>}
                   {attemptsState.status === "ready" && (
                     <ComparabilityPanel run={selectedRun} attempts={attemptsState.attempts} />
                   )}
@@ -4265,7 +4302,7 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
               )}
             </>
           )}
-          {notice && <p className="form-feedback form-feedback-success" role="status">{notice}</p>}
+          {notice && <p className="form-feedback form-feedback-success" role="status">{translate(notice)}</p>}
         </>
       )}
     </section>
@@ -4471,7 +4508,7 @@ function Settings({
               <button className="secondary-button" type="button" onClick={() => appearanceFileInput.current?.click()}>{translate("Import JSON")}</button>
               <input ref={appearanceFileInput} type="file" accept="application/json,.json" hidden aria-label={translate("Import appearance preference JSON")} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importAppearanceFile(file); }} />
             </div>
-            {appearanceTransferMessage && <p className="field-help" role="status">{appearanceTransferMessage}</p>}
+            {appearanceTransferMessage && <p className="field-help" role="status">{translate(appearanceTransferMessage)}</p>}
           </div>
         </div>
 
@@ -4497,7 +4534,7 @@ function Settings({
         </div>
       </section>
 
-      <details className="advanced-settings">
+      <details className="advanced-settings motion-disclosure">
         <summary>{translate("Advanced local controls")}</summary>
         <div className="advanced-settings-content">
           <StorageRetentionControls desktop={desktop} />
@@ -4870,7 +4907,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
 
       {notice && (
         <p className={`form-feedback form-feedback-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
-          {notice.message}
+          {translate(notice.message)}
         </p>
       )}
 
@@ -5099,7 +5136,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
             {translate("Refresh history")}
           </button>
         </div>
-        <details className="byok-policy-details">
+        <details className="byok-policy-details motion-disclosure">
           <summary>{translate("Storage and privacy")}</summary>
           <p className="field-help">{translate("History stores sanitized provider, model, identity, usage, cost, dated-price, budget, and network evidence only. Prompt text, returned text, API keys, credential blobs, and headers are never stored or exported.")}</p>
         </details>
@@ -5116,7 +5153,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         )}
       </section>
 
-      <details className="provider-safety-note byok-safety-note">
+      <details className="provider-safety-note byok-safety-note motion-disclosure">
         <summary>{translate("No-secret boundary")}</summary>
         <p>{translate("API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Returned text is shown in memory only; local history persists sanitized usage, cost, identity, price, and network evidence without prompt or response text.")}</p>
       </details>

@@ -514,7 +514,7 @@ export function AdvancedArenaView() {
                 <AdvancedBoundary label={translate("Content hash")} value={selectedSummary.contentHash} />
               </div>
             )}
-            {evidenceState.error && <p className="form-feedback form-feedback-error" role="alert">{evidenceState.error}</p>}
+            {evidenceState.error && <p className="form-feedback form-feedback-error" role="alert">{translate(evidenceState.error)}</p>}
           </section>
 
           {artifactHistory.status === "ready" && (
@@ -622,7 +622,7 @@ export function AdvancedArenaView() {
                   <AdvancedBoundary label={translate("Entries accepted")} value={formatLocaleNumber(scoreState.aiJudgeBoundary.entries.length)} />
                   <AdvancedBoundary label={translate("Invalid scores")} value={scoreState.error ? translate("Visible below") : translate("None")} />
                 </div>
-                {scoreState.error && <p className="form-feedback form-feedback-error" role="alert">{scoreState.error}</p>}
+                {scoreState.error && <p className="form-feedback form-feedback-error" role="alert">{translate(scoreState.error)}</p>}
                 <div className="arena-actions">
                   <label className="advanced-field" htmlFor="advanced-calibration-id">
                     <span className="field-label">{translate("Calibration ID")}</span>
@@ -630,7 +630,7 @@ export function AdvancedArenaView() {
                   </label>
                   <button className="primary-button" type="button" onClick={() => void saveCalibrationArtifacts()}>{translate("Save calibration")}</button>
                 </div>
-                {calibrationSaveMessage && <p className="field-help" role="status">{calibrationSaveMessage}</p>}
+                {calibrationSaveMessage && <p className="field-help" role="status">{translate(calibrationSaveMessage)}</p>}
                 <p className="field-help" role="status">{translate("AI-judge boundary: optional, frozen, manual/offline, and never fabricated. No network call is made.")}</p>
               </section>
 
@@ -651,7 +651,7 @@ export function AdvancedArenaView() {
                   />
                 </div>
                 <p className="field-help">{translate("Direction and deterministic spread are shown per metric. Ties are explicit; insufficient data is not ranked as a win or loss.")}</p>
-                {rankingsState.error && <p className="form-feedback form-feedback-error" role="alert">{rankingsState.error}</p>}
+                {rankingsState.error && <p className="form-feedback form-feedback-error" role="alert">{translate(rankingsState.error)}</p>}
                 <div className="advanced-ranking-grid">
                   {rankingsState.rankings.map((ranking) => <AdvancedRankingCard key={ranking.metric} ranking={ranking} />)}
                 </div>
@@ -674,7 +674,7 @@ export function AdvancedArenaView() {
                   <input id="advanced-regression-human" type="checkbox" checked={includeHumanRegression} onChange={(event) => setIncludeHumanRegression(event.currentTarget.checked)} />
                   <span>{translate("Include human/AI-judge score regression")}</span>
                 </label>
-                {regressionState.error && <p className="form-feedback form-feedback-error" role="alert">{regressionState.error}</p>}
+                {regressionState.error && <p className="form-feedback form-feedback-error" role="alert">{translate(regressionState.error)}</p>}
                 {!regressionState.comparison && <AdvancedEmptyState title={translate("Select two different summaries")} description={translate("A regression needs a baseline and candidate immutable summary. The comparison never mixes unsaved execution output.")} />}
                 {regressionState.comparison && <RegressionResults comparison={regressionState.comparison} />}
               </section>
@@ -751,7 +751,7 @@ export function AdvancedArenaView() {
                 <div className="arena-actions">
                   <button className="primary-button" type="button" onClick={buildTournament}>{translate("Build")} {tournamentMode === "blind_ranking" ? translate("blind ranking") : translate("schedule")}</button>
                 </div>
-                {tournamentError && <p className="form-feedback form-feedback-error" role="alert">{tournamentError}</p>}
+                {tournamentError && <p className="form-feedback form-feedback-error" role="alert">{translate(tournamentError)}</p>}
                 {tournamentResult?.kind === "schedule" && <TournamentScheduleResult schedule={tournamentResult.schedule} labels={new Map(competitorOptions.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
                 {tournamentResult?.kind === "blind" && <BlindRankingResult aggregation={tournamentResult.aggregation} />}
                 {tournamentResult?.kind === "outcome" && <TournamentOutcomeResult result={tournamentResult.result} />}
@@ -761,7 +761,7 @@ export function AdvancedArenaView() {
                     <button className="secondary-button" type="button" onClick={() => void saveTournamentArtifact()}>{translate("Save tournament result")}</button>
                   </div>
                 )}
-                {tournamentSaveMessage && <p className="field-help" role="status">{tournamentSaveMessage}</p>}
+                {tournamentSaveMessage && <p className="field-help" role="status">{translate(tournamentSaveMessage)}</p>}
               </section>
 
               <section className="panel advanced-calibration-panel" aria-labelledby="advanced-calibration-heading" aria-live="polite">

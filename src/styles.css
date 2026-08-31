@@ -31,7 +31,13 @@
   --motion-base: 220ms;
   --motion-page: 180ms;
   --motion-surface: 200ms;
-  --motion-stagger: 30ms;
+  --motion-reveal: 120ms;
+  --motion-expand: 180ms;
+  --motion-stagger: 24ms;
+  --motion-ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-distance: 5px;
+  --space-section: 32px;
   --scrollbar-track: #191a1d;
   --scrollbar-thumb: #6f737b;
   --scrollbar-thumb-hover: #9296a0;
@@ -164,24 +170,24 @@
 
 .app-shell[data-surface="paper"] {
   color-scheme: light;
-  --color-canvas: #f1ede5;
-  --color-surface: #fffdf8;
-  --color-surface-raised: #faf6ee;
-  --color-surface-soft: #eee8dc;
-  --color-surface-muted: #f5f0e7;
-  --color-border: #c4b9a9;
-  --color-border-strong: #9b8f80;
+  --color-canvas: #dcd5c8;
+  --color-surface: #e8e1d5;
+  --color-surface-raised: #f0e9dd;
+  --color-surface-soft: #d2c9bb;
+  --color-surface-muted: #ded6c9;
+  --color-border: #b1a493;
+  --color-border-strong: #897c6d;
   --color-text: #2c2925;
-  --color-text-muted: #5d574f;
-  --color-text-subtle: #665f56;
+  --color-text-muted: #514a41;
+  --color-text-subtle: #5b534a;
   --color-text-secondary: #403b35;
   --color-success: #3d7950;
   --color-danger: #a44f48;
   --shadow-panel: 0 18px 50px rgb(64 48 32 / 0.12);
-  --scrollbar-track: #eee8dc;
+  --scrollbar-track: #d2c9bb;
   --scrollbar-thumb: #756a5c;
   --scrollbar-thumb-hover: #5e554a;
-  --scrollbar-thumb-active: #5e554a;
+  --scrollbar-thumb-active: #40382f;
 }
 
 .app-shell[data-contrast="high"] {
@@ -190,6 +196,9 @@
   --color-border: #5b5f69;
   --color-border-strong: #7a7f8b;
   --color-focus: #fff0b8;
+  --scrollbar-thumb: #d9dce3;
+  --scrollbar-thumb-hover: #ffffff;
+  --scrollbar-thumb-active: var(--color-focus);
 }
 
 .app-shell[data-contrast="high"][data-surface="paper"] {
@@ -199,12 +208,15 @@
   --color-border: #8a7e6e;
   --color-border-strong: #665b4d;
   --color-focus: #72551d;
+  --scrollbar-thumb: #55493b;
+  --scrollbar-thumb-hover: #30281f;
+  --scrollbar-thumb-active: #211b15;
 }
 
 * {
   box-sizing: border-box;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  scrollbar-width: thin;
+  scrollbar-width: auto;
 }
 
 *::-webkit-scrollbar {
@@ -228,6 +240,20 @@
 
 *::-webkit-scrollbar-thumb:active {
   background: var(--scrollbar-thumb-active);
+}
+
+/* Keep nested evidence, listbox, and record regions visually part of the app. */
+.workspace,
+.sidebar,
+.evidence-table-wrap,
+.attempt-response,
+.official-pack-document,
+.arena-listbox-menu,
+.arena-prompt,
+.blind-response-text,
+.advanced-table-wrap,
+.advanced-textarea {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 html,
@@ -605,7 +631,7 @@ h3 {
 
 .page-transition {
   min-width: 0;
-  animation: page-enter var(--motion-page) ease-out both;
+  animation: page-enter var(--motion-page) var(--motion-ease-emphasized) both;
 }
 
 .view-stack {
@@ -614,26 +640,59 @@ h3 {
   gap: 22px;
 }
 
-.view-stack > * {
-  animation: surface-enter var(--motion-surface) ease-out both;
-}
-
-.view-stack > :nth-child(2) { animation-delay: calc(var(--motion-stagger) * 1); }
-.view-stack > :nth-child(3) { animation-delay: calc(var(--motion-stagger) * 2); }
-.view-stack > :nth-child(4) { animation-delay: calc(var(--motion-stagger) * 3); }
-.view-stack > :nth-child(5) { animation-delay: calc(var(--motion-stagger) * 4); }
-.view-stack > :nth-child(6) { animation-delay: calc(var(--motion-stagger) * 5); }
-.view-stack > :nth-child(7) { animation-delay: calc(var(--motion-stagger) * 6); }
-
 @keyframes page-enter {
-  from { opacity: 0; transform: translateY(3px); }
+  from { opacity: 0; transform: translateY(var(--motion-distance)); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes surface-enter {
-  from { opacity: 0; transform: translateY(4px); }
+.scroll-reveal {
+  opacity: 0;
+  transform: translateY(var(--motion-distance));
+  transition: opacity var(--motion-reveal) var(--motion-ease-standard),
+    transform var(--motion-reveal) var(--motion-ease-standard);
+}
+
+.scroll-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@supports selector(details::details-content) {
+  details.motion-disclosure {
+    interpolate-size: allow-keywords;
+  }
+
+  details.motion-disclosure::details-content {
+    block-size: 0;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-3px);
+    transition: block-size var(--motion-expand) var(--motion-ease-emphasized),
+      opacity var(--motion-reveal) var(--motion-ease-standard),
+      transform var(--motion-reveal) var(--motion-ease-standard);
+  }
+
+  details.motion-disclosure[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes disclosure-item-enter {
+  from { opacity: 0; transform: translateY(-3px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+details.motion-disclosure[open] > :not(summary),
+details.motion-disclosure[open] > :not(summary) > * {
+  animation: disclosure-item-enter var(--motion-reveal) var(--motion-ease-standard) both;
+}
+
+details.motion-disclosure[open] > :not(summary) > :nth-child(2) { animation-delay: var(--motion-stagger); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(3) { animation-delay: calc(var(--motion-stagger) * 2); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(4) { animation-delay: calc(var(--motion-stagger) * 3); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(5) { animation-delay: calc(var(--motion-stagger) * 4); }
 
 .panel {
   min-width: 0;
@@ -746,12 +805,17 @@ h3 {
   border: 1px solid rgb(214 184 138 / 0.38);
   border-radius: 50%;
   transform: rotate(-25deg);
+  transform-origin: center;
+  will-change: transform;
+  animation: orbit-rotate 18s linear infinite;
 }
 
 .orbit-one {
   width: 310px;
   height: 170px;
   transform: rotate(32deg);
+  animation-duration: 24s;
+  animation-direction: reverse;
 }
 
 .orbit-two {
@@ -759,7 +823,27 @@ h3 {
   height: 300px;
   border-color: rgb(214 184 138 / 0.22);
   transform: rotate(44deg);
+  animation-duration: 21s;
 }
+
+@keyframes orbit-rotate {
+  from { transform: rotate(-25deg); }
+  to { transform: rotate(335deg); }
+}
+
+@keyframes orbit-one-rotate {
+  from { transform: rotate(32deg); }
+  to { transform: rotate(392deg); }
+}
+
+.orbit-one { animation-name: orbit-one-rotate; }
+
+@keyframes orbit-two-rotate {
+  from { transform: rotate(44deg); }
+  to { transform: rotate(404deg); }
+}
+
+.orbit-two { animation-name: orbit-two-rotate; }
 
 .orbit-core {
   display: grid;
@@ -3209,6 +3293,13 @@ button.official-pack-row:hover,
   margin-top: 0;
 }
 
+.model-list-panel > .profile-records,
+.profile-panel > .profile-records {
+  margin-top: var(--space-section);
+  padding-top: var(--space-section);
+  border-top: 1px solid var(--color-border);
+}
+
 .model-toolbar-button {
   justify-content: center;
   min-height: 38px;
@@ -3642,6 +3733,10 @@ button.official-pack-row:hover,
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+
+  .hero-orbit .orbit {
+    animation: none !important;
+  }
 }
 
 .app-shell[data-reduced-motion="true"] *,
@@ -3651,4 +3746,8 @@ button.official-pack-row:hover,
   transition-duration: 0.01ms !important;
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
+}
+
+.app-shell[data-reduced-motion="true"] .hero-orbit .orbit {
+  animation: none !important;
 }
