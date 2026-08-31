@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_APPEARANCE,
+  APPEARANCE_PAYLOAD_VERSION,
   FONT_SCALE_MAX,
   FONT_SCALE_MIN,
+  MAX_APPEARANCE_PAYLOAD_BYTES,
+  importAppearancePreferences,
   normalizeAppearance,
   normalizeFontScale,
   parseAppearancePreferences,
@@ -69,5 +72,39 @@ describe("appearance preferences", () => {
       surfaceId: "warm",
     });
     expect(parseAppearancePreferences("not-json")).toEqual(DEFAULT_APPEARANCE);
+  });
+
+  it("exports a bounded versioned payload and normalizes imports", () => {
+    const serialized = serializeAppearancePreferences({
+      fontId: "arial",
+      fontScale: 102,
+      accentId: "sage",
+      radiusId: "compact",
+      surfaceId: "paper",
+      reducedMotion: true,
+      apiKey: "must-not-export",
+      headers: { Authorization: "must-not-export" },
+    });
+    const payload = JSON.parse(serialized) as Record<string, unknown>;
+    expect(payload).toEqual({
+      schemaVersion: APPEARANCE_PAYLOAD_VERSION,
+      preferences: {
+        fontId: "arial",
+        fontScale: 100,
+        accentId: "sage",
+        radiusId: "compact",
+        surfaceId: "paper",
+        reducedMotion: true,
+      },
+    });
+    expect(serialized.length).toBeLessThan(MAX_APPEARANCE_PAYLOAD_BYTES);
+    expect(importAppearancePreferences(serialized)).toEqual(payload.preferences);
+  });
+
+  it("rejects oversized or unversioned preference imports without changing defaults", () => {
+    expect(() => importAppearancePreferences("x".repeat(MAX_APPEARANCE_PAYLOAD_BYTES + 1))).toThrow("8 KiB");
+    expect(() => importAppearancePreferences(JSON.stringify({ fontId: "arial" }))).toThrow("unsupported format");
+    expect(parseAppearancePreferences(JSON.stringify({ schemaVersion: 99, preferences: { fontId: "arial" } })))
+      .toEqual(DEFAULT_APPEARANCE);
   });
 });

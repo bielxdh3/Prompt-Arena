@@ -123,6 +123,33 @@ export type ExternalGenerationEvidenceRecord = {
   createdAt: string;
 };
 
+export type RetentionTablePreview = {
+  table: string;
+  eligibleRecords: number;
+};
+
+export type StorageRetentionPreview = {
+  olderThanDays: number;
+  cutoffAt: string;
+  eligibleRecords: number;
+  tables: RetentionTablePreview[];
+  protectedTables: string[];
+  maxDeleteRecords: number;
+  confirmation: string;
+};
+
+export type StorageRetentionRequest = {
+  olderThanDays: number;
+  cutoffAt: string;
+  expectedRecords: number;
+  confirmation: string;
+};
+
+export type StorageRetentionResult = {
+  preview: StorageRetentionPreview;
+  deletedRecords: number;
+};
+
 export type RunRecord = {
   runId: string;
   benchmarkVersionId: string;
@@ -797,6 +824,22 @@ export async function readExternalGenerationEvidence(): Promise<ExternalGenerati
   return invokeDesktop<ExternalGenerationEvidenceRecord[]>(
     "list_external_generation_evidence",
     "The external generation history could not be reached.",
+  );
+}
+
+export async function previewStorageRetention(olderThanDays: number): Promise<StorageRetentionPreview> {
+  return invokeDesktop<StorageRetentionPreview>(
+    "preview_storage_retention",
+    "The local retention preview could not be prepared.",
+    { olderThanDays },
+  );
+}
+
+export async function cleanupStorageRetention(request: StorageRetentionRequest): Promise<StorageRetentionResult> {
+  return invokeDesktop<StorageRetentionResult>(
+    "cleanup_storage_retention",
+    "The local retention cleanup could not be completed.",
+    { request },
   );
 }
 

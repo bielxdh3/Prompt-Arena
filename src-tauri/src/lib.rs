@@ -26,6 +26,8 @@ pub fn run() -> tauri::Result<()> {
             commands::remove_external_provider,
             commands::execute_external_generation,
             commands::list_external_generation_evidence,
+            commands::preview_storage_retention,
+            commands::cleanup_storage_retention,
             commands::list_official_packs,
             commands::get_official_pack,
             commands::materialize_official_pack,
