@@ -1274,6 +1274,21 @@ fn effective_config_snapshot(
         "profileRevisionId".to_owned(),
         json!(plan.profile_revision.profile_revision_id),
     );
+    snapshot.insert(
+        "profileBackend".to_owned(),
+        json!(plan.profile_revision.runtime),
+    );
+    for (profile_key, snapshot_key) in [
+        ("modelId", "profileModelId"),
+        ("sourceId", "profileSourceId"),
+        ("endpoint", "profileEndpoint"),
+        ("path", "profilePath"),
+        ("quantizationLevel", "profileQuantizationLevel"),
+    ] {
+        if let Some(value) = plan.profile_revision.extra.get(profile_key) {
+            snapshot.insert(snapshot_key.to_owned(), value.clone());
+        }
+    }
     snapshot.insert("model".to_owned(), json!(plan.generation.model));
     snapshot.insert(
         "runtimeConfig".to_owned(),
@@ -1612,6 +1627,36 @@ mod tests {
             json!("profile-1@1")
         );
         assert!(!attempt.effective_config.contains_key("generation"));
+    }
+
+    #[test]
+    fn effective_config_preserves_profile_model_source_identity() {
+        let mut plan = plan();
+        plan.profile_revision
+            .extra
+            .insert("modelId".to_owned(), json!("model-q4"));
+        plan.profile_revision
+            .extra
+            .insert("sourceId".to_owned(), json!("ollama-source"));
+        plan.profile_revision
+            .extra
+            .insert("backend".to_owned(), json!("ollama"));
+        plan.profile_revision
+            .extra
+            .insert("quantizationLevel".to_owned(), json!("Q4_K_M"));
+
+        let snapshot = effective_config_snapshot(
+            &plan,
+            &MockProvider {
+                error: None,
+                chunks: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(snapshot["profileBackend"], json!("ollama"));
+        assert_eq!(snapshot["profileModelId"], json!("model-q4"));
+        assert_eq!(snapshot["profileSourceId"], json!("ollama-source"));
+        assert_eq!(snapshot["profileQuantizationLevel"], json!("Q4_K_M"));
     }
 
     #[test]
