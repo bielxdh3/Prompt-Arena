@@ -168,7 +168,7 @@ function normalizeProfile(value: unknown): ProfileRevision {
   }
   const model = text(profile.model, "Profile model", MAX_MODEL_BYTES);
   if (profile.runtime !== "ollama") {
-    throw new Error("Profile runtime is unsupported in this slice.");
+    throw new Error("Profile runtime is unsupported by the local execution boundary.");
   }
   const parameters = boundedJsonRecord(profile.parameters, "Profile parameters", MAX_PROFILE_REQUEST_BYTES);
   const extra = boundedJsonRecord(
@@ -205,7 +205,7 @@ function generationParameters(parameters: Record<string, unknown>): GenerationPa
   ]);
   for (const key of Object.keys(parameters)) {
     if (!supported.has(key)) {
-      throw new Error(`Profile parameter is unsupported in this slice: ${key}.`);
+      throw new Error(`Profile parameter is unsupported by the local runtime: ${key}.`);
     }
   }
   return {

@@ -62,6 +62,7 @@ import {
   type ModelDiscoveryRequest,
   type ModelOperation,
   type ModelOperationRequest,
+  type ModelInfo,
   type ModelRecord,
   type ModelRemovalEvidence,
   type ModelSourceConfig,
@@ -118,6 +119,9 @@ import {
   arenaExportCsv,
   arenaExportJson,
   arenaExportMarkdown,
+  arenaSummaryExportCsv,
+  arenaSummaryExportJson,
+  arenaSummaryExportMarkdown,
   buildArenaSummaryPayload,
   buildBlindArenaCards,
   executeArena,
@@ -344,16 +348,17 @@ function App() {
         )}
 
         <main className="main-content" id="main-content">
-          {activeView === "overview" && <Overview onOpenArena={() => setActiveView("arena")} />}
+          {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
           {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
           {activeView === "advanced-arena" && <AdvancedArenaView />}
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
-          {activeView === "runs" && <RunsView />}
+          {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
           {activeView === "settings" && (
             <Settings
               appearance={appearance}
               desktop={isDesktopEnvironment()}
+              connection={connection}
               onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
               onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
             />
@@ -376,43 +381,78 @@ function ConnectionBadge({ connection }: { connection: ConnectionState }) {
   return <span className="status-chip is-ready">Local app ready</span>;
 }
 
-function Overview({ onOpenArena }: { onOpenArena: () => void }) {
-  const [localData, setLocalData] = useState<{ status: "loading" | "ready" | "error" | "preview"; runs: number; profiles: number; models: number }>({
-    status: isDesktopEnvironment() ? "loading" : "preview",
-    runs: 0,
-    profiles: 0,
-    models: 0,
-  });
+type OverviewData = {
+  runs: RunRecord[];
+  summaries: ArenaSummaryRecord[];
+  profiles: ProfileRevision[];
+  models: ModelInfo[];
+};
+
+type OverviewState =
+  | { status: "loading" }
+  | { status: "preview" }
+  | { status: "ready"; data: OverviewData }
+  | { status: "error"; message: string };
+
+const OVERVIEW_LINKS: readonly { id: ViewId; label: string; description: string }[] = [
+  { id: "arena", label: "Arena", description: "Set up a comparison" },
+  { id: "advanced-arena", label: "Advanced Arena", description: "Rank saved evidence" },
+  { id: "runs", label: "Runs", description: "Read persisted results" },
+  { id: "models", label: "Models", description: "Manage local profiles" },
+  { id: "settings", label: "Settings", description: "Appearance and diagnostics" },
+];
+
+function Overview({
+  connection,
+  onNavigate,
+}: {
+  connection: ConnectionState;
+  onNavigate: (view: ViewId) => void;
+}) {
+  const [state, setState] = useState<OverviewState>(() => (
+    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+  ));
 
   useEffect(() => {
     if (!isDesktopEnvironment()) {
-      setLocalData((current) => ({ ...current, status: "preview" }));
+      setState({ status: "preview" });
       return;
     }
     let active = true;
-    void Promise.all([readRuns(), readProfileRevisions(), readLocalOllamaModels()])
-      .then(([runs, profiles, models]) => {
-        if (active) setLocalData({ status: "ready", runs: runs.length, profiles: profiles.length, models: models.length });
+    void Promise.all([readRuns(), readArenaSummaries(), readProfileRevisions(), readLocalOllamaModels()])
+      .then(([runs, summaries, profiles, models]) => {
+        if (active) setState({ status: "ready", data: { runs, summaries, profiles, models } });
       })
-      .catch(() => {
-        if (active) setLocalData((current) => ({ ...current, status: "error" }));
+      .catch((error: unknown) => {
+        if (active) {
+          setState({
+            status: "error",
+            message: error instanceof Error ? error.message : "The local overview data is unavailable.",
+          });
+        }
       });
     return () => { active = false; };
   }, []);
 
-  const count = (value: number) => localData.status === "ready" ? String(value) : localData.status === "preview" ? "Preview" : "—";
+  const count = (items: readonly unknown[] | undefined) => {
+    if (state.status === "preview") return "Preview";
+    if (state.status !== "ready" || !items) return state.status === "loading" ? "…" : "—";
+    return items.length.toLocaleString();
+  };
+  const data = state.status === "ready" ? state.data : null;
+  const recentSummaries = data ? [...data.summaries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 3) : [];
+
   return (
     <div className="view-stack">
       <section className="hero-panel panel">
         <div className="hero-copy">
-          <p className="eyebrow">A quiet place for reproducible work</p>
+          <p className="eyebrow">Your local comparison workspace</p>
           <h2>Compare models with evidence, not noise.</h2>
           <p>
-            Prompt Arena is a standalone local-first desktop laboratory. Create reproducible Arenas, compare multiple
-            immutable model revisions, review verified responses, and keep the evidence on this machine. Ollama is the
-            current executable runtime; other adapters remain clearly marked in the roadmap.
+            Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record
+            on this machine. The overview below reflects only data returned by the local desktop boundary.
           </p>
-          <button className="primary-button" type="button" onClick={onOpenArena}>
+          <button className="primary-button" type="button" onClick={() => onNavigate("arena")}>
             Open Arena
             <span aria-hidden="true">→</span>
           </button>
@@ -424,27 +464,77 @@ function Overview({ onOpenArena }: { onOpenArena: () => void }) {
         </div>
       </section>
 
-      <section className="metric-grid" aria-label="Workspace status">
-        <MetricCard label="Saved runs" value={count(localData.runs)} detail="Immutable local history" />
-        <MetricCard label="Registered profiles" value={count(localData.profiles)} detail="Model revisions" />
-        <MetricCard label="Installed Ollama models" value={count(localData.models)} detail="Loopback discovery" />
+      {state.status === "loading" && (
+        <section className="panel dashboard-state" aria-live="polite">
+          <StateMessage icon="…" title="Loading your workspace" description="Reading runs, Arena summaries, profile revisions, and local model inventory." />
+        </section>
+      )}
+      {state.status === "preview" && (
+        <section className="panel dashboard-state" aria-live="polite">
+          <StateMessage icon="◇" title="Browser preview" description="The browser preview does not read desktop records or invent counts. Open the desktop app to see local workspace data." />
+        </section>
+      )}
+      {state.status === "error" && (
+        <section className="panel dashboard-state" aria-live="polite">
+          <StateMessage icon="!" title="Workspace data unavailable" description={state.message} error />
+        </section>
+      )}
+
+      <section className="metric-grid dashboard-metrics" aria-label="Local workspace records">
+        <MetricCard label="Saved runs" value={count(data?.runs)} detail="Immutable execution history" />
+        <MetricCard label="Arena summaries" value={count(data?.summaries)} detail="Persisted aggregate evidence" />
+        <MetricCard label="Model revisions" value={count(data?.profiles)} detail="Registered local profiles" />
+        <MetricCard label="Local models" value={count(data?.models)} detail="Ollama inventory" />
       </section>
 
-      <section className="panel section-panel">
-        <div className="section-heading">
+      <section className="panel dashboard-panel" aria-labelledby="overview-actions-heading">
+        <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Start here</p>
-            <h2>Build an Arena from local evidence.</h2>
+            <p className="eyebrow">Workspace</p>
+            <h2 id="overview-actions-heading">Choose where to work next.</h2>
           </div>
           <span className="section-index">01</span>
         </div>
-        <EmptyState
-          title={localData.status === "ready" && localData.runs > 0 ? "Keep comparing" : "Start your first Arena"}
-          description={localData.status === "ready" && localData.runs > 0 ? "Open Arena to compare another immutable model revision or inspect saved evidence in Runs." : "Publish or select an immutable benchmark version, register two model revisions, and run a comparison."}
-          actionLabel="Open Arena"
-          onAction={onOpenArena}
-        />
+        <nav className="overview-nav" aria-label="Overview shortcuts">
+          {OVERVIEW_LINKS.map((link) => (
+            <button className="dashboard-link" key={link.id} type="button" onClick={() => onNavigate(link.id)}>
+              <span><strong>{link.label}</strong><small>{link.description}</small></span>
+              <span aria-hidden="true">→</span>
+            </button>
+          ))}
+        </nav>
       </section>
+
+      <section className="panel dashboard-panel" aria-labelledby="recent-evidence-heading">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Persisted evidence</p>
+            <h2 id="recent-evidence-heading">Recent Arena summaries.</h2>
+          </div>
+          <button className="text-button" type="button" onClick={() => onNavigate("runs")}>Open Runs <span aria-hidden="true">→</span></button>
+        </div>
+        {state.status === "ready" && recentSummaries.length === 0 && (
+          <EmptyState title="No saved Arena summaries" description="Complete an Arena in the desktop app to see its aggregate evidence here. No sample records are bundled." actionLabel="Open Arena" onAction={() => onNavigate("arena")} />
+        )}
+        {state.status === "ready" && recentSummaries.length > 0 && (
+          <div className="dashboard-activity-list">
+            {recentSummaries.map((summary) => (
+              <div className="dashboard-activity-row" key={summary.arenaId}>
+                <div>
+                  <strong>{summary.arenaId}</strong>
+                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                </div>
+                <span>{summary.summary.completed === undefined ? "Completed not recorded" : `${String(summary.summary.completed)} completed`}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {(state.status === "loading" || state.status === "preview" || state.status === "error") && (
+          <p className="field-help">Recent evidence will appear when the local workspace state is available.</p>
+        )}
+      </section>
+
+      <DiagnosticsSurface connection={connection} desktop={isDesktopEnvironment()} compact />
     </div>
   );
 }
@@ -456,6 +546,70 @@ function MetricCard({ label, value, detail }: { label: string; value: string; de
       <p className="metric-value">{value}</p>
       <p className="metric-detail">{detail}</p>
     </article>
+  );
+}
+
+function DiagnosticsSurface({
+  connection,
+  desktop,
+  compact = false,
+}: {
+  connection: ConnectionState;
+  desktop: boolean;
+  compact?: boolean;
+}) {
+  const bridgeValue = connection.status === "loading"
+    ? "Checking desktop bridge"
+    : connection.status === "ready"
+      ? "Connected"
+      : "Unavailable";
+  const storageValue = connection.status === "ready"
+    ? "App-owned local storage"
+    : desktop
+      ? "Unavailable until bridge connects"
+      : "Not available in browser preview";
+  const runtimeValue = connection.status === "ready"
+    ? "Ollama loopback for local generation"
+    : desktop
+      ? "Unavailable until bridge connects"
+      : "Not queried in browser preview";
+  const capabilitiesValue = connection.status === "ready"
+    ? "Runs, Arena summaries, profiles, and model metadata"
+    : desktop
+      ? "No local capability read completed"
+      : "No desktop records or runtimes are read";
+  const platform = connection.status === "ready" ? connection.appStatus.supportedPlatform : "unknown";
+  const protocol = connection.status === "ready" ? `v${connection.appStatus.protocolVersion}` : "Not reported";
+  const liveMessage = connection.status === "loading"
+    ? "Checking the local desktop bridge."
+    : connection.status === "ready"
+      ? "Desktop bridge connected. Local storage and capability boundaries are available."
+      : "Desktop bridge unavailable. The app is showing an honest browser or disconnected preview.";
+
+  return (
+    <section className={`panel diagnostics-panel ${compact ? "diagnostics-panel-compact" : ""}`} aria-labelledby={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Local diagnostics</p>
+          <h2 id={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>Know where your data lives.</h2>
+        </div>
+        <span className={`run-status ${connection.status === "ready" ? "arena-status-success" : "run-status-neutral"}`} role="status" aria-live="polite">{bridgeValue}</span>
+      </div>
+      <p className="diagnostics-copy">
+        Prompt Arena is local-first. This surface reports the boundary it can verify; unavailable values stay unavailable.
+        Optional external provider calls are separate, explicit actions in Settings.
+      </p>
+      <dl className="diagnostics-list">
+        <div><dt>Desktop bridge</dt><dd>{bridgeValue}</dd></div>
+        <div><dt>Storage boundary</dt><dd>{storageValue}</dd></div>
+        <div><dt>Runtime boundary</dt><dd>{runtimeValue}</dd></div>
+        <div><dt>Local capabilities</dt><dd>{capabilitiesValue}</dd></div>
+        <div><dt>Platform</dt><dd>{platform}</dd></div>
+        <div><dt>Protocol</dt><dd>{protocol}</dd></div>
+        <div><dt>Network default</dt><dd>None for local Arena work</dd></div>
+      </dl>
+      <p className="sr-only" role="status" aria-live="polite">{liveMessage}</p>
+    </section>
   );
 }
 
@@ -874,7 +1028,7 @@ function BenchmarksView() {
       <section className="panel official-packs-panel" aria-live="polite" aria-label="Official benchmark packs">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Phase C source records</p>
+            <p className="eyebrow">Bundled source records</p>
             <h3>Official benchmark packs</h3>
           </div>
           <span className="run-status run-status-neutral">source + evidence</span>
@@ -2206,7 +2360,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
             )}
             {execution.status === "busy" && (
               <div className="arena-execution-status">
-                <StateMessage icon="…" title="Running one bounded case" description="The existing one-shot worker is processing the selected request. Cancellation and lifecycle controls are not part of this slice." />
+                <StateMessage icon="…" title="Running one bounded case" description="The app-owned one-shot worker is processing the selected request. Queued cancellation and lifecycle controls are not available for this run." />
               </div>
             )}
             {execution.status === "error" && (
@@ -2556,6 +2710,7 @@ function ArenaResultsSurface({
   const [scores, setScores] = useState<Record<string, number>>({});
   const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
   const [lockMessage, setLockMessage] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState("");
   const summary = summarizeArenaExecutions(results);
   const responseMap = responseState.status === "ready"
     ? new Map(Object.entries(responseState.responses).map(([key, value]) => [key, value.text]))
@@ -2592,16 +2747,14 @@ function ArenaResultsSurface({
     }
   }
 
-  function download(kind: "json" | "markdown" | "csv") {
-    const content = kind === "json" ? arenaExportJson(request, results) : kind === "markdown" ? arenaExportMarkdown(request, results) : arenaExportCsv(results);
-    const type = kind === "json" ? "application/json" : kind === "markdown" ? "text/markdown" : "text/csv";
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `prompt-arena-${request.arenaId}.${kind === "markdown" ? "md" : kind}`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+  function download(kind: LocalExportKind) {
+    try {
+      const content = kind === "json" ? arenaExportJson(request, results) : kind === "markdown" ? arenaExportMarkdown(request, results) : arenaExportCsv(results);
+      downloadLocalText(request.arenaId, kind, content);
+      setExportMessage(`${kind === "markdown" ? "Markdown" : kind.toUpperCase()} export prepared from current Arena evidence.`);
+    } catch (error: unknown) {
+      setExportMessage(error instanceof Error ? error.message : "The local export could not be prepared.");
+    }
   }
 
   return (
@@ -2639,7 +2792,8 @@ function ArenaResultsSurface({
           <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">Competitor</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} sample{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">No response text is available for this competitor. Inspect run history for verified evidence.</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`} {item.error ? `· ${item.error}` : ""}</li>; })}</ul></article>; })}</div>
           {ranking.length > 0 && <div className="arena-ranking" aria-label="Arena ranking"><div className="section-heading compact-heading"><div><p className="eyebrow">Ranking</p><h4>Human scores after immutable lock</h4></div><span className="run-status arena-status-success">Revealed</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${entry.value.toFixed(2)}/5 average` : `${Math.round(entry.value * 100)}% objective pass rate`} · n={entry.sampleSize}</span></li>)}</ol></div>}
           {revealed && lockState === "locked" && <p className="field-help" role="status">Blind scores are locked in immutable per-run evaluation records. Responses are now identified.</p>}
-          <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => download("json")}>Export JSON</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>Export Markdown</button><button className="secondary-button" type="button" onClick={() => download("csv")}>Export CSV</button></div>
+           <div className="export-actions" role="group" aria-label="Current Arena evidence exports"><button className="secondary-button" type="button" onClick={() => download("json")}>Export JSON</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>Export Markdown</button><button className="secondary-button" type="button" onClick={() => download("csv")}>Export CSV</button></div>
+           {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
         </>
       )}
     </section>
@@ -2732,6 +2886,7 @@ function arenaTerminalStatus(status: string): "success" | "failure" | "cancelled
 type RunsState =
   | { status: "loading" }
   | { status: "ready"; runs: RunRecord[]; summaries: ArenaSummaryRecord[] }
+  | { status: "preview" }
   | { status: "error"; message: string };
 
 type AttemptsState =
@@ -2740,16 +2895,26 @@ type AttemptsState =
   | { status: "ready"; attempts: AttemptRecord[] }
   | { status: "error"; message: string };
 
-function RunsView() {
-  const [state, setState] = useState<RunsState>({ status: "loading" });
+type AttemptResponsesState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; responses: Record<string, AttemptResponse | null> }
+  | { status: "partial"; responses: Record<string, AttemptResponse | null>; message: string };
+
+function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
+  const [state, setState] = useState<RunsState>(() => (
+    isDesktopEnvironment() ? { status: "loading" } : { status: "preview" }
+  ));
   const [selectedRunId, setSelectedRunId] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
   const [attemptsState, setAttemptsState] = useState<AttemptsState>({ status: "idle" });
+  const [responsesState, setResponsesState] = useState<AttemptResponsesState>({ status: "idle" });
   const [blindEvaluationStatus, setBlindEvaluationStatus] = useState<BlindEvaluationSurfaceStatus>("loading");
 
   useEffect(() => {
     let current = true;
     if (!isDesktopEnvironment()) {
-      setState({ status: "error", message: "Runs are available only in the local desktop workspace." });
+      setState({ status: "preview" });
       return () => {
         current = false;
       };
@@ -2786,6 +2951,7 @@ function RunsView() {
     let current = true;
     if (!selectedRun || !isDesktopEnvironment()) {
       setAttemptsState({ status: "idle" });
+      setResponsesState({ status: "idle" });
       setBlindEvaluationStatus("loading");
       return () => {
         current = false;
@@ -2793,10 +2959,31 @@ function RunsView() {
     }
 
     setAttemptsState({ status: "loading" });
+    setResponsesState({ status: "loading" });
     setBlindEvaluationStatus("loading");
     void readRunAttempts(selectedRun.runId)
-      .then((attempts) => {
-        if (current) setAttemptsState({ status: "ready", attempts });
+      .then(async (attempts) => {
+        if (!current) return;
+        setAttemptsState({ status: "ready", attempts });
+        const responses = await Promise.all(attempts.map(async (attempt) => {
+          if (attempt.status !== "completed") return { attemptId: attempt.attemptId, response: null, failed: false };
+          try {
+            return {
+              attemptId: attempt.attemptId,
+              response: await readAttemptResponse(selectedRun.runId, attempt.attemptId),
+              failed: false,
+            };
+          } catch {
+            return { attemptId: attempt.attemptId, response: null, failed: true };
+          }
+        }));
+        if (!current) return;
+        const responseMap: Record<string, AttemptResponse | null> = {};
+        for (const entry of responses) responseMap[entry.attemptId] = entry.response;
+        const failedCount = responses.filter((entry) => entry.failed).length;
+        setResponsesState(failedCount > 0
+          ? { status: "partial", responses: responseMap, message: `${failedCount} verified response artifact${failedCount === 1 ? " is" : "s are"} unavailable.` }
+          : { status: "ready", responses: responseMap });
       })
       .catch((error: unknown) => {
         if (current) {
@@ -2804,6 +2991,7 @@ function RunsView() {
             status: "error",
             message: error instanceof Error ? error.message : "The selected run attempts are unavailable.",
           });
+          setResponsesState({ status: "idle" });
         }
       });
 
@@ -2812,14 +3000,25 @@ function RunsView() {
     };
   }, [selectedRun]);
 
+  const filteredRuns = state.status === "ready"
+    ? state.runs.filter((run) => {
+      const query = historyQuery.trim().toLowerCase();
+      return !query || [run.runId, run.benchmarkVersionId, run.status, ...run.profileRevisionIds]
+        .some((value) => value.toLowerCase().includes(query));
+    })
+    : [];
+  const responseMap = responsesState.status === "ready" || responsesState.status === "partial"
+    ? responsesState.responses
+    : {};
+
   return (
     <div className="view-stack">
       <section className="panel page-intro">
         <p className="eyebrow">Execution history</p>
         <h2>Runs</h2>
         <p>
-          Runs are read from the app-owned local store. One-shot execution and evidence persistence are available to
-          the desktop boundary; browser preview does not execute a model or create sample records.
+          Runs and Arena summaries are read from the app-owned local store. Select a record to inspect its persisted
+          configuration, verified response evidence, and deterministic metrics. Browser preview never creates sample data.
         </p>
       </section>
       <section className="panel runs-panel" aria-live="polite">
@@ -2834,21 +3033,45 @@ function RunsView() {
             error
           />
         )}
+        {state.status === "preview" && (
+          <StateMessage icon="◇" title="Browser preview / no reads" description="The browser preview cannot read desktop runs or response artifacts. Open the desktop app to inspect persisted evidence; this view invents no records." />
+        )}
         {state.status === "ready" && state.runs.length === 0 && state.summaries.length === 0 && (
           <EmptyState
             title="No run history"
             description="There are no local run records yet. No sample runs are bundled or invented in this view."
+            actionLabel="Open Arena"
+            onAction={() => onNavigate("arena")}
           />
         )}
         {state.status === "ready" && state.runs.length > 0 && (
-          <div className="runs-layout">
-            <div className="runs-list" aria-label="Run records">
-              {state.runs.map((run) => (
+          <>
+            <div className="history-toolbar">
+              <label className="history-filter-label" htmlFor="run-history-filter">
+                <span className="field-label">Find a run</span>
+                <input
+                  className="history-filter"
+                  id="run-history-filter"
+                  type="search"
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.currentTarget.value)}
+                  placeholder="Run, benchmark, profile, or status"
+                />
+              </label>
+              <span className="field-help" role="status">{filteredRuns.length} of {state.runs.length} runs shown</span>
+            </div>
+            {filteredRuns.length === 0 ? (
+              <EmptyState title="No matching runs" description="No persisted run matches this local filter. Clear the filter to see all records." />
+            ) : (
+              <div className="runs-layout">
+                <div className="runs-list" aria-label="Run records">
+                  {filteredRuns.map((run) => (
                 <button
                   className={`run-row ${selectedRunId === run.runId ? "is-selected" : ""}`}
                   key={run.runId}
                   type="button"
                   aria-pressed={selectedRunId === run.runId}
+                  aria-label={`${run.runId}, ${attemptStatusLabel(run.status)}, ${run.attemptIds.length} attempts`}
                   onClick={() => {
                     setBlindEvaluationStatus("loading");
                     setSelectedRunId(run.runId);
@@ -2858,7 +3081,7 @@ function RunsView() {
                     <p className="eyebrow">{run.benchmarkVersionId}</p>
                     <h3>{run.runId}</h3>
                     <p className="run-meta">
-                      {run.attemptIds.length} attempt{run.attemptIds.length === 1 ? "" : "s"} · started {run.startedAt}
+                      {run.attemptIds.length} attempt{run.attemptIds.length === 1 ? "" : "s"} · {run.profileRevisionIds.length} profile revision{run.profileRevisionIds.length === 1 ? "" : "s"} · started {run.startedAt}
                     </p>
                   </div>
                   <span className={`run-status run-status-${attemptStatusTone(run.status)}`}>
@@ -2887,20 +3110,24 @@ function RunsView() {
                   {attemptsState.status === "ready" && attemptsState.attempts.length === 0 && (
                     <EmptyState title="No attempts for this run" description="The local store returned no attempt records; this view does not invent them." />
                   )}
-                  {attemptsState.status === "ready" && attemptsState.attempts.length > 0 && (
+                      {attemptsState.status === "ready" && attemptsState.attempts.length > 0 && (
                     <div className="attempts-list">
                       {attemptsState.attempts.map((attempt) => (
-                        <AttemptDetail key={attempt.attemptId} attempt={attempt} />
+                        <AttemptDetail key={attempt.attemptId} attempt={attempt} response={responseMap[attempt.attemptId]} />
                       ))}
                     </div>
                   )}
+                  {responsesState.status === "loading" && <StateMessage icon="…" title="Reading verified responses" description="Opening only hash-verified response artifacts from the selected run." />}
+                  {responsesState.status === "partial" && <p className="field-help" role="status">{responsesState.message} Available response artifacts remain visible below.</p>}
                   {attemptsState.status === "ready" && (
                     <ComparabilityPanel run={selectedRun} attempts={attemptsState.attempts} />
                   )}
                 </>
               )}
-            </section>
-          </div>
+                </section>
+              </div>
+            )}
+          </>
         )}
         {state.status === "ready" && <ArenaSummaryHistory summaries={state.summaries} />}
       </section>
@@ -2917,25 +3144,34 @@ type ArenaSummaryDetailState =
 function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] }) {
   const [selectedArenaId, setSelectedArenaId] = useState("");
   const [detail, setDetail] = useState<ArenaSummaryDetailState>({ status: "idle" });
+  const summaryRequestRef = useRef(0);
+  const orderedSummaries = [...summaries].sort((left, right) => (
+    right.createdAt.localeCompare(left.createdAt) || right.arenaId.localeCompare(left.arenaId)
+  ));
 
   useEffect(() => {
     if (!summaries.some((summary) => summary.arenaId === selectedArenaId)) {
+      summaryRequestRef.current += 1;
       setSelectedArenaId("");
       setDetail({ status: "idle" });
     }
   }, [selectedArenaId, summaries]);
 
   async function selectSummary(arenaId: string) {
+    const requestId = summaryRequestRef.current + 1;
+    summaryRequestRef.current = requestId;
     setSelectedArenaId(arenaId);
     setDetail({ status: "loading" });
     try {
       const record = await readArenaSummary(arenaId);
+      if (requestId !== summaryRequestRef.current) return;
       if (!record) {
         setDetail({ status: "error", message: "The selected Arena summary no longer exists locally." });
         return;
       }
       setDetail({ status: "ready", record });
     } catch (error: unknown) {
+      if (requestId !== summaryRequestRef.current) return;
       setDetail({
         status: "error",
         message: error instanceof Error ? error.message : "The selected Arena summary is unavailable.",
@@ -2957,11 +3193,13 @@ function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] })
       ) : (
         <div className="runs-layout">
           <div className="runs-list" aria-label="Arena summary records">
-            {summaries.map((summary) => (
+            {orderedSummaries.map((summary) => (
               <button
                 className={`benchmark-record-row ${selectedArenaId === summary.arenaId ? "is-selected" : ""}`}
                 key={summary.arenaId}
                 type="button"
+                aria-pressed={selectedArenaId === summary.arenaId}
+                aria-label={`${summary.arenaId}, ${summary.evidence.length} persisted samples, saved ${summary.createdAt}`}
                 onClick={() => void selectSummary(summary.arenaId)}
               >
                 <span>
@@ -2986,6 +3224,59 @@ function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] })
   );
 }
 
+type LocalExportKind = "json" | "markdown" | "csv";
+
+function downloadLocalText(stem: string, kind: LocalExportKind, content: string) {
+  const extension = kind === "markdown" ? "md" : kind;
+  const safeStem = stem.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "arena-summary";
+  const blob = new Blob([content], { type: kind === "json" ? "application/json" : kind === "markdown" ? "text/markdown" : "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `prompt-arena-${safeStem}.${extension}`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function ArenaSummaryExportActions({ record }: { record: ArenaSummaryRecord }) {
+  const [exportMessage, setExportMessage] = useState("");
+
+  function exportRecord(kind: LocalExportKind) {
+    try {
+      const content = kind === "json"
+        ? arenaSummaryExportJson(record)
+        : kind === "markdown"
+          ? arenaSummaryExportMarkdown(record)
+          : arenaSummaryExportCsv(record);
+      downloadLocalText(record.arenaId, kind, content);
+      setExportMessage(`${kind === "markdown" ? "Markdown" : kind.toUpperCase()} export prepared from persisted evidence.`);
+    } catch (error: unknown) {
+      setExportMessage(error instanceof Error ? error.message : "The local export could not be prepared.");
+    }
+  }
+
+  return (
+    <section className="results-section export-section" aria-labelledby="persisted-export-heading">
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">Local export</p>
+          <h4 id="persisted-export-heading">Download persisted evidence</h4>
+        </div>
+        <span className="run-status run-status-neutral">bounded</span>
+      </div>
+      <p className="field-help">Exports use the saved Arena summary only. They contain deterministic metadata and metrics, never response text, API keys, or credential material.</p>
+      <div className="export-actions" role="group" aria-label="Persisted Arena evidence exports">
+        <button className="secondary-button" type="button" onClick={() => exportRecord("json")}>JSON</button>
+        <button className="secondary-button" type="button" onClick={() => exportRecord("markdown")}>Markdown</button>
+        <button className="secondary-button" type="button" onClick={() => exportRecord("csv")}>CSV</button>
+      </div>
+      {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
+    </section>
+  );
+}
+
 function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
   const summary = record.summary;
   return (
@@ -2993,6 +3284,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       <div className="results-facts">
         <BoundaryRow label="Arena" value={record.arenaId} />
         <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
+        <BoundaryRow label="Saved" value={record.createdAt} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
         <BoundaryRow label="Samples" value={String(record.evidence.length)} />
         <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
@@ -3004,30 +3296,60 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       </div>
       <div className="results-section">
         <p className="eyebrow">Competitor summaries</p>
-        <ul className="arena-sample-list">
-          {record.competitors.map((competitor, index) => (
-            <li key={`${String(competitor.competitorId ?? index)}`}>
-              <strong>{String(competitor.competitorLabel ?? competitor.competitorId ?? `Competitor ${index + 1}`)}</strong>
-              {` · ${String(competitor.completed ?? 0)}/${String(competitor.total ?? 0)} completed`}
-              {` · uncertainty ${summaryMetricText(competitor, "uncertainty")}`}
-              {` · tie margin ${summaryMetricText(competitor, "tieMargin")}`}
-            </li>
-          ))}
-        </ul>
+        {record.competitors.length === 0 ? (
+          <p className="field-help">No competitor summary rows were persisted in this record.</p>
+        ) : (
+          <ul className="arena-sample-list">
+            {record.competitors.map((competitor, index) => (
+              <li key={`${String(competitor.competitorId ?? index)}`}>
+                <strong>{String(competitor.competitorLabel ?? competitor.competitorId ?? `Competitor ${index + 1}`)}</strong>
+                {` · ${summaryNumberText(competitor, "completed")}/${summaryNumberText(competitor, "total")} completed`}
+                {` · uncertainty ${summaryMetricText(competitor, "uncertainty")}`}
+                {` · tie margin ${summaryMetricText(competitor, "tieMargin")}`}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       <div className="results-section">
         <p className="eyebrow">Per-sample evidence</p>
-        <ul className="arena-sample-list">
-          {record.evidence.map((evidence) => (
-            <li key={`${evidence.runId}-${evidence.repetition}`}>
-              <strong>{evidence.competitorLabel} #{evidence.repetition}</strong>
-              {` · ${evidence.status} · ${evidence.durationMs === null ? "duration not recorded" : `${evidence.durationMs.toFixed(0)} ms`}`}
-              {evidence.completionTokens === null ? "" : ` · ${evidence.completionTokens} completion tokens`}
-              {evidence.objectivePassed === null ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`}
-            </li>
-          ))}
-        </ul>
+        {record.evidence.length === 0 ? (
+          <p className="field-help">No per-sample evidence was persisted in this record.</p>
+        ) : (
+          <div className="evidence-table-wrap">
+            <table className="evidence-table">
+              <caption className="sr-only">Persisted Arena sample evidence</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Competitor</th>
+                  <th scope="col">Sample</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Run / attempt</th>
+                  <th scope="col">Duration</th>
+                  <th scope="col">Tokens/s</th>
+                  <th scope="col">Completion tokens</th>
+                  <th scope="col">Objective</th>
+                </tr>
+              </thead>
+              <tbody>
+                {record.evidence.map((evidence, index) => (
+                  <tr key={`${evidence.runId}-${evidence.repetition}-${index}`}>
+                    <th scope="row">{evidence.competitorLabel}</th>
+                    <td>#{evidence.repetition}</td>
+                    <td>{evidence.status}</td>
+                    <td><code>{evidence.runId}{evidence.attemptId ? ` / ${evidence.attemptId}` : ""}</code></td>
+                    <td>{evidence.durationMs === null ? "Not recorded" : `${evidence.durationMs.toFixed(0)} ms`}</td>
+                    <td>{evidence.tokensPerSecond === null || evidence.tokensPerSecond === undefined ? "Not recorded" : evidence.tokensPerSecond.toFixed(2)}</td>
+                    <td>{evidence.completionTokens === null ? "Not recorded" : evidence.completionTokens}</td>
+                    <td>{evidence.objectivePassed === null ? "Not recorded" : evidence.objectivePassed ? "Pass" : "Fail"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+      <ArenaSummaryExportActions record={record} />
     </div>
   );
 }
@@ -3049,7 +3371,7 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
       <div className="section-heading compact-heading">
         <div>
           <p className="eyebrow">Read-only diagnostic</p>
-          <h3>Comparability foundation</h3>
+          <h3>Comparability check</h3>
         </div>
         <span className={`run-status ${diagnostic.status === "ready" ? "" : "run-status-neutral"}`}>
           {diagnostic.label}
@@ -3319,7 +3641,7 @@ function BlindEvaluationPanel({
   );
 }
 
-function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
+function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response?: AttemptResponse | null }) {
   const summary = attempt.responseSummary;
   const objectiveScore = objectiveVerificationEvidence(attempt.result?.score);
   const tone = attemptStatusTone(attempt.status);
@@ -3374,6 +3696,21 @@ function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
       </div>
 
       <div className="results-section">
+        <p className="eyebrow">Verified response</p>
+        {response ? (
+          <>
+            <div className="results-facts response-evidence-facts">
+              <BoundaryRow label="Verified bytes" value={formatByteCount(response.byteCount)} />
+              <BoundaryRow label="SHA-256" value={response.sha256} />
+            </div>
+            <ResponsePreview text={response.text} />
+          </>
+        ) : (
+          <p className="field-help">No readable hash-verified response text is available for this attempt. The stored artifact reference remains below.</p>
+        )}
+      </div>
+
+      <div className="results-section">
         <p className="eyebrow">Objective verification</p>
         {objectiveScore ? (
           <div className="results-facts">
@@ -3392,7 +3729,7 @@ function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
         ) : (
           <p className="field-help">No objective exact-text evidence was persisted for this result.</p>
         )}
-        <p className="field-help">This is deterministic hash/count evidence only; human/AI evaluation and rankings are outside this slice.</p>
+        <p className="field-help">This is deterministic hash/count evidence only; human/AI evaluation and rankings are not part of this stored result.</p>
       </div>
 
       <div className="results-section">
@@ -3421,7 +3758,7 @@ function AttemptDetail({ attempt }: { attempt: AttemptRecord }) {
             ))}
           </ul>
         )}
-        <p className="field-help">The response payload remains in the immutable artifact and is not rendered here.</p>
+        <p className="field-help">The artifact reference is read-only. The response preview above came only from the hash-verified artifact.</p>
       </div>
     </article>
   );
@@ -3460,11 +3797,13 @@ function StateMessage({
 function Settings({
   appearance,
   desktop,
+  connection,
   onAppearanceChange,
   onRestoreDefaults,
 }: {
   appearance: AppearancePreferences;
   desktop: boolean;
+  connection: ConnectionState;
   onAppearanceChange: (next: AppearancePreferences) => void;
   onRestoreDefaults: () => void;
 }) {
@@ -3637,7 +3976,22 @@ function Settings({
         </div>
       </section>
 
+      <DiagnosticsSurface connection={connection} desktop={desktop} />
+
       <ByokPanel desktop={desktop} />
+    </div>
+  );
+}
+
+function ResponsePreview({ text }: { text: string }) {
+  const maxCharacters = 12_000;
+  const characters = Array.from(text);
+  const visible = characters.slice(0, maxCharacters).join("");
+  const truncated = characters.length > maxCharacters;
+  return (
+    <div className="response-preview-block">
+      <pre className="attempt-response">{visible}</pre>
+      {truncated && <p className="field-help">Response preview is bounded at {maxCharacters.toLocaleString()} characters. The verified byte count and hash cover the complete artifact.</p>}
     </div>
   );
 }
@@ -3925,11 +4279,11 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
   }
 
   return (
-    <section className="panel provider-panel byok-panel" aria-labelledby="provider-foundation-heading">
+    <section className="panel provider-panel byok-panel" aria-labelledby="provider-controls-heading">
       <div className="section-heading compact-heading">
         <div>
           <p className="eyebrow">Bring your own key</p>
-          <h3 id="provider-foundation-heading">External providers, clearly bounded</h3>
+          <h3 id="provider-controls-heading">Optional external providers</h3>
         </div>
         <div className="byok-heading-actions">
           <button className="text-button" type="button" onClick={() => void refreshMetadata()} disabled={!desktop || busy}>
@@ -4257,11 +4611,11 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
         <span className="provider-state">Unconfigured</span>
       </div>
       <div className="provider-facts">
-        <div><span>Transport</span><strong>External · not wired</strong></div>
-        <div><span>Credentials</span><strong>Not configured</strong></div>
-        <div><span>Identity</span><strong>Unverified</strong></div>
-        <div><span>Execution</span><strong>Not wired</strong></div>
-        <div><span>Cost</span><strong>Catalog only</strong></div>
+        <div><span>Transport</span><strong>External HTTPS available when explicitly consented</strong></div>
+        <div><span>Credentials</span><strong>OS secure storage not configured</strong></div>
+        <div><span>Identity</span><strong>Unverified until configured</strong></div>
+        <div><span>Execution</span><strong>Requires configuration and consent</strong></div>
+        <div><span>Cost</span><strong>Dated price snapshot required</strong></div>
       </div>
     </article>
   );
