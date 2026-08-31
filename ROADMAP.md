@@ -66,8 +66,13 @@ evidence; programming tasks block clearly when Docker is unavailable.
 ### P3 — Full Model Library — IN PROGRESS
 
 Ollama discovery, start flow, immutable profile registration, hardware snapshot, and transparent fit recommendations work.
-LM Studio, llama.cpp/GGUF, unified discovery, backend-native downloads/cancellation, duplicate grouping, and safe official
-removal are not yet complete.
+Unified Ollama/LM Studio/llama.cpp discovery and metadata, source-aware immutable profiles preserving runtime, source,
+endpoint, path, and quantization, Ollama pull progress/cancellation, managed GGUF import/removal audit with an
+active-operation guard, duplicate/quantization handling, and explicit unsupported-capability labels are implemented and
+tested.
+
+P3 remains IN PROGRESS: real native runtime discovery/download/import/removal acceptance and the remaining
+security/publication gates are still pending.
 
 Acceptance: a user discovers and manages supported local runtimes without leaving Prompt Arena for normal workflows.
 

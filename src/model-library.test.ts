@@ -21,6 +21,7 @@ import {
   modelBackendLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
+  modelDownloadCapabilityLabel,
   modelEmptyCopy,
   modelMetadataLabel,
   modelOperationProgressLabel,
@@ -28,9 +29,11 @@ import {
   modelPreviewCopy,
   modelRecordMetadataValue,
   modelRecordQuantizationLabel,
+  modelRemovalCapabilityLabel,
   modelSourceStatusLabel,
   profilePreviewCopy,
   profileRevisionFromForm,
+  profileRevisionFromModel,
   profileRevisionIdPreview,
   stableProfileRevisionId,
   validateLoopbackEndpoint,
@@ -277,6 +280,35 @@ describe("model library profile boundary", () => {
     });
     expect(revision.parameters).toEqual({});
     expect(revision).not.toHaveProperty("extra");
+  });
+
+  it("constructs source-aware immutable profiles for discovered runtimes", () => {
+    const form = { profileId: "discovered", revision: "3", model: "ignored" };
+    const discovered = [
+      modelRecord({ modelId: "ollama-q4", sourceId: "ollama-source", backend: "ollama" }),
+      modelRecord({ modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" }),
+      modelRecord({ modelId: "gguf-q5", sourceId: "gguf-source", backend: "llama_cpp", endpoint: null, path: "models/model-q5.gguf", managed: true, managedPath: "models/model-q5.gguf", quantizationLevel: "Q5_K_M" }),
+    ];
+
+    expect(discovered.map((model) => profileRevisionFromModel(form, model))).toMatchObject([
+      { profileRevisionId: "discovered@3", model: "local-model", runtime: "ollama", modelId: "ollama-q4", sourceId: "ollama-source", backend: "ollama", endpoint: "http://127.0.0.1:11434", path: null },
+      { profileRevisionId: "discovered@3", model: "local-model", runtime: "lm_studio", modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" },
+      { profileRevisionId: "discovered@3", model: "local-model", runtime: "llama_cpp", modelId: "gguf-q5", sourceId: "gguf-source", backend: "llama_cpp", path: "models/model-q5.gguf", quantizationLevel: "Q5_K_M" },
+    ]);
+  });
+
+  it("labels supported and unsupported model actions explicitly", () => {
+    const ollama = modelRecord();
+    const lmStudio = modelRecord({ backend: "lm_studio" });
+    const managed = modelRecord({ backend: "llama_cpp", endpoint: null, path: "models/model.gguf", managed: true, managedPath: "models/model.gguf" });
+    const unmanaged = modelRecord({ backend: "llama_cpp", endpoint: "http://127.0.0.1:8080", path: null });
+
+    expect(modelDownloadCapabilityLabel(ollama)).toContain("supported");
+    expect(modelDownloadCapabilityLabel(lmStudio)).toContain("unsupported");
+    expect(modelDownloadCapabilityLabel(managed)).toContain("unsupported");
+    expect(modelRemovalCapabilityLabel(managed)).toContain("supported");
+    expect(modelRemovalCapabilityLabel(unmanaged)).toContain("unsupported");
+    expect(modelRemovalCapabilityLabel(ollama)).toContain("unsupported");
   });
 
   it("keeps profile IDs, revisions, and model names bounded", () => {
