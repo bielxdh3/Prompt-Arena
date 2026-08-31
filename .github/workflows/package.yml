@@ -83,7 +83,7 @@ jobs:
 
       - name: Build mandatory Windows MSI installer
         if: runner.os == 'Windows'
-        run: npm run tauri:build -- --bundles msi
+        run: npm run build:windows-msi
 
       - name: Build Linux packages
         if: runner.os == 'Linux'
@@ -96,7 +96,7 @@ jobs:
           New-Item -ItemType Directory -Force package-artifacts | Out-Null
           $msi = @(Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' -File -ErrorAction SilentlyContinue)
           $lines = @(
-            'MSI build command: npm run tauri:build -- --bundles msi'
+            'MSI build command: npm run build:windows-msi'
             "MSI artifacts found: $($msi.Count)"
           )
           if ($msi.Count -ne 1) { throw "MSI result: expected exactly one artifact, found $($msi.Count)." }

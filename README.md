@@ -18,7 +18,11 @@ rankings/tournaments, external BYOK, and Linux/native clean-install validation r
 ## Windows download
 
 <!-- WINDOWS_MSI_DOWNLOAD:START -->
-Windows MSI: no verified installer is currently published. `npm run release:windows` updates this block only after a successful MSI build and SHA-256 verification.
+[Download Prompt Arena 0.1.1 for Windows (MSI)](downloadable-artifacts/Prompt-Arena-0.1.1-windows-x64.msi)
+
+SHA-256: `b13e3ce60cd75113279f985ea5029bea5030cfc522825969477fb43c2263ebf2`
+
+Built from product commit: `86a018b7168a255b815f1d9734c6efe3b1297300`
 <!-- WINDOWS_MSI_DOWNLOAD:END -->
 
 The release command increments and synchronizes the application version in all package metadata, builds MSI from the

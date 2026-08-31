@@ -38,7 +38,8 @@ describe("package version contract", () => {
       const target = path.join(root, relativePath);
       fs.copyFileSync(path.join(process.cwd(), relativePath), target);
     }
-    writeSynchronizedVersion("0.1.1", root);
-    expect(assertSynchronizedVersion(root)).toBe("0.1.1");
+    const nextVersion = incrementPatchVersion(assertSynchronizedVersion(root));
+    writeSynchronizedVersion(nextVersion, root);
+    expect(assertSynchronizedVersion(root)).toBe(nextVersion);
   });
 });
