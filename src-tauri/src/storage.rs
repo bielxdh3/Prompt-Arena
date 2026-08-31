@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -35,6 +36,8 @@ pub const BLIND_EVALUATIONS_MIGRATION: &str =
     include_str!("storage/migrations/0004_blind_evaluations.sql");
 pub const P2_EVIDENCE_MIGRATION: &str = include_str!("storage/migrations/0005_p2_evidence.sql");
 pub const MODEL_LIBRARY_MIGRATION: &str = include_str!("storage/migrations/0006_model_library.sql");
+pub const ADVANCED_ARENA_MIGRATION: &str =
+    include_str!("storage/migrations/0007_advanced_arena.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = MAX_BENCHMARK_DOCUMENT_BYTES;
@@ -257,6 +260,144 @@ pub struct ArenaSummaryRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrozenAiJudge {
+    pub judge_id: String,
+    pub version: String,
+    pub rubric_id: String,
+    pub rubric_version: String,
+    pub prompt: String,
+    pub prompt_sha256: String,
+    pub panel: Option<AiJudgePanel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiJudgePanel {
+    pub judge_ids: Vec<String>,
+    pub official: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalibrationBenchmarkPayload {
+    pub calibration_id: String,
+    pub benchmark_version_id: String,
+    pub benchmark_content_hash: String,
+    pub name: String,
+    pub sample_ids: Vec<String>,
+    pub judge: FrozenAiJudge,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalibrationBenchmarkRecord {
+    #[serde(flatten)]
+    pub payload: CalibrationBenchmarkPayload,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalibrationScore {
+    pub execution_key: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalibrationMetricsRecord {
+    pub status: String,
+    pub sample_size: u32,
+    pub agreement_tolerance: f64,
+    pub agreement_count: u32,
+    pub disagreement_count: u32,
+    pub agreement_rate: Option<f64>,
+    pub mean_absolute_error: Option<f64>,
+    pub maximum_absolute_error: Option<f64>,
+    pub bias: Option<f64>,
+    pub uncertainty: Option<f64>,
+    pub unmatched_human_count: u32,
+    pub unmatched_ai_judge_count: u32,
+    pub disagreement_sample_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalibrationResultPayload {
+    pub result_id: String,
+    pub calibration_id: String,
+    pub source_arena_id: String,
+    pub source_content_hash: String,
+    pub judge: FrozenAiJudge,
+    pub human_scores: Vec<CalibrationScore>,
+    pub ai_judge_scores: Vec<CalibrationScore>,
+    pub metrics: CalibrationMetricsRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalibrationResultRecord {
+    #[serde(flatten)]
+    pub payload: CalibrationResultPayload,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentMatchResult {
+    pub match_id: String,
+    pub round: u32,
+    pub match_number: u32,
+    pub competitor_a_id: Option<String>,
+    pub competitor_b_id: Option<String>,
+    pub winner_id: Option<String>,
+    pub outcome: String,
+    pub score_a: Option<f64>,
+    pub score_b: Option<f64>,
+    pub source_match_ids: Vec<String>,
+    pub evidence_sample_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentStanding {
+    pub rank: Option<u32>,
+    pub competitor_id: String,
+    pub competitor_label: String,
+    pub wins: u32,
+    pub losses: u32,
+    pub ties: u32,
+    pub points: f64,
+    pub metric_value: Option<f64>,
+    pub tied: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentResultPayload {
+    pub tournament_id: String,
+    pub source_arena_id: String,
+    pub source_content_hash: String,
+    pub mode: String,
+    pub metric: String,
+    pub evidence_sample_count: u32,
+    pub matches: Vec<TournamentMatchResult>,
+    pub standings: Vec<TournamentStanding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentResultRecord {
+    #[serde(flatten)]
+    pub payload: TournamentResultPayload,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BenchmarkVersionSummary {
@@ -333,6 +474,9 @@ pub enum StorageError {
     BenchmarkInvalid(ValidationError),
     InvalidProfileRevision,
     ProfileRequestTooLarge,
+    AdvancedArtifactInvalid,
+    AdvancedSourceNotFound,
+    AdvancedSourceMismatch,
 }
 
 impl std::fmt::Display for StorageError {
@@ -366,6 +510,11 @@ impl std::fmt::Display for StorageError {
             Self::BenchmarkInvalid(_) => unreachable!("handled above"),
             Self::InvalidProfileRevision => "profile revision is invalid",
             Self::ProfileRequestTooLarge => "profile revision request exceeds the local size limit",
+            Self::AdvancedArtifactInvalid => "advanced Arena artifact is invalid",
+            Self::AdvancedSourceNotFound => "advanced Arena source evidence was not found",
+            Self::AdvancedSourceMismatch => {
+                "advanced Arena source evidence does not match its content hash"
+            }
         };
         formatter.write_str(message)
     }
@@ -432,6 +581,7 @@ impl StorageService {
         apply_migration(&mut connection, 4, BLIND_EVALUATIONS_MIGRATION)?;
         apply_migration(&mut connection, 5, P2_EVIDENCE_MIGRATION)?;
         apply_migration(&mut connection, 6, MODEL_LIBRARY_MIGRATION)?;
+        apply_migration(&mut connection, 7, ADVANCED_ARENA_MIGRATION)?;
         Ok(())
     }
 
@@ -886,6 +1036,255 @@ impl StorageService {
             })
         })
         .collect()
+    }
+
+    pub fn save_calibration_benchmark(
+        &self,
+        benchmark: &CalibrationBenchmarkPayload,
+        created_at: &str,
+    ) -> Result<(CalibrationBenchmarkRecord, SaveOutcome), StorageError> {
+        validate_calibration_benchmark(benchmark)?;
+        let connection = self.connection()?;
+        validate_benchmark_source(
+            &connection,
+            &benchmark.benchmark_version_id,
+            &benchmark.benchmark_content_hash,
+        )?;
+        let outcome = save_immutable_json(
+            &connection,
+            JsonTable::CalibrationBenchmarks,
+            &benchmark.calibration_id,
+            benchmark,
+            created_at,
+        )?;
+        let (content_hash, payload, stored_created_at) =
+            query_advanced_record::<CalibrationBenchmarkPayload>(
+                &connection,
+                JsonTable::CalibrationBenchmarks,
+                &benchmark.calibration_id,
+            )?
+            .ok_or(StorageError::DatabaseFailure)?;
+        Ok((
+            CalibrationBenchmarkRecord {
+                payload,
+                content_hash,
+                created_at: stored_created_at,
+            },
+            outcome,
+        ))
+    }
+
+    pub fn get_calibration_benchmark(
+        &self,
+        calibration_id: &str,
+    ) -> Result<Option<CalibrationBenchmarkRecord>, StorageError> {
+        validate_record_id(calibration_id)?;
+        query_calibration_benchmark(&self.connection()?, calibration_id)
+    }
+
+    pub fn list_calibration_benchmarks(
+        &self,
+    ) -> Result<Vec<CalibrationBenchmarkRecord>, StorageError> {
+        list_advanced_records::<CalibrationBenchmarkPayload>(
+            &self.connection()?,
+            JsonTable::CalibrationBenchmarks,
+        )
+        .map(|records| {
+            records
+                .into_iter()
+                .map(
+                    |(content_hash, payload, created_at)| CalibrationBenchmarkRecord {
+                        payload,
+                        content_hash,
+                        created_at,
+                    },
+                )
+                .collect()
+        })
+    }
+
+    pub fn save_calibration_result(
+        &self,
+        result: &CalibrationResultPayload,
+        created_at: &str,
+    ) -> Result<(CalibrationResultRecord, SaveOutcome), StorageError> {
+        validate_calibration_result(result)?;
+        let connection = self.connection()?;
+        let benchmark = query_calibration_benchmark(&connection, &result.calibration_id)?
+            .ok_or(StorageError::AdvancedSourceNotFound)?;
+        if benchmark.payload.judge != result.judge {
+            return Err(StorageError::AdvancedSourceMismatch);
+        }
+        let source = source_arena(
+            &connection,
+            &result.source_arena_id,
+            &result.source_content_hash,
+        )?;
+        if source.payload.benchmark_version_id != benchmark.payload.benchmark_version_id {
+            return Err(StorageError::AdvancedSourceMismatch);
+        }
+        let source_keys: HashSet<String> = source
+            .payload
+            .evidence
+            .iter()
+            .map(|evidence| {
+                format!(
+                    "{}:{}",
+                    evidence.run_id,
+                    evidence.attempt_id.as_deref().unwrap_or_default()
+                )
+            })
+            .collect();
+        let benchmark_keys: HashSet<&str> = benchmark
+            .payload
+            .sample_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for score in result
+            .human_scores
+            .iter()
+            .chain(result.ai_judge_scores.iter())
+        {
+            if !source_keys.contains(&score.execution_key)
+                || !benchmark_keys.contains(score.execution_key.as_str())
+            {
+                return Err(StorageError::AdvancedSourceMismatch);
+            }
+        }
+        let outcome = save_immutable_json(
+            &connection,
+            JsonTable::CalibrationResults,
+            &result.result_id,
+            result,
+            created_at,
+        )?;
+        let (content_hash, payload, stored_created_at) =
+            query_advanced_record::<CalibrationResultPayload>(
+                &connection,
+                JsonTable::CalibrationResults,
+                &result.result_id,
+            )?
+            .ok_or(StorageError::DatabaseFailure)?;
+        Ok((
+            CalibrationResultRecord {
+                payload,
+                content_hash,
+                created_at: stored_created_at,
+            },
+            outcome,
+        ))
+    }
+
+    pub fn get_calibration_result(
+        &self,
+        result_id: &str,
+    ) -> Result<Option<CalibrationResultRecord>, StorageError> {
+        validate_record_id(result_id)?;
+        query_advanced_record(
+            &self.connection()?,
+            JsonTable::CalibrationResults,
+            result_id,
+        )
+        .map(|record| {
+            record.map(
+                |(content_hash, payload, created_at)| CalibrationResultRecord {
+                    payload,
+                    content_hash,
+                    created_at,
+                },
+            )
+        })
+    }
+
+    pub fn list_calibration_results(&self) -> Result<Vec<CalibrationResultRecord>, StorageError> {
+        list_advanced_records::<CalibrationResultPayload>(
+            &self.connection()?,
+            JsonTable::CalibrationResults,
+        )
+        .map(|records| {
+            records
+                .into_iter()
+                .map(
+                    |(content_hash, payload, created_at)| CalibrationResultRecord {
+                        payload,
+                        content_hash,
+                        created_at,
+                    },
+                )
+                .collect()
+        })
+    }
+
+    pub fn save_tournament_result(
+        &self,
+        result: &TournamentResultPayload,
+        created_at: &str,
+    ) -> Result<(TournamentResultRecord, SaveOutcome), StorageError> {
+        let connection = self.connection()?;
+        validate_tournament_result(&connection, result)?;
+        let outcome = save_immutable_json(
+            &connection,
+            JsonTable::TournamentResults,
+            &result.tournament_id,
+            result,
+            created_at,
+        )?;
+        let (content_hash, payload, stored_created_at) =
+            query_advanced_record::<TournamentResultPayload>(
+                &connection,
+                JsonTable::TournamentResults,
+                &result.tournament_id,
+            )?
+            .ok_or(StorageError::DatabaseFailure)?;
+        Ok((
+            TournamentResultRecord {
+                payload,
+                content_hash,
+                created_at: stored_created_at,
+            },
+            outcome,
+        ))
+    }
+
+    pub fn get_tournament_result(
+        &self,
+        tournament_id: &str,
+    ) -> Result<Option<TournamentResultRecord>, StorageError> {
+        validate_record_id(tournament_id)?;
+        query_advanced_record(
+            &self.connection()?,
+            JsonTable::TournamentResults,
+            tournament_id,
+        )
+        .map(|record| {
+            record.map(
+                |(content_hash, payload, created_at)| TournamentResultRecord {
+                    payload,
+                    content_hash,
+                    created_at,
+                },
+            )
+        })
+    }
+
+    pub fn list_tournament_results(&self) -> Result<Vec<TournamentResultRecord>, StorageError> {
+        list_advanced_records::<TournamentResultPayload>(
+            &self.connection()?,
+            JsonTable::TournamentResults,
+        )
+        .map(|records| {
+            records
+                .into_iter()
+                .map(
+                    |(content_hash, payload, created_at)| TournamentResultRecord {
+                        payload,
+                        content_hash,
+                        created_at,
+                    },
+                )
+                .collect()
+        })
     }
 
     pub fn save_model_record(
@@ -1494,6 +1893,9 @@ enum JsonTable {
     BlindEvaluations,
     OfficialPackMaterializations,
     ArenaSummaries,
+    CalibrationBenchmarks,
+    CalibrationResults,
+    TournamentResults,
     ModelRecords,
     ModelRemovals,
 }
@@ -1507,6 +1909,9 @@ impl JsonTable {
             Self::BlindEvaluations => "blind_evaluations",
             Self::OfficialPackMaterializations => "official_pack_materializations",
             Self::ArenaSummaries => "arena_summaries",
+            Self::CalibrationBenchmarks => "calibration_benchmarks",
+            Self::CalibrationResults => "calibration_results",
+            Self::TournamentResults => "tournament_results",
             Self::ModelRecords => "model_records",
             Self::ModelRemovals => "model_removals",
         }
@@ -1596,10 +2001,89 @@ fn get_json_record<T: DeserializeOwned>(
         .transpose()
 }
 
+fn query_advanced_record<T: DeserializeOwned>(
+    connection: &Connection,
+    table: JsonTable,
+    record_id: &str,
+) -> Result<Option<(String, T, String)>, StorageError> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT content_hash, document_json, created_at FROM {} WHERE record_id = ?1",
+                table.name()
+            ),
+            params![record_id],
+            |row| {
+                let content_hash = row.get(0)?;
+                let document_json: String = row.get(1)?;
+                let created_at = row.get(2)?;
+                Ok((content_hash, document_json, created_at))
+            },
+        )
+        .optional()
+        .map_err(|_| StorageError::DatabaseFailure)?
+        .map(|(content_hash, document_json, created_at)| {
+            let payload =
+                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
+            Ok((content_hash, payload, created_at))
+        })
+        .transpose()
+}
+
+fn query_calibration_benchmark(
+    connection: &Connection,
+    calibration_id: &str,
+) -> Result<Option<CalibrationBenchmarkRecord>, StorageError> {
+    query_advanced_record(connection, JsonTable::CalibrationBenchmarks, calibration_id).map(
+        |record| {
+            record.map(
+                |(content_hash, payload, created_at)| CalibrationBenchmarkRecord {
+                    payload,
+                    content_hash,
+                    created_at,
+                },
+            )
+        },
+    )
+}
+
+fn list_advanced_records<T: DeserializeOwned>(
+    connection: &Connection,
+    table: JsonTable,
+) -> Result<Vec<(String, T, String)>, StorageError> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT content_hash, document_json, created_at FROM {} ORDER BY created_at, record_id",
+            table.name()
+        ))
+        .map_err(|_| StorageError::DatabaseFailure)?;
+    let rows = statement
+        .query_map([], |row| {
+            let content_hash = row.get(0)?;
+            let document_json: String = row.get(1)?;
+            let created_at = row.get(2)?;
+            Ok((content_hash, document_json, created_at))
+        })
+        .map_err(|_| StorageError::DatabaseFailure)?;
+    rows.map(|row| {
+        let (content_hash, document_json, created_at) =
+            row.map_err(|_| StorageError::DatabaseFailure)?;
+        let payload =
+            serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
+        Ok((content_hash, payload, created_at))
+    })
+    .collect()
+}
+
 const MAX_OFFICIAL_PACK_SEED: u64 = u32::MAX as u64;
 const MAX_OFFICIAL_PACK_ITEMS: usize = 128;
 const MAX_ARENA_SUMMARY_COMPETITORS: usize = 8;
 const MAX_ARENA_SUMMARY_EVIDENCE: usize = 80;
+const MAX_ADVANCED_ARTIFACT_SAMPLES: usize = 4096;
+const MAX_ADVANCED_ARTIFACT_MATCHES: usize = 64;
+const MAX_ADVANCED_ARTIFACT_STANDINGS: usize = 8;
+const MAX_ADVANCED_JUDGE_PROMPT_BYTES: usize = 16 * 1024;
+const MAX_ADVANCED_LABEL_BYTES: usize = 256;
 const MAX_BOUNDED_JSON_DEPTH: usize = 16;
 const MAX_BOUNDED_JSON_ENTRIES: usize = 128;
 
@@ -1677,6 +2161,283 @@ fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageEr
     ensure_metadata_size(&document_json)
 }
 
+fn validate_frozen_ai_judge(judge: &FrozenAiJudge) -> Result<(), StorageError> {
+    validate_summary_identifier(&judge.judge_id)?;
+    validate_bounded_text(&judge.version, MAX_ADVANCED_LABEL_BYTES)?;
+    validate_summary_identifier(&judge.rubric_id)?;
+    validate_bounded_text(&judge.rubric_version, MAX_ADVANCED_LABEL_BYTES)?;
+    validate_bounded_text(&judge.prompt, MAX_ADVANCED_JUDGE_PROMPT_BYTES)?;
+    validate_sha256(&judge.prompt_sha256)?;
+    if sha256_hex(judge.prompt.as_bytes()) != judge.prompt_sha256.to_ascii_lowercase() {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    if let Some(panel) = &judge.panel {
+        if !matches!(panel.judge_ids.len(), 3 | 5) {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+        let mut seen = HashSet::new();
+        for judge_id in &panel.judge_ids {
+            validate_summary_identifier(judge_id)?;
+            if !seen.insert(judge_id) {
+                return Err(StorageError::AdvancedArtifactInvalid);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_calibration_benchmark(
+    benchmark: &CalibrationBenchmarkPayload,
+) -> Result<(), StorageError> {
+    validate_record_id(&benchmark.calibration_id)?;
+    validate_benchmark_version_id(&benchmark.benchmark_version_id)?;
+    validate_sha256(&benchmark.benchmark_content_hash)?;
+    validate_bounded_text(&benchmark.name, MAX_ADVANCED_LABEL_BYTES)?;
+    if benchmark.sample_ids.len() > MAX_ADVANCED_ARTIFACT_SAMPLES {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    let mut sample_ids = HashSet::new();
+    for sample_id in &benchmark.sample_ids {
+        validate_execution_key(sample_id)?;
+        if !sample_ids.insert(sample_id) {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    validate_frozen_ai_judge(&benchmark.judge)
+}
+
+fn validate_calibration_score_list(scores: &[CalibrationScore]) -> Result<(), StorageError> {
+    if scores.len() > MAX_ADVANCED_ARTIFACT_SAMPLES {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    let mut keys = HashSet::new();
+    for score in scores {
+        validate_execution_key(&score.execution_key)?;
+        if !keys.insert(&score.execution_key)
+            || !score.score.is_finite()
+            || !(1.0..=5.0).contains(&score.score)
+        {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    Ok(())
+}
+
+fn validate_calibration_metrics(metrics: &CalibrationMetricsRecord) -> Result<(), StorageError> {
+    if !matches!(metrics.status.as_str(), "ready" | "insufficient_data")
+        || metrics.sample_size as usize > MAX_ADVANCED_ARTIFACT_SAMPLES
+        || !metrics.agreement_tolerance.is_finite()
+        || !(0.0..=4.0).contains(&metrics.agreement_tolerance)
+        || metrics.agreement_count > metrics.sample_size
+        || metrics.disagreement_count > metrics.sample_size
+        || metrics.unmatched_human_count as usize > MAX_ADVANCED_ARTIFACT_SAMPLES
+        || metrics.unmatched_ai_judge_count as usize > MAX_ADVANCED_ARTIFACT_SAMPLES
+        || metrics.disagreement_sample_ids.len() > MAX_ADVANCED_ARTIFACT_SAMPLES
+    {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    for value in [
+        metrics.agreement_rate,
+        metrics.mean_absolute_error,
+        metrics.maximum_absolute_error,
+        metrics.uncertainty,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !value.is_finite() || value < 0.0 {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    if let Some(rate) = metrics.agreement_rate {
+        if rate > 1.0 {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    if let Some(bias) = metrics.bias {
+        if !bias.is_finite() || !(-4.0..=4.0).contains(&bias) {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    let mut sample_ids = HashSet::new();
+    for sample_id in &metrics.disagreement_sample_ids {
+        validate_execution_key(sample_id)?;
+        if !sample_ids.insert(sample_id) {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    Ok(())
+}
+
+fn validate_calibration_result(result: &CalibrationResultPayload) -> Result<(), StorageError> {
+    validate_record_id(&result.result_id)?;
+    validate_record_id(&result.calibration_id)?;
+    validate_summary_identifier(&result.source_arena_id)?;
+    validate_sha256(&result.source_content_hash)?;
+    validate_frozen_ai_judge(&result.judge)?;
+    validate_calibration_score_list(&result.human_scores)?;
+    validate_calibration_score_list(&result.ai_judge_scores)?;
+    validate_calibration_metrics(&result.metrics)
+}
+
+fn validate_tournament_result(
+    connection: &Connection,
+    result: &TournamentResultPayload,
+) -> Result<(), StorageError> {
+    validate_record_id(&result.tournament_id)?;
+    validate_summary_identifier(&result.source_arena_id)?;
+    validate_sha256(&result.source_content_hash)?;
+    if !matches!(
+        result.mode.as_str(),
+        "1v1" | "round_robin" | "single_elimination" | "blind_ranking"
+    ) || !matches!(
+        result.metric.as_str(),
+        "objective_pass_rate"
+            | "duration_ms"
+            | "tokens_per_second"
+            | "human_score"
+            | "borda_points"
+    ) || result.evidence_sample_count as usize > MAX_ADVANCED_ARTIFACT_SAMPLES
+        || result.matches.len() > MAX_ADVANCED_ARTIFACT_MATCHES
+        || result.standings.len() > MAX_ADVANCED_ARTIFACT_STANDINGS
+    {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    let source = source_arena(
+        connection,
+        &result.source_arena_id,
+        &result.source_content_hash,
+    )?;
+    let source_competitors: HashSet<&str> = source
+        .payload
+        .evidence
+        .iter()
+        .map(|evidence| evidence.competitor_id.as_str())
+        .collect();
+    let mut match_ids = HashSet::new();
+    for tournament_match in &result.matches {
+        validate_summary_identifier(&tournament_match.match_id)?;
+        if !match_ids.insert(&tournament_match.match_id)
+            || tournament_match.round == 0
+            || tournament_match.match_number == 0
+            || tournament_match.source_match_ids.len() > 2
+            || tournament_match.evidence_sample_count as usize > MAX_ADVANCED_ARTIFACT_SAMPLES
+        {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+        for source_match_id in &tournament_match.source_match_ids {
+            validate_summary_identifier(source_match_id)?;
+        }
+        for competitor_id in [
+            &tournament_match.competitor_a_id,
+            &tournament_match.competitor_b_id,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !source_competitors.contains(competitor_id.as_str()) {
+                return Err(StorageError::AdvancedArtifactInvalid);
+            }
+        }
+        if !matches!(
+            tournament_match.outcome.as_str(),
+            "completed" | "tie" | "insufficient_data"
+        ) || tournament_match.winner_id.as_ref().is_some_and(|winner| {
+            Some(winner) != tournament_match.competitor_a_id.as_ref()
+                && Some(winner) != tournament_match.competitor_b_id.as_ref()
+        }) {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+        match tournament_match.outcome.as_str() {
+            "completed"
+                if tournament_match.winner_id.is_none()
+                    || tournament_match.competitor_a_id.is_none()
+                    || tournament_match.competitor_b_id.is_none() =>
+            {
+                return Err(StorageError::AdvancedArtifactInvalid);
+            }
+            "tie" if tournament_match.winner_id.is_some() => {
+                return Err(StorageError::AdvancedArtifactInvalid);
+            }
+            "insufficient_data" if tournament_match.winner_id.is_some() => {
+                return Err(StorageError::AdvancedArtifactInvalid);
+            }
+            _ => {}
+        }
+        for score in [tournament_match.score_a, tournament_match.score_b]
+            .into_iter()
+            .flatten()
+        {
+            if !score.is_finite()
+                || score < 0.0
+                || (result.metric == "human_score" && !(1.0..=5.0).contains(&score))
+            {
+                return Err(StorageError::AdvancedArtifactInvalid);
+            }
+        }
+    }
+    let mut standing_ids = HashSet::new();
+    for standing in &result.standings {
+        validate_summary_identifier(&standing.competitor_id)?;
+        validate_bounded_text(&standing.competitor_label, MAX_ADVANCED_LABEL_BYTES)?;
+        if !source_competitors.contains(standing.competitor_id.as_str())
+            || !standing_ids.insert(&standing.competitor_id)
+            || standing
+                .wins
+                .checked_add(standing.losses)
+                .and_then(|total| total.checked_add(standing.ties))
+                .map(|total| total > MAX_ADVANCED_ARTIFACT_MATCHES as u32)
+                .unwrap_or(true)
+            || !standing.points.is_finite()
+            || standing.points < 0.0
+            || standing
+                .rank
+                .is_some_and(|rank| rank == 0 || rank as usize > MAX_ADVANCED_ARTIFACT_STANDINGS)
+            || standing.metric_value.is_some_and(|value| {
+                !value.is_finite()
+                    || value < 0.0
+                    || (result.metric == "human_score" && !(1.0..=5.0).contains(&value))
+            })
+        {
+            return Err(StorageError::AdvancedArtifactInvalid);
+        }
+    }
+    Ok(())
+}
+
+fn source_arena(
+    connection: &Connection,
+    arena_id: &str,
+    content_hash: &str,
+) -> Result<ArenaSummaryRecord, StorageError> {
+    let source =
+        query_arena_summary(connection, arena_id)?.ok_or(StorageError::AdvancedSourceNotFound)?;
+    if source.content_hash != content_hash {
+        return Err(StorageError::AdvancedSourceMismatch);
+    }
+    Ok(source)
+}
+
+fn validate_benchmark_source(
+    connection: &Connection,
+    version_id: &str,
+    content_hash: &str,
+) -> Result<(), StorageError> {
+    let stored_hash: Option<String> = connection
+        .query_row(
+            "SELECT content_hash FROM benchmark_versions WHERE version_id = ?1",
+            params![version_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| StorageError::DatabaseFailure)?;
+    let stored_hash = stored_hash.ok_or(StorageError::AdvancedSourceNotFound)?;
+    if stored_hash != content_hash {
+        return Err(StorageError::AdvancedSourceMismatch);
+    }
+    Ok(())
+}
+
 fn query_arena_summary(
     connection: &Connection,
     arena_id: &str,
@@ -1723,6 +2484,18 @@ fn validate_summary_identifier(value: &str) -> Result<(), StorageError> {
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
+    Ok(())
+}
+
+fn validate_execution_key(value: &str) -> Result<(), StorageError> {
+    if value.is_empty()
+        || value.len() > 256
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@' | b':')
+        })
     {
         return Err(StorageError::InvalidRecordId);
     }
@@ -2300,10 +3073,13 @@ mod tests {
     };
 
     use super::{
-        ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
-        BenchmarkDraftInput, SaveOutcome, StorageError, StorageLayout, StorageService,
-        ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
-        FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
+        AiJudgePanel, ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
+        BenchmarkDraftInput, CalibrationBenchmarkPayload, CalibrationMetricsRecord,
+        CalibrationResultPayload, CalibrationScore, FrozenAiJudge, SaveOutcome, StorageError,
+        StorageLayout, StorageService, TournamentMatchResult, TournamentResultPayload,
+        TournamentStanding, ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION,
+        BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION, FOUNDATION_MIGRATION,
+        MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
         MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
     };
 
@@ -2414,12 +3190,12 @@ mod tests {
         let service = StorageService::open(&root).expect("storage opens");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6]
+            vec![1, 2, 3, 4, 5, 6, 7]
         );
         service.initialize().expect("second migration pass");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6]
+            vec![1, 2, 3, 4, 5, 6, 7]
         );
         assert!(FOUNDATION_MIGRATION.contains("CREATE TABLE"));
         assert!(!FOUNDATION_MIGRATION
@@ -2433,6 +3209,7 @@ mod tests {
         assert!(!BLIND_EVALUATIONS_MIGRATION
             .to_ascii_uppercase()
             .contains("DROP TABLE"));
+        assert!(ADVANCED_ARENA_MIGRATION.contains("calibration_results"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2482,6 +3259,199 @@ mod tests {
         );
         assert_eq!(service.get_arena_summary("arena-1").unwrap(), Some(first));
         assert_eq!(service.list_arena_summaries().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn advanced_artifacts_freeze_provenance_and_reopen_from_arena_evidence() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let benchmark = validate_benchmark_document(&valid_document()).unwrap();
+        let benchmark_summary = service
+            .save_benchmark_version(&benchmark, "100")
+            .expect("benchmark version saves");
+        let mut source_summary = ArenaSummaryPayload {
+            arena_id: "advanced-arena-1".to_owned(),
+            benchmark_version_id: benchmark_summary.version_id.clone(),
+            task_id: "task".to_owned(),
+            case_id: "case".to_owned(),
+            repetitions: 1,
+            pack_id: None,
+            materialization_seed: None,
+            summary: json!({"objectivePassRate": 1.0}),
+            competitors: vec![
+                json!({"competitorId": "alpha@1", "competitorLabel": "Alpha"}),
+                json!({"competitorId": "beta@1", "competitorLabel": "Beta"}),
+            ],
+            evidence: vec![
+                ArenaExecutionEvidence {
+                    competitor_id: "alpha@1".to_owned(),
+                    competitor_label: "Alpha".to_owned(),
+                    repetition: 1,
+                    run_id: "advanced-arena-1-alpha".to_owned(),
+                    attempt_id: Some("attempt-1".to_owned()),
+                    status: "completed".to_owned(),
+                    duration_ms: Some(10.0),
+                    tokens_per_second: Some(10.0),
+                    completion_tokens: Some(10),
+                    objective_passed: Some(true),
+                },
+                ArenaExecutionEvidence {
+                    competitor_id: "beta@1".to_owned(),
+                    competitor_label: "Beta".to_owned(),
+                    repetition: 1,
+                    run_id: "advanced-arena-1-beta".to_owned(),
+                    attempt_id: Some("attempt-1".to_owned()),
+                    status: "completed".to_owned(),
+                    duration_ms: Some(20.0),
+                    tokens_per_second: Some(5.0),
+                    completion_tokens: Some(10),
+                    objective_passed: Some(false),
+                },
+            ],
+        };
+        let (source_record, _) = service
+            .save_arena_summary(&source_summary, "101")
+            .expect("source summary saves");
+        let prompt = "Score the anonymized response.".to_owned();
+        let judge = FrozenAiJudge {
+            judge_id: "judge-a".to_owned(),
+            version: "1".to_owned(),
+            rubric_id: "rubric".to_owned(),
+            rubric_version: "1".to_owned(),
+            prompt_sha256: sha256_hex(prompt.as_bytes()),
+            prompt,
+            panel: Some(AiJudgePanel {
+                judge_ids: vec![
+                    "judge-a".to_owned(),
+                    "judge-b".to_owned(),
+                    "judge-c".to_owned(),
+                ],
+                official: true,
+            }),
+        };
+        let calibration = CalibrationBenchmarkPayload {
+            calibration_id: "calibration-1".to_owned(),
+            benchmark_version_id: benchmark_summary.version_id.clone(),
+            benchmark_content_hash: benchmark_summary.content_hash.clone(),
+            name: "Advanced calibration".to_owned(),
+            sample_ids: vec!["advanced-arena-1-alpha:attempt-1".to_owned()],
+            judge: judge.clone(),
+        };
+        let (saved_calibration, first_outcome) = service
+            .save_calibration_benchmark(&calibration, "102")
+            .expect("calibration benchmark saves");
+        assert_eq!(first_outcome, SaveOutcome::Saved);
+        assert_eq!(saved_calibration.payload.judge, judge);
+        let calibration_result = CalibrationResultPayload {
+            result_id: "calibration-1-result".to_owned(),
+            calibration_id: calibration.calibration_id.clone(),
+            source_arena_id: source_summary.arena_id.clone(),
+            source_content_hash: source_record.content_hash.clone(),
+            judge: calibration.judge.clone(),
+            human_scores: vec![CalibrationScore {
+                execution_key: "advanced-arena-1-alpha:attempt-1".to_owned(),
+                score: 4.0,
+            }],
+            ai_judge_scores: vec![CalibrationScore {
+                execution_key: "advanced-arena-1-alpha:attempt-1".to_owned(),
+                score: 3.0,
+            }],
+            metrics: CalibrationMetricsRecord {
+                status: "insufficient_data".to_owned(),
+                sample_size: 1,
+                agreement_tolerance: 1.0,
+                agreement_count: 1,
+                disagreement_count: 0,
+                agreement_rate: Some(1.0),
+                mean_absolute_error: Some(1.0),
+                maximum_absolute_error: Some(1.0),
+                bias: Some(-1.0),
+                uncertainty: Some(0.0),
+                unmatched_human_count: 0,
+                unmatched_ai_judge_count: 0,
+                disagreement_sample_ids: Vec::new(),
+            },
+        };
+        let (saved_result, result_outcome) = service
+            .save_calibration_result(&calibration_result, "103")
+            .expect("calibration result saves");
+        assert_eq!(result_outcome, SaveOutcome::Saved);
+        assert_eq!(
+            service
+                .get_calibration_result("calibration-1-result")
+                .unwrap(),
+            Some(saved_result.clone())
+        );
+        assert_eq!(
+            service
+                .save_calibration_result(&calibration_result, "104")
+                .unwrap()
+                .1,
+            SaveOutcome::AlreadyPresent
+        );
+        let mut changed_result = calibration_result.clone();
+        changed_result.human_scores[0].score = 5.0;
+        assert_eq!(
+            service.save_calibration_result(&changed_result, "105"),
+            Err(StorageError::ImmutableConflict)
+        );
+
+        let tournament = TournamentResultPayload {
+            tournament_id: "tournament-1".to_owned(),
+            source_arena_id: source_summary.arena_id.clone(),
+            source_content_hash: source_record.content_hash.clone(),
+            mode: "1v1".to_owned(),
+            metric: "duration_ms".to_owned(),
+            evidence_sample_count: 2,
+            matches: vec![TournamentMatchResult {
+                match_id: "match-1".to_owned(),
+                round: 1,
+                match_number: 1,
+                competitor_a_id: Some("alpha@1".to_owned()),
+                competitor_b_id: Some("beta@1".to_owned()),
+                winner_id: Some("alpha@1".to_owned()),
+                outcome: "completed".to_owned(),
+                score_a: Some(10.0),
+                score_b: Some(20.0),
+                source_match_ids: Vec::new(),
+                evidence_sample_count: 2,
+            }],
+            standings: vec![
+                TournamentStanding {
+                    rank: Some(1),
+                    competitor_id: "alpha@1".to_owned(),
+                    competitor_label: "Alpha".to_owned(),
+                    wins: 1,
+                    losses: 0,
+                    ties: 0,
+                    points: 1.0,
+                    metric_value: Some(10.0),
+                    tied: false,
+                },
+                TournamentStanding {
+                    rank: Some(2),
+                    competitor_id: "beta@1".to_owned(),
+                    competitor_label: "Beta".to_owned(),
+                    wins: 0,
+                    losses: 1,
+                    ties: 0,
+                    points: 0.0,
+                    metric_value: Some(20.0),
+                    tied: false,
+                },
+            ],
+        };
+        let (_, tournament_outcome) = service
+            .save_tournament_result(&tournament, "106")
+            .expect("tournament result saves");
+        assert_eq!(tournament_outcome, SaveOutcome::Saved);
+        assert_eq!(service.list_tournament_results().unwrap().len(), 1);
+        source_summary.summary["objectivePassRate"] = json!(0.0);
+        assert_eq!(
+            service.save_arena_summary(&source_summary, "107"),
+            Err(StorageError::ImmutableConflict)
+        );
         let _ = fs::remove_dir_all(root);
     }
 

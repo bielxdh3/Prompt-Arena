@@ -302,6 +302,118 @@ export type SavedArenaSummary = {
   saveOutcome: SaveOutcome;
 };
 
+export type AiJudgePanel = {
+  judgeIds: string[];
+  official: boolean;
+};
+
+export type FrozenAiJudge = {
+  judgeId: string;
+  version: string;
+  rubricId: string;
+  rubricVersion: string;
+  prompt: string;
+  promptSha256: string;
+  panel: AiJudgePanel | null;
+};
+
+export type CalibrationBenchmarkPayload = {
+  calibrationId: string;
+  benchmarkVersionId: string;
+  benchmarkContentHash: string;
+  name: string;
+  sampleIds: string[];
+  judge: FrozenAiJudge;
+};
+
+export type CalibrationBenchmarkRecord = CalibrationBenchmarkPayload & {
+  contentHash: string;
+  createdAt: string;
+};
+
+export type CalibrationScore = {
+  executionKey: string;
+  score: number;
+};
+
+export type CalibrationMetricsRecord = {
+  status: "ready" | "insufficient_data";
+  sampleSize: number;
+  agreementTolerance: number;
+  agreementCount: number;
+  disagreementCount: number;
+  agreementRate: number | null;
+  meanAbsoluteError: number | null;
+  maximumAbsoluteError: number | null;
+  bias: number | null;
+  uncertainty: number | null;
+  unmatchedHumanCount: number;
+  unmatchedAiJudgeCount: number;
+  disagreementSampleIds: string[];
+};
+
+export type CalibrationResultPayload = {
+  resultId: string;
+  calibrationId: string;
+  sourceArenaId: string;
+  sourceContentHash: string;
+  judge: FrozenAiJudge;
+  humanScores: CalibrationScore[];
+  aiJudgeScores: CalibrationScore[];
+  metrics: CalibrationMetricsRecord;
+};
+
+export type CalibrationResultRecord = CalibrationResultPayload & {
+  contentHash: string;
+  createdAt: string;
+};
+
+export type TournamentMatchResult = {
+  matchId: string;
+  round: number;
+  matchNumber: number;
+  competitorAId: string | null;
+  competitorBId: string | null;
+  winnerId: string | null;
+  outcome: "completed" | "tie" | "insufficient_data";
+  scoreA: number | null;
+  scoreB: number | null;
+  sourceMatchIds: string[];
+  evidenceSampleCount: number;
+};
+
+export type TournamentStanding = {
+  rank: number | null;
+  competitorId: string;
+  competitorLabel: string;
+  wins: number;
+  losses: number;
+  ties: number;
+  points: number;
+  metricValue: number | null;
+  tied: boolean;
+};
+
+export type TournamentResultPayload = {
+  tournamentId: string;
+  sourceArenaId: string;
+  sourceContentHash: string;
+  mode: "1v1" | "round_robin" | "single_elimination" | "blind_ranking";
+  metric: string;
+  evidenceSampleCount: number;
+  matches: TournamentMatchResult[];
+  standings: TournamentStanding[];
+};
+
+export type TournamentResultRecord = TournamentResultPayload & {
+  contentHash: string;
+  createdAt: string;
+};
+
+export type SavedCalibrationBenchmark = { record: CalibrationBenchmarkRecord; saveOutcome: SaveOutcome };
+export type SavedCalibrationResult = { record: CalibrationResultRecord; saveOutcome: SaveOutcome };
+export type SavedTournamentResult = { record: TournamentResultRecord; saveOutcome: SaveOutcome };
+
 export type BenchmarkDraftSummary = {
   draftId: string;
   benchmarkId: string;
@@ -766,6 +878,81 @@ export async function readArenaSummary(arenaId: string): Promise<ArenaSummaryRec
     "get_arena_summary",
     "The selected Arena summary could not be reached.",
     { arenaId },
+  );
+}
+
+export async function saveCalibrationBenchmark(
+  benchmark: CalibrationBenchmarkPayload,
+): Promise<SavedCalibrationBenchmark> {
+  return invokeDesktop<SavedCalibrationBenchmark>(
+    "save_calibration_benchmark",
+    "The calibration benchmark could not be saved.",
+    { benchmark },
+  );
+}
+
+export async function readCalibrationBenchmarks(): Promise<CalibrationBenchmarkRecord[]> {
+  return invokeDesktop<CalibrationBenchmarkRecord[]>(
+    "list_calibration_benchmarks",
+    "The calibration benchmarks could not be reached.",
+  );
+}
+
+export async function readCalibrationBenchmark(calibrationId: string): Promise<CalibrationBenchmarkRecord | null> {
+  return invokeDesktop<CalibrationBenchmarkRecord | null>(
+    "get_calibration_benchmark",
+    "The selected calibration benchmark could not be reached.",
+    { calibrationId },
+  );
+}
+
+export async function saveCalibrationResult(
+  result: CalibrationResultPayload,
+): Promise<SavedCalibrationResult> {
+  return invokeDesktop<SavedCalibrationResult>(
+    "save_calibration_result",
+    "The calibration result could not be saved.",
+    { result },
+  );
+}
+
+export async function readCalibrationResults(): Promise<CalibrationResultRecord[]> {
+  return invokeDesktop<CalibrationResultRecord[]>(
+    "list_calibration_results",
+    "The calibration results could not be reached.",
+  );
+}
+
+export async function readCalibrationResult(resultId: string): Promise<CalibrationResultRecord | null> {
+  return invokeDesktop<CalibrationResultRecord | null>(
+    "get_calibration_result",
+    "The selected calibration result could not be reached.",
+    { resultId },
+  );
+}
+
+export async function saveTournamentResult(
+  result: TournamentResultPayload,
+): Promise<SavedTournamentResult> {
+  return invokeDesktop<SavedTournamentResult>(
+    "save_tournament_result",
+    "The tournament result could not be saved.",
+    { result },
+  );
+}
+
+export async function readTournamentResults(): Promise<TournamentResultRecord[]> {
+  return invokeDesktop<TournamentResultRecord[]>(
+    "list_tournament_results",
+    "The tournament results could not be reached.",
+  );
+}
+
+export async function readTournamentResult(tournamentId: string): Promise<TournamentResultRecord | null> {
+  return invokeDesktop<TournamentResultRecord | null>(
+    "get_tournament_result",
+    "The selected tournament result could not be reached.",
+    { tournamentId },
   );
 }
 
