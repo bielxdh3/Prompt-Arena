@@ -20,9 +20,9 @@ rankings/tournaments, external BYOK, and Linux/native clean-install validation r
 <!-- WINDOWS_MSI_DOWNLOAD:START -->
 [Download Prompt Arena 0.1.1 for Windows (MSI)](downloadable-artifacts/Prompt-Arena-0.1.1-windows-x64.msi)
 
-SHA-256: `b13e3ce60cd75113279f985ea5029bea5030cfc522825969477fb43c2263ebf2`
+SHA-256: `38f4ca0afa867e6a3617fe1a09d8b780006cb3b87646976c7feba899264e1b35`
 
-Built from product commit: `86a018b7168a255b815f1d9734c6efe3b1297300`
+Built from product commit: `9999e651984937d8b277b40b0ebe3fd113c4e914`
 <!-- WINDOWS_MSI_DOWNLOAD:END -->
 
 The release command increments and synchronizes the application version in all package metadata, builds MSI from the
