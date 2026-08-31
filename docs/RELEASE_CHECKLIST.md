@@ -3,6 +3,18 @@
 This checklist is a bounded local/remote review gate, not authorization to publish, sign, release, deploy, merge, or tag.
 Record the exact command, result, and environment for each check; do not include secrets or private logs.
 
+## Permanent Windows MSI delivery rule
+
+Use `npm run release:windows` for every repository-published Windows installer. It requires a clean named branch,
+increments the patch version, verifies synchronization across `package.json`, `package-lock.json`, Tauri, Cargo, and
+Cargo.lock, builds MSI from the current checkout, requires exactly one MSI, writes
+`downloadable-artifacts/Prompt-Arena-<version>-windows-x64.msi` plus its `.sha256` file, updates the marked README
+download link, and commits/pushes those files together. The command rolls back its metadata/link changes when MSI
+generation or checksum preparation fails; the previous verified README link is never replaced by a failed build.
+
+The workflow remains a validation gate: it checks version synchronization and treats MSI as mandatory, but it does not
+push artifacts. Do not publish an installer by copying an unversioned or unverified file into the repository.
+
 ## Local validation
 
 - [ ] `npm ci` completes from the committed `package-lock.json`.

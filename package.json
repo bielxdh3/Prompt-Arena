@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
+    "check:version": "node scripts/version-contract.mjs",
     "test": "vitest run",
     "check:boundaries": "node scripts/boundary-check.mjs",
     "test:boundaries": "node scripts/boundary-check.fixture.mjs",
@@ -16,7 +17,8 @@
     "tauri:build": "tauri build",
     "prepare:worker-sidecar": "node scripts/prepare-worker-sidecar.mjs",
     "package:artifacts": "node scripts/package-artifacts.mjs",
-    "verify:package": "node scripts/verify-package.mjs"
+    "verify:package": "node scripts/verify-package.mjs",
+    "release:windows": "node scripts/release-windows.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.5.0",

@@ -1,5 +1,12 @@
 # Product completion evidence matrix
 
+## Permanent Windows MSI delivery rule
+
+Repository-published Windows installers use `npm run release:windows`. The command increments and synchronizes the
+patch version, builds exactly one MSI from the current checkout, writes the versioned file and SHA-256 under
+`downloadable-artifacts/`, updates the marked README link, and commits/pushes the complete release together. MSI is a
+mandatory workflow artifact; failed generation leaves the prior verified README link unchanged.
+
 Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
 `8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). It includes the
 stability, model-action, telemetry-safety, desktop UI, and accessible Arena
