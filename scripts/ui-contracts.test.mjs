@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const styles = fs.readFileSync(path.join(repositoryRoot, "src", "styles.css"), "utf8");
 const i18nSource = fs.readFileSync(path.join(repositoryRoot, "src", "i18n.ts"), "utf8");
+const appSource = fs.readFileSync(path.join(repositoryRoot, "src", "App.tsx"), "utf8");
 const shippedUiSources = ["App.tsx", "advanced-arena-view.tsx"].map((fileName) => fs.readFileSync(path.join(repositoryRoot, "src", fileName), "utf8"));
 
 describe("static UI style contracts", () => {
@@ -37,5 +38,32 @@ describe("static UI style contracts", () => {
     for (const message of ["Select repetitions", "Choose a score", "Choose a response"]) {
       expect(i18nSource).toMatch(new RegExp(`(?:\\"${message}\\")\\s*:`));
     }
+  });
+
+  it("keeps the exact PT-BR case-prompt fallback", () => {
+    expect(i18nSource).toMatch(/"No case-specific prompt"\s*:\s*"Sem prompt específico para este caso"/);
+  });
+
+  it("keeps centralized polish contracts for motion, themes, scrollbars, and Models spacing", () => {
+    for (const token of ["--motion-page", "--motion-reveal", "--motion-expand", "--motion-stagger", "--space-section"]) {
+      expect(styles).toContain(token);
+    }
+    expect(styles).toMatch(/\.page-transition\s*\{[^}]*animation:\s*page-enter\s+var\(--motion-page\)/s);
+    expect(styles).toMatch(/\.scroll-reveal\s*\{[^}]*transition:[^}]*var\(--motion-reveal\)/s);
+    expect(appSource).toContain("observer.unobserve(entry.target)");
+    expect(styles).toMatch(/details\.motion-disclosure\[open\][\s\S]*animation-delay:\s*var\(--motion-stagger\)/);
+    expect(styles).toMatch(/@keyframes orbit-(?:rotate|one-rotate|two-rotate)/);
+    expect(styles).toMatch(/\.orbit-one\s*\{[^}]*animation-duration:/s);
+    expect(styles).toMatch(/\.hero-orbit \.orbit\s*\{\s*animation:\s*none !important;/s);
+    expect(styles).toMatch(/\.app-shell\[data-reduced-motion="true"\][\s\S]*transition-duration:\s*0\.01ms/s);
+
+    const paperBlock = styles.match(/\.app-shell\[data-surface="paper"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(paperBlock).toMatch(/--color-canvas:\s*#dcd5c8/);
+    expect(paperBlock).toMatch(/--color-surface:\s*#e8e1d5/);
+    expect(paperBlock).not.toMatch(/#fff/i);
+    expect(styles).toMatch(/\.workspace,[\s\S]*\.advanced-textarea\s*\{[^}]*scrollbar-color:/s);
+    expect(styles).toMatch(/\.app-shell\[data-contrast="high"\]\s*\{[^}]*--scrollbar-thumb:/s);
+    expect(styles).toMatch(/\.app-shell\[data-contrast="high"\]\[data-surface="paper"\]/);
+    expect(styles).toMatch(/\.model-list-panel > \.profile-records,[\s\S]*\.profile-panel > \.profile-records\s*\{[^}]*margin-top:\s*var\(--space-section\)/s);
   });
 });
