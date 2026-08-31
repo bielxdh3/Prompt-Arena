@@ -21,12 +21,15 @@ use crate::domain::{
     MAX_BENCHMARK_DOCUMENT_BYTES,
 };
 
+use crate::external_providers::{
+    validate_external_generation_evidence, ExternalGenerationEvidencePayload,
+};
 use crate::orchestration::MAX_OBJECTIVE_EXPECTATION_BYTES;
 use crate::runtime::GenerationResponse;
 
 pub use crate::domain::ArtifactRef;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 6;
+pub const STORAGE_SCHEMA_VERSION: u32 = 8;
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const FOUNDATION_MIGRATION: &str = include_str!("storage/migrations/0001_foundation.sql");
 pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_core_arena.sql");
@@ -38,6 +41,8 @@ pub const P2_EVIDENCE_MIGRATION: &str = include_str!("storage/migrations/0005_p2
 pub const MODEL_LIBRARY_MIGRATION: &str = include_str!("storage/migrations/0006_model_library.sql");
 pub const ADVANCED_ARENA_MIGRATION: &str =
     include_str!("storage/migrations/0007_advanced_arena.sql");
+pub const EXTERNAL_GENERATION_EVIDENCE_MIGRATION: &str =
+    include_str!("storage/migrations/0008_external_generation_evidence.sql");
 const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = MAX_BENCHMARK_DOCUMENT_BYTES;
@@ -398,6 +403,15 @@ pub struct TournamentResultRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalGenerationEvidenceRecord {
+    #[serde(flatten)]
+    pub payload: ExternalGenerationEvidencePayload,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BenchmarkVersionSummary {
@@ -477,6 +491,7 @@ pub enum StorageError {
     AdvancedArtifactInvalid,
     AdvancedSourceNotFound,
     AdvancedSourceMismatch,
+    InvalidExternalGenerationEvidence,
 }
 
 impl std::fmt::Display for StorageError {
@@ -515,6 +530,7 @@ impl std::fmt::Display for StorageError {
             Self::AdvancedSourceMismatch => {
                 "advanced Arena source evidence does not match its content hash"
             }
+            Self::InvalidExternalGenerationEvidence => "external generation evidence is invalid",
         };
         formatter.write_str(message)
     }
@@ -582,6 +598,7 @@ impl StorageService {
         apply_migration(&mut connection, 5, P2_EVIDENCE_MIGRATION)?;
         apply_migration(&mut connection, 6, MODEL_LIBRARY_MIGRATION)?;
         apply_migration(&mut connection, 7, ADVANCED_ARENA_MIGRATION)?;
+        apply_migration(&mut connection, 8, EXTERNAL_GENERATION_EVIDENCE_MIGRATION)?;
         Ok(())
     }
 
@@ -1531,6 +1548,62 @@ impl StorageService {
         list_json_records(&self.connection()?, JsonTable::ModelRemovals)
     }
 
+    pub fn save_external_generation_evidence(
+        &self,
+        evidence: &ExternalGenerationEvidencePayload,
+        created_at: &str,
+    ) -> Result<(ExternalGenerationEvidenceRecord, SaveOutcome), StorageError> {
+        validate_external_generation_evidence(evidence)
+            .map_err(|_| StorageError::InvalidExternalGenerationEvidence)?;
+        validate_record_id(&evidence.generation_id)?;
+        validate_timestamp(created_at)?;
+        let connection = self.connection()?;
+        let outcome = save_immutable_json(
+            &connection,
+            JsonTable::ExternalGenerationEvidence,
+            &evidence.generation_id,
+            evidence,
+            created_at,
+        )?;
+        let record = query_external_generation_evidence(&connection, &evidence.generation_id)?
+            .ok_or(StorageError::DatabaseFailure)?;
+        Ok((record, outcome))
+    }
+
+    pub fn get_external_generation_evidence(
+        &self,
+        generation_id: &str,
+    ) -> Result<Option<ExternalGenerationEvidenceRecord>, StorageError> {
+        validate_record_id(generation_id)?;
+        query_external_generation_evidence(&self.connection()?, generation_id)
+    }
+
+    pub fn list_external_generation_evidence(
+        &self,
+    ) -> Result<Vec<ExternalGenerationEvidenceRecord>, StorageError> {
+        list_advanced_records::<ExternalGenerationEvidencePayload>(
+            &self.connection()?,
+            JsonTable::ExternalGenerationEvidence,
+        )?
+        .into_iter()
+        .map(|(content_hash, payload, created_at)| {
+            validate_external_generation_evidence(&payload)
+                .map_err(|_| StorageError::InvalidExternalGenerationEvidence)?;
+            let (_, computed_hash) = canonical_json_and_hash(
+                &serde_json::to_value(&payload).map_err(|_| StorageError::DatabaseFailure)?,
+            )?;
+            if computed_hash != content_hash {
+                return Err(StorageError::DatabaseFailure);
+            }
+            Ok(ExternalGenerationEvidenceRecord {
+                payload,
+                content_hash,
+                created_at,
+            })
+        })
+        .collect()
+    }
+
     pub fn save_attempt_and_result(
         &self,
         attempt: &Attempt,
@@ -1898,6 +1971,7 @@ enum JsonTable {
     TournamentResults,
     ModelRecords,
     ModelRemovals,
+    ExternalGenerationEvidence,
 }
 
 impl JsonTable {
@@ -1914,6 +1988,7 @@ impl JsonTable {
             Self::TournamentResults => "tournament_results",
             Self::ModelRecords => "model_records",
             Self::ModelRemovals => "model_removals",
+            Self::ExternalGenerationEvidence => "external_generation_evidence",
         }
     }
 }
@@ -2028,6 +2103,34 @@ fn query_advanced_record<T: DeserializeOwned>(
             Ok((content_hash, payload, created_at))
         })
         .transpose()
+}
+
+fn query_external_generation_evidence(
+    connection: &Connection,
+    generation_id: &str,
+) -> Result<Option<ExternalGenerationEvidenceRecord>, StorageError> {
+    let Some((content_hash, payload, created_at)) =
+        query_advanced_record::<ExternalGenerationEvidencePayload>(
+            connection,
+            JsonTable::ExternalGenerationEvidence,
+            generation_id,
+        )?
+    else {
+        return Ok(None);
+    };
+    validate_external_generation_evidence(&payload)
+        .map_err(|_| StorageError::InvalidExternalGenerationEvidence)?;
+    let (_, computed_hash) = canonical_json_and_hash(
+        &serde_json::to_value(&payload).map_err(|_| StorageError::DatabaseFailure)?,
+    )?;
+    if computed_hash != content_hash {
+        return Err(StorageError::DatabaseFailure);
+    }
+    Ok(Some(ExternalGenerationEvidenceRecord {
+        payload,
+        content_hash,
+        created_at,
+    }))
 }
 
 fn query_calibration_benchmark(
@@ -3117,6 +3220,10 @@ mod tests {
         sha256_hex, validate_benchmark_document, Attempt, ImmutableResultReference,
         ProfileRevision, Run,
     };
+    use crate::external_providers::{
+        estimate_external_cost, CostDecision, ExternalGenerationEvidencePayload,
+        ExternalProviderId, ExternalUsage, PriceSnapshot,
+    };
 
     use super::{
         AiJudgePanel, ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
@@ -3124,9 +3231,10 @@ mod tests {
         CalibrationResultPayload, CalibrationScore, FrozenAiJudge, SaveOutcome, StorageError,
         StorageLayout, StorageService, TournamentMatchResult, TournamentResultPayload,
         TournamentStanding, ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION,
-        BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION, FOUNDATION_MIGRATION,
-        MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
-        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
+        BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
+        EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
+        MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES, MAX_PROFILE_MODEL_BYTES,
+        MAX_PROFILE_REQUEST_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3137,6 +3245,50 @@ mod tests {
             std::process::id(),
             TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ))
+    }
+
+    fn external_evidence(generation_id: &str) -> ExternalGenerationEvidencePayload {
+        let price_snapshot = PriceSnapshot {
+            provider_id: ExternalProviderId::OpenAi,
+            model_id: "model-example".to_owned(),
+            captured_on: "2026-08-20".to_owned(),
+            currency: "USD".to_owned(),
+            input_usd_per_million_tokens: Some(2.0),
+            output_usd_per_million_tokens: Some(4.0),
+        };
+        let usage = ExternalUsage {
+            input_tokens: 2,
+            output_tokens: 3,
+            total_tokens: 5,
+        };
+        ExternalGenerationEvidencePayload {
+            generation_id: generation_id.to_owned(),
+            provider_id: ExternalProviderId::OpenAi,
+            requested_model: "model-example".to_owned(),
+            provider_model: "served-model".to_owned(),
+            identity_confidence: crate::external_providers::IdentityConfidence::ProviderReported,
+            network_used: true,
+            usage: usage.clone(),
+            estimated: estimate_external_cost(
+                Some(&price_snapshot),
+                ExternalProviderId::OpenAi,
+                "model-example",
+                5,
+                4,
+            )
+            .unwrap(),
+            actual: estimate_external_cost(
+                Some(&price_snapshot),
+                ExternalProviderId::OpenAi,
+                "model-example",
+                usage.input_tokens,
+                usage.output_tokens,
+            )
+            .unwrap(),
+            preflight_decision: CostDecision::Allow,
+            final_decision: CostDecision::Allow,
+            price_snapshot,
+        }
     }
 
     fn valid_document() -> String {
@@ -3236,12 +3388,12 @@ mod tests {
         let service = StorageService::open(&root).expect("storage opens");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
         );
         service.initialize().expect("second migration pass");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
         );
         assert!(FOUNDATION_MIGRATION.contains("CREATE TABLE"));
         assert!(!FOUNDATION_MIGRATION
@@ -3256,6 +3408,58 @@ mod tests {
             .to_ascii_uppercase()
             .contains("DROP TABLE"));
         assert!(ADVANCED_ARENA_MIGRATION.contains("calibration_results"));
+        assert!(EXTERNAL_GENERATION_EVIDENCE_MIGRATION.contains("external_generation_evidence"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn external_generation_evidence_is_immutable_reloadable_and_tamper_checked() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let evidence = external_evidence("external-generation-1");
+        let (first, first_outcome) = service
+            .save_external_generation_evidence(&evidence, "100")
+            .expect("evidence saves");
+        assert_eq!(first_outcome, SaveOutcome::Saved);
+        assert_eq!(first.payload, evidence);
+
+        let (replay, replay_outcome) = service
+            .save_external_generation_evidence(&evidence, "200")
+            .expect("evidence replay saves");
+        assert_eq!(replay, first);
+        assert_eq!(replay_outcome, SaveOutcome::AlreadyPresent);
+        assert_eq!(
+            service.list_external_generation_evidence().unwrap(),
+            vec![first.clone()]
+        );
+
+        let mut changed = evidence.clone();
+        changed.network_used = false;
+        assert_eq!(
+            service.save_external_generation_evidence(&changed, "300"),
+            Err(StorageError::ImmutableConflict)
+        );
+
+        let mut invalid_source = evidence.clone();
+        invalid_source.price_snapshot.provider_id = ExternalProviderId::Anthropic;
+        assert_eq!(
+            service.save_external_generation_evidence(&invalid_source, "300"),
+            Err(StorageError::InvalidExternalGenerationEvidence)
+        );
+
+        let connection =
+            Connection::open(service.layout().database_path()).expect("database opens");
+        let changed_json = serde_json::to_string(&changed).expect("changed evidence serializes");
+        connection
+            .execute(
+                "UPDATE external_generation_evidence SET document_json = ?1 WHERE record_id = ?2",
+                rusqlite::params![changed_json, evidence.generation_id],
+            )
+            .expect("tamper fixture updates document");
+        assert_eq!(
+            service.get_external_generation_evidence(&evidence.generation_id),
+            Err(StorageError::DatabaseFailure)
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -101,7 +101,7 @@ pub enum CredentialSource {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IdentityConfidence {
     Unverified,
@@ -154,7 +154,7 @@ pub struct PriceSnapshot {
     pub output_usd_per_million_tokens: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CostBreakdown {
     pub input_tokens: u64,
@@ -171,7 +171,7 @@ pub enum CostFailure {
     InvalidUsage,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CostDecision {
     Allow,
@@ -286,7 +286,7 @@ impl fmt::Debug for ExternalGenerationRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalUsage {
     pub input_tokens: u64,
@@ -315,6 +315,90 @@ pub struct ExternalGenerationResult {
     pub usage: ExternalUsage,
     pub network_used: bool,
     pub cost: ExternalCostEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalGenerationEvidencePayload {
+    pub generation_id: String,
+    pub provider_id: ExternalProviderId,
+    pub requested_model: String,
+    pub provider_model: String,
+    pub identity_confidence: IdentityConfidence,
+    pub network_used: bool,
+    pub usage: ExternalUsage,
+    pub estimated: CostBreakdown,
+    pub actual: CostBreakdown,
+    pub preflight_decision: CostDecision,
+    pub final_decision: CostDecision,
+    pub price_snapshot: PriceSnapshot,
+}
+
+pub fn sanitized_external_generation_evidence(
+    generation_id: String,
+    result: &ExternalGenerationResult,
+) -> Result<ExternalGenerationEvidencePayload, ExternalProviderError> {
+    let evidence = ExternalGenerationEvidencePayload {
+        generation_id,
+        provider_id: result.provider_id,
+        requested_model: result.requested_model.clone(),
+        provider_model: result.provider_model.clone(),
+        identity_confidence: result.identity_confidence,
+        network_used: result.network_used,
+        usage: result.usage.clone(),
+        estimated: result.cost.estimated.clone(),
+        actual: result.cost.actual.clone(),
+        preflight_decision: result.cost.preflight_decision,
+        final_decision: result.cost.final_decision,
+        price_snapshot: result.cost.price_snapshot.clone(),
+    };
+    validate_external_generation_evidence(&evidence)?;
+    Ok(evidence)
+}
+
+pub fn validate_external_generation_evidence(
+    evidence: &ExternalGenerationEvidencePayload,
+) -> Result<(), ExternalProviderError> {
+    validate_model(&evidence.requested_model)?;
+    validate_model(&evidence.provider_model)?;
+    let total_tokens = evidence
+        .usage
+        .input_tokens
+        .checked_add(evidence.usage.output_tokens)
+        .filter(|value| valid_token_count(*value))
+        .ok_or(ExternalProviderError::InvalidUsage)?;
+    if evidence.usage.total_tokens != total_tokens {
+        return Err(ExternalProviderError::InvalidUsage);
+    }
+    if evidence.actual.input_tokens != evidence.usage.input_tokens
+        || evidence.actual.output_tokens != evidence.usage.output_tokens
+        || evidence.actual.total_cost_usd < 0.0
+    {
+        return Err(ExternalProviderError::InvalidUsage);
+    }
+    let expected_estimated = estimate_external_cost(
+        Some(&evidence.price_snapshot),
+        evidence.provider_id,
+        &evidence.requested_model,
+        evidence.estimated.input_tokens,
+        evidence.estimated.output_tokens,
+    )
+    .map_err(map_cost_failure)?;
+    if expected_estimated != evidence.estimated {
+        return Err(ExternalProviderError::InvalidPrice);
+    }
+    let expected_actual = estimate_external_cost(
+        Some(&evidence.price_snapshot),
+        evidence.provider_id,
+        &evidence.requested_model,
+        evidence.usage.input_tokens,
+        evidence.usage.output_tokens,
+    )
+    .map_err(map_cost_failure)?;
+    if expected_actual != evidence.actual {
+        return Err(ExternalProviderError::InvalidPrice);
+    }
+    Ok(())
 }
 
 pub struct SecretInput(Vec<u8>);
@@ -2412,6 +2496,38 @@ mod tests {
             assert!(body.contains("hello"));
             assert!(!body.contains(TEST_CREDENTIAL_MARKER));
         }
+    }
+
+    #[test]
+    fn successful_mock_generation_sanitizes_history_evidence() {
+        let provider_id = ExternalProviderId::OpenAi;
+        let backend = configured_backend(provider_id, None);
+        let transport = MockTransport::new(success_response(provider_id));
+        let result = execute_external_generation_with_transport(
+            &backend,
+            &transport,
+            generation_request(
+                provider_id,
+                Some(price_snapshot(provider_id, "model-example")),
+                true,
+                false,
+            ),
+        )
+        .expect("mock generation succeeds");
+        let evidence = sanitized_external_generation_evidence("generation-1".to_owned(), &result)
+            .expect("evidence sanitizes");
+        let serialized = serde_json::to_string(&evidence).expect("evidence serializes");
+        assert!(!serialized.contains("provider text"));
+        assert!(!serialized.contains("hello"));
+        assert!(!serialized.contains(TEST_CREDENTIAL_MARKER));
+        assert!(!serialized.contains("headers"));
+
+        let mut tampered = evidence;
+        tampered.actual.output_tokens = 4;
+        assert_eq!(
+            validate_external_generation_evidence(&tampered),
+            Err(ExternalProviderError::InvalidUsage)
+        );
     }
 
     #[test]

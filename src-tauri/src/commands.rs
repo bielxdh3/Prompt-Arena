@@ -2,9 +2,12 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, OnceLock,
+    },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -28,6 +31,7 @@ use crate::{
         execute_external_generation as execute_external_generation_record,
         list_external_providers as list_external_provider_records,
         remove_external_provider as remove_external_provider_record,
+        sanitized_external_generation_evidence,
         update_external_cost_policy as update_external_cost_policy_record,
         ConfigureProviderRequest, ExternalGenerationRequest, ExternalGenerationResult,
         ExternalProviderError, ExternalProviderId, ExternalProviderMetadata, OsCredentialBackend,
@@ -58,8 +62,9 @@ use crate::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
         BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
         CalibrationBenchmarkPayload, CalibrationBenchmarkRecord, CalibrationResultPayload,
-        CalibrationResultRecord, StorageError, StorageService, TournamentResultPayload,
-        TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES, MAX_PROFILE_REQUEST_BYTES,
+        CalibrationResultRecord, ExternalGenerationEvidenceRecord, StorageError, StorageService,
+        TournamentResultPayload, TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES,
+        MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -115,6 +120,7 @@ const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
+static EXTERNAL_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn model_operation_controller() -> &'static ModelOperationController {
     MODEL_OPERATION_CONTROLLER.get_or_init(ModelOperationController::default)
@@ -164,6 +170,7 @@ impl From<StorageError> for CommandError {
             StorageError::AdvancedArtifactInvalid => "advanced_artifact_invalid",
             StorageError::AdvancedSourceNotFound => "advanced_source_not_found",
             StorageError::AdvancedSourceMismatch => "advanced_source_mismatch",
+            StorageError::InvalidExternalGenerationEvidence => "provider_evidence_invalid",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
@@ -333,9 +340,33 @@ pub fn remove_external_provider(provider_id: ExternalProviderId) -> Result<bool,
 
 #[tauri::command]
 pub fn execute_external_generation(
+    app: AppHandle,
     request: ExternalGenerationRequest,
 ) -> Result<ExternalGenerationResult, CommandError> {
-    execute_external_generation_record(request).map_err(Into::into)
+    let result = execute_external_generation_record(request).map_err(CommandError::from)?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let generation_id = format!(
+        "external-generation-{timestamp}-{}",
+        EXTERNAL_GENERATION_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let evidence = sanitized_external_generation_evidence(generation_id, &result)
+        .map_err(CommandError::from)?;
+    storage_for(&app)?
+        .save_external_generation_evidence(&evidence, &now_marker())
+        .map_err(CommandError::from)?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn list_external_generation_evidence(
+    app: AppHandle,
+) -> Result<Vec<ExternalGenerationEvidenceRecord>, CommandError> {
+    storage_for(&app)?
+        .list_external_generation_evidence()
+        .map_err(Into::into)
 }
 
 #[tauri::command]
