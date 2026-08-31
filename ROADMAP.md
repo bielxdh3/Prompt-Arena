@@ -100,10 +100,15 @@ Acceptance: the primary flow reads as a model-comparison laboratory, not develop
 
 ### P7 — Packaging and clean install — IN PROGRESS
 
-Tauri is configured for Windows NSIS + MSI and Linux `.deb` + `.AppImage`; a manual Windows NSIS installer was produced
-locally and the dispatch-only artifact workflow checks out an exact ref, validates, packages, hashes, and uploads without
-creating a GitHub Release. MSI is technically supported but the current local WiX `light.exe` run failed; Linux artifacts
-await the Linux CI runner.
+Tauri packages Windows NSIS + MSI and Linux `.deb` + `.AppImage` with stable installer metadata, a per-user NSIS Start
+Menu/uninstall path, a stable MSI upgrade code, and the existing app-owned `app_data_dir` persistence boundary. The
+target-specific worker sidecar hook remains deterministic. `package:artifacts` normalizes exact target names and writes
+`checksums-sha256.txt`; `verify:package` validates the manifest and performs clean-install/package/app smoke where the
+runner has the required platform tooling. The workflow records an explicit MSI outcome while keeping NSIS mandatory,
+uploads unsigned artifacts, and creates no GitHub Release.
+
+Real clean-install, start/restart, uninstall, and Linux launch evidence has not yet been confirmed for this revision, so
+P7 remains IN PROGRESS even though the configuration and automated verification path are present.
 
 Acceptance: Windows clean-install/start/restart/uninstall smoke and Linux package/launch smoke pass, with exact artifact
 names/checksums and no Node/Rust/terminal requirement for end users.
