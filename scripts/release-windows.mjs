@@ -87,7 +87,7 @@ if (isMainModule()) {
     checksumPath = `${artifactPath}.sha256`;
 
     writeSynchronizedVersion(version);
-    run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "tauri:build", "--", "--bundles", "msi"]);
+    run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build:windows-msi"]);
     const sourcePath = msiSource();
     fs.mkdirSync(DOWNLOAD_DIRECTORY, { recursive: true });
     if (fs.existsSync(artifactPath) || fs.existsSync(checksumPath)) throw new Error(`release artifact already exists: ${filename}`);
