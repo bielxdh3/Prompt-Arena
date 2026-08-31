@@ -15,6 +15,17 @@ Ollama is the currently executable runtime. LM Studio, llama.cpp/GGUF, Docker-ba
 rankings/tournaments, external BYOK, and Linux/native clean-install validation remain in progress; see
 [ROADMAP.md](ROADMAP.md) and [docs/DELIVERY_MATRIX.md](docs/DELIVERY_MATRIX.md) for exact status.
 
+## Windows download
+
+<!-- WINDOWS_MSI_DOWNLOAD:START -->
+Windows MSI: no verified installer is currently published. `npm run release:windows` updates this block only after a successful MSI build and SHA-256 verification.
+<!-- WINDOWS_MSI_DOWNLOAD:END -->
+
+The release command increments and synchronizes the application version in all package metadata, builds MSI from the
+current product checkout, stores the versioned installer under `downloadable-artifacts/`, records its SHA-256, updates
+this link, and commits/pushes the complete change together. A failed MSI build restores the prior metadata and keeps
+the previous verified download link unchanged.
+
 ## Development
 
 ```text
@@ -39,9 +50,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ## Packaging
 
 `npm run tauri:build` produces unsigned desktop bundles. The workflow `.github/workflows/package.yml` is
-`workflow_dispatch` plus pull-request validation: it checks out an exact ref, validates dependencies/frontend/Rust, builds mandatory Windows NSIS,
-attempts MSI best-effort, builds Linux `.deb`/`.AppImage`, computes relative-path SHA-256 checksums, and uploads artifacts
-without publishing a GitHub Release.
+`workflow_dispatch` plus pull-request validation: it checks out an exact ref, validates dependencies/frontend/Rust, builds
+mandatory Windows NSIS and MSI, builds Linux `.deb`/`.AppImage`, computes relative-path SHA-256 checksums, and uploads
+validation artifacts without publishing a GitHub Release. Repository publication is performed only by
+`npm run release:windows` as described above.
 Unsigned installers may trigger SmartScreen warnings.
 
 ## Safety boundaries

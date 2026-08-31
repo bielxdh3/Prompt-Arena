@@ -38,9 +38,9 @@ describe("desktop packaging helpers", () => {
     );
   });
 
-  it("normalizes the required package names and optional MSI name", () => {
+  it("normalizes the required package names and Windows MSI name", () => {
     expect(packageArtifactName("windows", "0.1.0", "nsis")).toBe("prompt-arena-0.1.0-windows-nsis.exe");
-    expect(packageArtifactName("windows", "0.1.0", "msi")).toBe("prompt-arena-0.1.0-windows-msi.msi");
+    expect(packageArtifactName("windows", "0.1.0", "msi")).toBe("Prompt-Arena-0.1.0-windows-x64.msi");
     expect(packageArtifactName("linux", "0.1.0", "deb")).toBe("prompt-arena-0.1.0-linux-deb.deb");
     expect(packageArtifactName("linux", "0.1.0", "appimage")).toBe("prompt-arena-0.1.0-linux-appimage.AppImage");
   });
@@ -67,11 +67,23 @@ describe("desktop packaging helpers", () => {
 
     expect(result.missingOptional).toEqual([]);
     expect(result.artifacts.map(({ name }) => name)).toEqual([
-      "prompt-arena-0.1.0-windows-msi.msi",
+      "Prompt-Arena-0.1.0-windows-x64.msi",
       "prompt-arena-0.1.0-windows-nsis.exe",
     ]);
     expect(verifyChecksumManifest(result.manifestPath, outputDirectory)).toEqual(
       result.artifacts.map(({ name, sha256 }) => ({ name, sha256 })),
+    );
+  });
+
+  it("fails closed when the mandatory Windows MSI is absent", () => {
+    const repositoryRoot = temporaryRoot();
+    const bundleRoot = path.join(repositoryRoot, "bundle");
+    const nsisDirectory = path.join(bundleRoot, "nsis");
+    fs.mkdirSync(nsisDirectory, { recursive: true });
+    fs.writeFileSync(path.join(nsisDirectory, "Prompt Arena_0.1.0_x64-setup.exe"), "nsis");
+
+    expect(() => preparePackageArtifacts({ repositoryRoot, platform: "windows", version: "0.1.0", bundleRoot })).toThrow(
+      "required msi bundle artifact was not produced",
     );
   });
 

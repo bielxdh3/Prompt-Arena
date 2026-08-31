@@ -39,6 +39,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Verify synchronized package version
+        run: npm run check:version
+
       - name: Check repository boundaries
         run: npm run check:boundaries
 
@@ -78,10 +81,8 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run tauri:build -- --bundles nsis
 
-      - name: Attempt Windows MSI installer
+      - name: Build mandatory Windows MSI installer
         if: runner.os == 'Windows'
-        id: msi
-        continue-on-error: true
         run: npm run tauri:build -- --bundles msi
 
       - name: Build Linux packages
@@ -91,23 +92,15 @@ jobs:
       - name: Record Windows MSI build evidence
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          MSI_OUTCOME: ${{ steps.msi.outcome }}
         run: |
           New-Item -ItemType Directory -Force package-artifacts | Out-Null
           $msi = @(Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' -File -ErrorAction SilentlyContinue)
           $lines = @(
             'MSI build command: npm run tauri:build -- --bundles msi'
-            "MSI step outcome: $env:MSI_OUTCOME"
             "MSI artifacts found: $($msi.Count)"
           )
-          if ($msi.Count -eq 0) {
-            $lines += 'MSI result: unavailable or failed; no MSI artifact was produced. NSIS remains mandatory.'
-          } elseif ($env:MSI_OUTCOME -eq 'success') {
-            $lines += 'MSI result: produced; the normalized artifact will be checksum-verified below.'
-          } else {
-            $lines += 'MSI result: command failed after producing an artifact; the normalized artifact will still be checksum-verified below.'
-          }
+          if ($msi.Count -ne 1) { throw "MSI result: expected exactly one artifact, found $($msi.Count)." }
+          $lines += 'MSI result: produced; the normalized artifact will be checksum-verified below.'
           $lines | Set-Content package-artifacts/msi-build-evidence.txt
 
       - name: Normalize Linux packages and write checksums
