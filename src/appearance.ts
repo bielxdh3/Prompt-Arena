@@ -24,9 +24,15 @@ export const SURFACE_OPTIONS = [
   { id: "paper", label: "Paper", description: "A light, high-contrast reading surface" },
 ] as const;
 
+export const CONTRAST_OPTIONS = [
+  { id: "standard", label: "Default", description: "Balanced text and surface contrast" },
+  { id: "high", label: "High contrast", description: "Stronger reading and focus contrast" },
+] as const;
+
 export type AccentId = (typeof ACCENT_OPTIONS)[number]["id"];
 export type RadiusId = (typeof RADIUS_OPTIONS)[number]["id"];
 export type SurfaceId = (typeof SURFACE_OPTIONS)[number]["id"];
+export type ContrastId = (typeof CONTRAST_OPTIONS)[number]["id"];
 
 export type AppearancePreferences = {
   fontId: string;
@@ -34,6 +40,7 @@ export type AppearancePreferences = {
   accentId: AccentId;
   radiusId: RadiusId;
   surfaceId: SurfaceId;
+  contrastId: ContrastId;
   reducedMotion: boolean;
 };
 
@@ -48,6 +55,7 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   accentId: "sand",
   radiusId: "rounded",
   surfaceId: "neutral",
+  contrastId: "standard",
   reducedMotion: false,
 };
 
@@ -77,6 +85,7 @@ export function normalizeAppearance(input: unknown): AppearancePreferences {
     accentId: optionId(ACCENT_OPTIONS, source.accentId, DEFAULT_APPEARANCE.accentId),
     radiusId: optionId(RADIUS_OPTIONS, source.radiusId, DEFAULT_APPEARANCE.radiusId),
     surfaceId: optionId(SURFACE_OPTIONS, source.surfaceId, DEFAULT_APPEARANCE.surfaceId),
+    contrastId: optionId(CONTRAST_OPTIONS, source.contrastId, DEFAULT_APPEARANCE.contrastId),
     reducedMotion: typeof source.reducedMotion === "boolean" ? source.reducedMotion : DEFAULT_APPEARANCE.reducedMotion,
   };
 }

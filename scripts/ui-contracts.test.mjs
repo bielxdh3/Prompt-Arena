@@ -32,4 +32,10 @@ describe("static UI style contracts", () => {
     const missing = shippedUiSources.flatMap((source) => [...source.matchAll(/translate\(\s*"((?:[^"\\]|\\.)+)"\s*\)/g)].map((match) => JSON.parse(`"${match[1]}"`))).filter((message, index, calls) => !resourceKeys.has(message) && calls.indexOf(message) === index);
     expect(missing).toEqual([]);
   });
+
+  it("keeps new translated listbox props backed by the PT-BR resource", () => {
+    for (const message of ["Select repetitions", "Choose a score", "Choose a response"]) {
+      expect(i18nSource).toMatch(new RegExp(`(?:\\"${message}\\")\\s*:`));
+    }
+  });
 });

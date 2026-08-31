@@ -47,6 +47,7 @@ import {
   formatLocalePercent,
   translate,
 } from "./i18n";
+import { AccessibleListbox, type AccessibleListboxOption } from "./accessible-listbox";
 
 type SummaryState =
   | { status: "loading" }
@@ -527,19 +528,25 @@ export function AdvancedArenaView() {
               </div>
               <div className="advanced-selection-grid">
                 <div className="advanced-field">
-                  <label className="field-label" htmlFor="advanced-calibration-history">{translate("Calibration result")}</label>
-                  <select className="font-select" id="advanced-calibration-history" value={selectedCalibrationResultId} onChange={(event) => setSelectedCalibrationResultId(event.currentTarget.value)}>
-                    <option value="">{translate("No saved result selected")}</option>
-                    {artifactHistory.calibrationResults.map((record) => <option key={record.resultId} value={record.resultId}>{record.resultId} · {formatAdvancedTimestamp(record.createdAt)}</option>)}
-                  </select>
+                  <AccessibleListbox
+                    id="advanced-calibration-history"
+                    label={translate("Calibration result")}
+                    value={selectedCalibrationResultId}
+                    placeholder={translate("No saved result selected")}
+                    options={artifactHistory.calibrationResults.map((record) => ({ value: record.resultId, label: record.resultId, detail: formatAdvancedTimestamp(record.createdAt) }))}
+                    onChange={setSelectedCalibrationResultId}
+                  />
                   <button className="secondary-button" type="button" disabled={!selectedCalibrationResultId} onClick={reopenCalibrationResult}>{translate("Reopen calibration")}</button>
                 </div>
                 <div className="advanced-field">
-                  <label className="field-label" htmlFor="advanced-tournament-history">{translate("Tournament result")}</label>
-                  <select className="font-select" id="advanced-tournament-history" value={selectedTournamentResultId} onChange={(event) => setSelectedTournamentResultId(event.currentTarget.value)}>
-                    <option value="">{translate("No saved result selected")}</option>
-                    {artifactHistory.tournamentResults.map((record) => <option key={record.tournamentId} value={record.tournamentId}>{record.tournamentId} · {record.mode}</option>)}
-                  </select>
+                  <AccessibleListbox
+                    id="advanced-tournament-history"
+                    label={translate("Tournament result")}
+                    value={selectedTournamentResultId}
+                    placeholder={translate("No saved result selected")}
+                    options={artifactHistory.tournamentResults.map((record) => ({ value: record.tournamentId, label: record.tournamentId, detail: record.mode }))}
+                    onChange={setSelectedTournamentResultId}
+                  />
                   <button className="secondary-button" type="button" disabled={!selectedTournamentResultId} onClick={reopenTournamentResult}>{translate("Reopen tournament")}</button>
                 </div>
               </div>
@@ -588,14 +595,19 @@ export function AdvancedArenaView() {
                     <span className="field-label">{translate("Frozen judge prompt")}</span>
                     <textarea className="advanced-textarea" id="advanced-ai-judge-prompt" value={aiJudgePrompt} onChange={(event) => setAiJudgePrompt(event.currentTarget.value)} spellCheck={false} />
                   </label>
-                  <label className="advanced-field" htmlFor="advanced-ai-judge-panel">
-                    <span className="field-label">{translate("Official judge panel")}</span>
-                    <select className="font-select" id="advanced-ai-judge-panel" value={aiJudgePanelSize} onChange={(event) => setAiJudgePanelSize(event.currentTarget.value as JudgePanelSize)}>
-                      <option value="none">{translate("No panel")}</option>
-                      <option value="3">{translate("Official panel · 3 judges")}</option>
-                      <option value="5">{translate("Official panel · 5 judges")}</option>
-                    </select>
-                  </label>
+                  <AccessibleListbox
+                    id="advanced-ai-judge-panel"
+                    className="advanced-field"
+                    label={translate("Official judge panel")}
+                    value={aiJudgePanelSize}
+                    placeholder={translate("No panel")}
+                    options={[
+                      { value: "none", label: translate("No panel") },
+                      { value: "3", label: translate("Official panel · 3 judges") },
+                      { value: "5", label: translate("Official panel · 5 judges") },
+                    ]}
+                    onChange={(value) => setAiJudgePanelSize(value as JudgePanelSize)}
+                  />
                   {aiJudgePanelSize !== "none" && (
                     <label className="advanced-field" htmlFor="advanced-ai-judge-panel-ids">
                       <span className="field-label">{translate("Panel judge IDs")}</span>
@@ -628,13 +640,15 @@ export function AdvancedArenaView() {
                     <p className="eyebrow">{translate("Rankings by category")}</p>
                     <h3 id="advanced-rankings-heading">{translate("Quality, latency, throughput, and human signal")}</h3>
                   </div>
-                  <label className="advanced-inline-select" htmlFor="advanced-score-source">
-                    <span className="field-label">{translate("Human metric source")}</span>
-                    <select className="font-select" id="advanced-score-source" value={scoreSource} onChange={(event) => setScoreSource(event.currentTarget.value as ScoreSource)}>
-                      <option value="human">{translate("Human")}</option>
-                      <option value="ai_judge">{translate("AI judge · manual")}</option>
-                    </select>
-                  </label>
+                  <AccessibleListbox
+                    id="advanced-score-source"
+                    className="advanced-inline-select"
+                    label={translate("Human metric source")}
+                    value={scoreSource}
+                    placeholder={translate("Human")}
+                    options={[{ value: "human", label: translate("Human") }, { value: "ai_judge", label: translate("AI judge · manual") }]}
+                    onChange={(value) => setScoreSource(value as ScoreSource)}
+                  />
                 </div>
                 <p className="field-help">{translate("Direction and deterministic spread are shown per metric. Ties are explicit; insufficient data is not ranked as a win or loss.")}</p>
                 {rankingsState.error && <p className="form-feedback form-feedback-error" role="alert">{rankingsState.error}</p>}
@@ -674,29 +688,39 @@ export function AdvancedArenaView() {
                   <span className="run-status run-status-neutral">{translate("Max")} {formatLocaleNumber(MAX_ADVANCED_COMPETITORS)} {translate("competitors")}</span>
                 </div>
                 <div className="advanced-selection-grid advanced-tournament-controls">
-                  <label className="advanced-field" htmlFor="advanced-tournament-mode">
-                    <span className="field-label">{translate("Mode")}</span>
-                    <select className="font-select" id="advanced-tournament-mode" value={tournamentMode} onChange={(event) => setTournamentMode(event.currentTarget.value as TournamentModeChoice)}>
-                      <option value="1v1">1v1</option>
-                      <option value="blind_ranking">{translate("Blind ranking")}</option>
-                      <option value="round_robin">{translate("Round robin")}</option>
-                      <option value="single_elimination">{translate("Single elimination")}</option>
-                    </select>
-                  </label>
+                  <AccessibleListbox
+                    id="advanced-tournament-mode"
+                    className="advanced-field"
+                    label={translate("Mode")}
+                    value={tournamentMode}
+                    placeholder="1v1"
+                    options={[
+                      { value: "1v1", label: "1v1" },
+                      { value: "blind_ranking", label: translate("Blind ranking") },
+                      { value: "round_robin", label: translate("Round robin") },
+                      { value: "single_elimination", label: translate("Single elimination") },
+                    ]}
+                    onChange={(value) => setTournamentMode(value as TournamentModeChoice)}
+                  />
                   <label className="advanced-field" htmlFor="advanced-max-matches">
                     <span className="field-label">{translate("Maximum matches")}</span>
                     <input className="advanced-input" id="advanced-max-matches" type="number" min="1" max={MAX_ADVANCED_MATCHES} step="1" value={maxMatches} onChange={(event) => setMaxMatches(Number(event.currentTarget.value))} />
                     <span className="field-help">{translate("Bounded from 1 to")} {formatLocaleNumber(MAX_ADVANCED_MATCHES)}.</span>
                   </label>
-                  <label className="advanced-field" htmlFor="advanced-tournament-metric">
-                    <span className="field-label">{translate("Evidence metric")}</span>
-                    <select className="font-select" id="advanced-tournament-metric" value={tournamentMetric} onChange={(event) => setTournamentMetric(event.currentTarget.value as AdvancedArenaMetric)}>
-                      <option value="objective_pass_rate">{translate("Objective pass rate")}</option>
-                      <option value="duration_ms">{translate("Duration")}</option>
-                      <option value="tokens_per_second">{translate("Tokens / second")}</option>
-                      <option value="human_score">{translate("Human / AI-judge score")}</option>
-                    </select>
-                  </label>
+                  <AccessibleListbox
+                    id="advanced-tournament-metric"
+                    className="advanced-field"
+                    label={translate("Evidence metric")}
+                    value={tournamentMetric}
+                    placeholder={translate("Objective pass rate")}
+                    options={[
+                      { value: "objective_pass_rate", label: translate("Objective pass rate") },
+                      { value: "duration_ms", label: translate("Duration") },
+                      { value: "tokens_per_second", label: translate("Tokens / second") },
+                      { value: "human_score", label: translate("Human / AI-judge score") },
+                    ]}
+                    onChange={(value) => setTournamentMetric(value as AdvancedArenaMetric)}
+                  />
                   <label className="advanced-field" htmlFor="advanced-tournament-id">
                     <span className="field-label">{translate("Tournament ID")}</span>
                     <input className="advanced-input" id="advanced-tournament-id" value={tournamentId} onChange={(event) => setTournamentId(event.currentTarget.value)} />
@@ -891,18 +915,10 @@ function AdvancedSelect({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  options: readonly { value: string; label: string; detail: string }[];
+  options: readonly AccessibleListboxOption[];
   placeholder: string;
 }) {
-  return (
-    <label className="advanced-field" htmlFor={id}>
-      <span className="field-label">{translate(label)}</span>
-      <select className="font-select" id={id} value={value} onChange={(event) => onChange(event.currentTarget.value)}>
-        <option value="">{translate(placeholder)}</option>
-        {options.map((option) => <option key={option.value} value={option.value}>{option.label} — {option.detail}</option>)}
-      </select>
-    </label>
-  );
+  return <AccessibleListbox id={id} className="advanced-field" label={label} value={value} options={options} placeholder={placeholder} onChange={onChange} />;
 }
 
 function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
