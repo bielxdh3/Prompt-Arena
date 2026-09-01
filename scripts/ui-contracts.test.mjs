@@ -51,11 +51,19 @@ describe("static UI style contracts", () => {
     expect(styles).toMatch(/\.page-transition\s*\{[^}]*animation:\s*page-enter\s+var\(--motion-page\)/s);
     expect(styles).toMatch(/\.scroll-reveal\s*\{[^}]*transition:[^}]*var\(--motion-reveal\)/s);
     expect(appSource).toContain("observer.unobserve(entry.target)");
-    expect(styles).toMatch(/details\.motion-disclosure\[open\][\s\S]*animation-delay:\s*var\(--motion-stagger\)/);
+    expect(styles).toMatch(/details\.motion-disclosure\[open\][\s\S]*transition-delay:\s*var\(--motion-stagger\)/);
     expect(styles).toMatch(/@keyframes orbit-(?:rotate|one-rotate|two-rotate)/);
     expect(styles).toMatch(/\.orbit-one\s*\{[^}]*animation-duration:/s);
+    expect(styles).toContain("--motion-orbit-period: 18s");
+    expect(styles).toMatch(/--motion-page-base:\s*360ms/);
+    expect(styles).toMatch(/--motion-disclosure-base:\s*320ms/);
+    expect(styles).toMatch(/--motion-page:\s*calc\(\s*var\(--motion-page-base\)\s*\*\s*var\(--motion-scale-effective\)\s*\)/);
+    expect(styles).toContain("transition-behavior: allow-discrete");
+    expect(styles).toContain("content-visibility: hidden");
+    expect(styles).toMatch(/\.orbit::after\s*\{[^}]*content:\s*"";/s);
     expect(styles).toMatch(/\.hero-orbit \.orbit\s*\{\s*animation:\s*none !important;/s);
     expect(styles).toMatch(/\.app-shell\[data-reduced-motion="true"\][\s\S]*transition-duration:\s*0\.01ms/s);
+    expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*--motion-scale-effective:\s*0/s);
 
     const paperBlock = styles.match(/\.app-shell\[data-surface="paper"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     expect(paperBlock).toMatch(/--color-canvas:\s*#dcd5c8/);
@@ -65,5 +73,15 @@ describe("static UI style contracts", () => {
     expect(styles).toMatch(/\.app-shell\[data-contrast="high"\]\s*\{[^}]*--scrollbar-thumb:/s);
     expect(styles).toMatch(/\.app-shell\[data-contrast="high"\]\[data-surface="paper"\]/);
     expect(styles).toMatch(/\.model-list-panel > \.profile-records,[\s\S]*\.profile-panel > \.profile-records\s*\{[^}]*margin-top:\s*var\(--space-section\)/s);
+    expect((appSource.match(/<details className="[^"]*motion-disclosure/g) ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the accessible persisted motion-scale control wired to the app shell", () => {
+    expect(appSource).toContain('style={{ "--motion-scale": appearance.motionScale / 100 }');
+    expect(appSource).toMatch(/id="motion-scale"[\s\S]*type="range"[\s\S]*min=\{MOTION_SCALE_MIN\}[\s\S]*max=\{MOTION_SCALE_MAX\}/);
+    expect(appSource).toContain("aria-valuetext={`${appearance.motionScale}%`}");
+    expect(appSource).toContain('updateAppearance("motionScale", Number(event.target.value))');
+    expect(i18nSource).toMatch(/"Motion scale"\s*:/);
+    expect(i18nSource).toMatch(/"Adjust the duration of discretionary interface motion\."\s*:/);
   });
 });

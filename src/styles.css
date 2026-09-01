@@ -27,16 +27,27 @@
   --radius-md: 18px;
   --radius-lg: 28px;
   --shadow-panel: 0 18px 50px rgb(0 0 0 / 0.18);
-  --motion-fast: 140ms;
-  --motion-base: 220ms;
-  --motion-page: 180ms;
-  --motion-surface: 200ms;
-  --motion-reveal: 120ms;
-  --motion-expand: 180ms;
-  --motion-stagger: 24ms;
+  --motion-scale: 1;
+  --motion-scale-effective: var(--motion-scale);
+  --motion-fast-base: 200ms;
+  --motion-base-base: 314ms;
+  --motion-page-base: 360ms;
+  --motion-surface-base: 286ms;
+  --motion-reveal-base: 160ms;
+  --motion-disclosure-base: 320ms;
+  --motion-stagger-base: 48ms;
+  --motion-fast: calc(var(--motion-fast-base) * var(--motion-scale-effective));
+  --motion-base: calc(var(--motion-base-base) * var(--motion-scale-effective));
+  --motion-page: calc(var(--motion-page-base) * var(--motion-scale-effective));
+  --motion-surface: calc(var(--motion-surface-base) * var(--motion-scale-effective));
+  --motion-reveal: calc(var(--motion-reveal-base) * var(--motion-scale-effective));
+  --motion-disclosure: calc(var(--motion-disclosure-base) * var(--motion-scale-effective));
+  --motion-expand: var(--motion-disclosure);
+  --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
+  --motion-orbit-period: 18s;
   --motion-ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
   --motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
-  --motion-distance: 5px;
+  --motion-distance: calc(5px * var(--motion-scale-effective));
   --space-section: 32px;
   --scrollbar-track: #191a1d;
   --scrollbar-thumb: #6f737b;
@@ -145,6 +156,25 @@
   --scrollbar-thumb: #6f737b;
   --scrollbar-thumb-hover: #9296a0;
   --scrollbar-thumb-active: #d6b88a;
+}
+
+.app-shell {
+  --motion-scale-effective: var(--motion-scale);
+  --motion-fast: calc(var(--motion-fast-base) * var(--motion-scale-effective));
+  --motion-base: calc(var(--motion-base-base) * var(--motion-scale-effective));
+  --motion-page: calc(var(--motion-page-base) * var(--motion-scale-effective));
+  --motion-surface: calc(var(--motion-surface-base) * var(--motion-scale-effective));
+  --motion-reveal: calc(var(--motion-reveal-base) * var(--motion-scale-effective));
+  --motion-disclosure: calc(var(--motion-disclosure-base) * var(--motion-scale-effective));
+  --motion-expand: var(--motion-disclosure);
+  --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
+  --motion-distance: calc(5px * var(--motion-scale-effective));
+}
+
+.app-shell[data-reduced-motion="true"] {
+  --motion-scale-effective: 0;
+  --motion-stagger: 0ms;
+  --motion-distance: 0px;
 }
 
 .app-shell[data-surface="warm"] {
@@ -442,7 +472,7 @@ textarea:focus-visible {
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+  transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease;
 }
 
 .nav-item:hover {
@@ -667,32 +697,40 @@ h3 {
     overflow: hidden;
     opacity: 0;
     transform: translateY(-3px);
-    transition: block-size var(--motion-expand) var(--motion-ease-emphasized),
+    content-visibility: hidden;
+    transition: block-size var(--motion-disclosure) var(--motion-ease-emphasized),
       opacity var(--motion-reveal) var(--motion-ease-standard),
-      transform var(--motion-reveal) var(--motion-ease-standard);
+      transform var(--motion-reveal) var(--motion-ease-standard),
+      content-visibility 0s linear var(--motion-disclosure);
+    transition-behavior: allow-discrete;
   }
 
   details.motion-disclosure[open]::details-content {
     block-size: auto;
+    content-visibility: visible;
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-@keyframes disclosure-item-enter {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
+details.motion-disclosure > :not(summary),
+details.motion-disclosure > :not(summary) > * {
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity var(--motion-reveal) var(--motion-ease-standard),
+    transform var(--motion-reveal) var(--motion-ease-standard);
 }
 
 details.motion-disclosure[open] > :not(summary),
 details.motion-disclosure[open] > :not(summary) > * {
-  animation: disclosure-item-enter var(--motion-reveal) var(--motion-ease-standard) both;
+  opacity: 1;
+  transform: translateY(0);
 }
 
-details.motion-disclosure[open] > :not(summary) > :nth-child(2) { animation-delay: var(--motion-stagger); }
-details.motion-disclosure[open] > :not(summary) > :nth-child(3) { animation-delay: calc(var(--motion-stagger) * 2); }
-details.motion-disclosure[open] > :not(summary) > :nth-child(4) { animation-delay: calc(var(--motion-stagger) * 3); }
-details.motion-disclosure[open] > :not(summary) > :nth-child(5) { animation-delay: calc(var(--motion-stagger) * 4); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(2) { transition-delay: var(--motion-stagger); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(3) { transition-delay: calc(var(--motion-stagger) * 2); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(4) { transition-delay: calc(var(--motion-stagger) * 3); }
+details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-delay: calc(var(--motion-stagger) * 4); }
 
 .panel {
   min-width: 0;
@@ -807,14 +845,27 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { animation-dela
   transform: rotate(-25deg);
   transform-origin: center;
   will-change: transform;
-  animation: orbit-rotate 18s linear infinite;
+  animation: orbit-rotate var(--motion-orbit-period) linear infinite;
+}
+
+.orbit::after {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  content: "";
+  background: var(--color-accent-strong);
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgb(240 212 165 / 0.7);
+  transform: translateX(-50%);
 }
 
 .orbit-one {
   width: 310px;
   height: 170px;
   transform: rotate(32deg);
-  animation-duration: 24s;
+  animation-duration: calc(var(--motion-orbit-period) * 1.32);
   animation-direction: reverse;
 }
 
@@ -823,7 +874,7 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { animation-dela
   height: 300px;
   border-color: rgb(214 184 138 / 0.22);
   transform: rotate(44deg);
-  animation-duration: 21s;
+  animation-duration: calc(var(--motion-orbit-period) * 0.84);
 }
 
 @keyframes orbit-rotate {
@@ -1598,7 +1649,45 @@ button:disabled {
   display: block;
   width: 100%;
   margin-top: 14px;
+  height: 20px;
   accent-color: var(--color-accent);
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.font-scale-control::-webkit-slider-runnable-track {
+  height: 6px;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+}
+
+.font-scale-control::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  appearance: none;
+  background: var(--color-accent);
+  border: 2px solid var(--color-accent-strong);
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+}
+
+.font-scale-control::-moz-range-track {
+  height: 6px;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+}
+
+.font-scale-control::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-accent-strong);
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
 }
 
 .range-labels {
@@ -3725,6 +3814,12 @@ button.official-pack-row:hover,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    --motion-scale-effective: 0;
+    --motion-stagger: 0ms;
+    --motion-distance: 0px;
+  }
+
   *,
   *::before,
   *::after {

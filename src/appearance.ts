@@ -6,6 +6,9 @@ export const MAX_APPEARANCE_PAYLOAD_BYTES = 8 * 1024;
 export const FONT_SCALE_MIN = 90;
 export const FONT_SCALE_MAX = 115;
 export const FONT_SCALE_STEP = 5;
+export const MOTION_SCALE_MIN = 0;
+export const MOTION_SCALE_MAX = 200;
+export const MOTION_SCALE_DEFAULT = 100;
 
 export const ACCENT_OPTIONS = [
   { id: "sand", label: "Sand" },
@@ -42,6 +45,7 @@ export type AppearancePreferences = {
   surfaceId: SurfaceId;
   contrastId: ContrastId;
   reducedMotion: boolean;
+  motionScale: number;
 };
 
 export type AppearancePreferencePayload = {
@@ -57,6 +61,7 @@ export const DEFAULT_APPEARANCE: AppearancePreferences = {
   surfaceId: "neutral",
   contrastId: "standard",
   reducedMotion: false,
+  motionScale: MOTION_SCALE_DEFAULT,
 };
 
 function optionId<T extends { id: string }>(options: readonly T[], value: unknown, fallback: T["id"]): T["id"] {
@@ -77,6 +82,11 @@ export function normalizeFontScale(value: unknown): number {
   return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, stepped));
 }
 
+export function normalizeMotionScale(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return MOTION_SCALE_DEFAULT;
+  return Math.min(MOTION_SCALE_MAX, Math.max(MOTION_SCALE_MIN, Math.round(value)));
+}
+
 export function normalizeAppearance(input: unknown): AppearancePreferences {
   const source = isRecord(input) ? input : {};
   return {
@@ -87,6 +97,7 @@ export function normalizeAppearance(input: unknown): AppearancePreferences {
     surfaceId: optionId(SURFACE_OPTIONS, source.surfaceId, DEFAULT_APPEARANCE.surfaceId),
     contrastId: optionId(CONTRAST_OPTIONS, source.contrastId, DEFAULT_APPEARANCE.contrastId),
     reducedMotion: typeof source.reducedMotion === "boolean" ? source.reducedMotion : DEFAULT_APPEARANCE.reducedMotion,
+    motionScale: normalizeMotionScale(source.motionScale),
   };
 }
 

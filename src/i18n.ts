@@ -195,6 +195,8 @@ const PT_BR_MESSAGES_BASE = {
   "Português (Brasil)": "Português (Brasil)",
   "Interface font": "Fonte da interface",
   "Font scale": "Escala da fonte",
+  "Motion scale": "Escala do movimento",
+  "Adjust the duration of discretionary interface motion.": "Ajuste a duração dos movimentos discricionários da interface.",
   Compact: "Compacta",
   Standard: "Padrão",
   Large: "Grande",
