@@ -1,6 +1,6 @@
 [package]
 name = "prompt-arena"
-version = "0.1.3"
+version = "0.1.4"
 description = "Local-first desktop workspace for Prompt Arena"
 authors = ["Prompt Arena contributors"]
 edition = "2021"
