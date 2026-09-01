@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const styles = fs.readFileSync(path.join(repositoryRoot, "src", "styles.css"), "utf8");
+const listboxSource = fs.readFileSync(path.join(repositoryRoot, "src", "accessible-listbox.tsx"), "utf8");
 const i18nSource = fs.readFileSync(path.join(repositoryRoot, "src", "i18n.ts"), "utf8");
 const appSource = fs.readFileSync(path.join(repositoryRoot, "src", "App.tsx"), "utf8");
 const shippedUiSources = ["App.tsx", "advanced-arena-view.tsx"].map((fileName) => fs.readFileSync(path.join(repositoryRoot, "src", fileName), "utf8"));
@@ -60,7 +61,8 @@ describe("static UI style contracts", () => {
     expect(styles).toMatch(/--motion-page:\s*calc\(\s*var\(--motion-page-base\)\s*\*\s*var\(--motion-scale-effective\)\s*\)/);
     expect(styles).toContain("transition-behavior: allow-discrete");
     expect(styles).toContain("content-visibility: hidden");
-    expect(styles).toMatch(/\.orbit::after\s*\{[^}]*content:\s*"";/s);
+    expect(styles).not.toMatch(/\.orbit::(?:before|after)\s*\{/);
+    expect(styles).toMatch(/\.orbit\s*\{[^}]*border-style:\s*solid dashed solid dotted;/s);
     expect(styles).toMatch(/\.hero-orbit \.orbit\s*\{\s*animation:\s*none !important;/s);
     expect(styles).toMatch(/\.app-shell\[data-reduced-motion="true"\][\s\S]*transition-duration:\s*0\.01ms/s);
     expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*--motion-scale-effective:\s*0/s);
@@ -83,5 +85,16 @@ describe("static UI style contracts", () => {
     expect(appSource).toContain('updateAppearance("motionScale", Number(event.target.value))');
     expect(i18nSource).toMatch(/"Motion scale"\s*:/);
     expect(i18nSource).toMatch(/"Adjust the duration of discretionary interface motion\."\s*:/);
+    expect((appSource.match(/type="range"/g) ?? []).length).toBe(1);
+    expect(appSource).not.toContain('id="font-scale"');
+  });
+
+  it("keeps listbox menus attached, viewport-safe, and shared across consumers", () => {
+    expect(listboxSource).toContain("createPortal");
+    expect(listboxSource).toContain('closest<HTMLElement>(".app-shell")');
+    expect(listboxSource).toContain('window.addEventListener("scroll", updateMenuPosition, true)');
+    expect(listboxSource).toContain("menuRef.current?.contains");
+    expect(styles).toMatch(/\.arena-listbox-menu\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*var\(--z-popover\)/s);
+    expect(styles).not.toMatch(/\.arena-listbox-menu\s*\{[^}]*position:\s*absolute/s);
   });
 });
