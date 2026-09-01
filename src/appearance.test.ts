@@ -5,9 +5,13 @@ import {
   FONT_SCALE_MAX,
   FONT_SCALE_MIN,
   MAX_APPEARANCE_PAYLOAD_BYTES,
+  MOTION_SCALE_DEFAULT,
+  MOTION_SCALE_MAX,
+  MOTION_SCALE_MIN,
   importAppearancePreferences,
   normalizeAppearance,
   normalizeFontScale,
+  normalizeMotionScale,
   parseAppearancePreferences,
   serializeAppearancePreferences,
 } from "./appearance";
@@ -27,6 +31,7 @@ describe("appearance preferences", () => {
       surfaceId: "paper",
       contrastId: "high",
       reducedMotion: true,
+      motionScale: 125,
     })).toEqual({
       fontId: "arial",
       fontScale: 115,
@@ -35,6 +40,7 @@ describe("appearance preferences", () => {
       surfaceId: "paper",
       contrastId: "high",
       reducedMotion: true,
+      motionScale: 125,
     });
   });
 
@@ -58,6 +64,15 @@ describe("appearance preferences", () => {
     expect(normalizeFontScale(Number.NaN)).toBe(DEFAULT_APPEARANCE.fontScale);
   });
 
+  it("bounds the motion scale from zero to two hundred percent", () => {
+    expect(DEFAULT_APPEARANCE.motionScale).toBe(MOTION_SCALE_DEFAULT);
+    expect(normalizeMotionScale(-1)).toBe(MOTION_SCALE_MIN);
+    expect(normalizeMotionScale(100)).toBe(MOTION_SCALE_DEFAULT);
+    expect(normalizeMotionScale(100.6)).toBe(101);
+    expect(normalizeMotionScale(999)).toBe(MOTION_SCALE_MAX);
+    expect(normalizeMotionScale(Number.NaN)).toBe(MOTION_SCALE_DEFAULT);
+  });
+
   it("round-trips only sanitized preferences", () => {
     const serialized = serializeAppearancePreferences({
       fontId: "missing",
@@ -67,6 +82,7 @@ describe("appearance preferences", () => {
       surfaceId: "warm",
       contrastId: "high",
       reducedMotion: false,
+      motionScale: 80,
       futureField: "ignored",
     });
     expect(parseAppearancePreferences(serialized)).toEqual({
@@ -75,6 +91,7 @@ describe("appearance preferences", () => {
       accentId: "plum",
       surfaceId: "warm",
       contrastId: "high",
+      motionScale: 80,
     });
     expect(parseAppearancePreferences("not-json")).toEqual(DEFAULT_APPEARANCE);
   });
@@ -88,6 +105,7 @@ describe("appearance preferences", () => {
       surfaceId: "paper",
       contrastId: "high",
       reducedMotion: true,
+      motionScale: 175,
       apiKey: "must-not-export",
       headers: { Authorization: "must-not-export" },
     });
@@ -102,6 +120,7 @@ describe("appearance preferences", () => {
         surfaceId: "paper",
         contrastId: "high",
         reducedMotion: true,
+        motionScale: 175,
       },
     });
     expect(serialized.length).toBeLessThan(MAX_APPEARANCE_PAYLOAD_BYTES);

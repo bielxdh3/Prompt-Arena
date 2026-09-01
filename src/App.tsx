@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -178,6 +178,8 @@ import {
   CONTRAST_OPTIONS,
   DEFAULT_APPEARANCE,
   MAX_APPEARANCE_PAYLOAD_BYTES,
+  MOTION_SCALE_MAX,
+  MOTION_SCALE_MIN,
   RADIUS_OPTIONS,
   SURFACE_OPTIONS,
   normalizeAppearance,
@@ -357,6 +359,7 @@ function AppShell() {
       data-surface={appearance.surfaceId}
       data-contrast={appearance.contrastId}
       data-reduced-motion={appearance.reducedMotion ? "true" : "false"}
+      style={{ "--motion-scale": appearance.motionScale / 100 } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">
         {translate("Skip to content")}
@@ -4412,6 +4415,26 @@ function Settings({
               onChange={(event) => updateAppearance("fontScale", Number(event.target.value))}
             />
             <div className="range-labels" aria-hidden="true"><span>{translate("Compact")}</span><span>{translate("Standard")}</span><span>{translate("Large")}</span></div>
+          </div>
+
+          <div className="appearance-field">
+            <div className="field-label-row">
+              <label className="field-label" htmlFor="motion-scale">{translate("Motion scale")}</label>
+              <output className="control-value" htmlFor="motion-scale" aria-live="polite">{appearance.motionScale}%</output>
+            </div>
+            <input
+              className="font-scale-control motion-scale-control"
+              id="motion-scale"
+              type="range"
+              min={MOTION_SCALE_MIN}
+              max={MOTION_SCALE_MAX}
+              step="1"
+              value={appearance.motionScale}
+              aria-valuetext={`${appearance.motionScale}%`}
+              onChange={(event) => updateAppearance("motionScale", Number(event.target.value))}
+            />
+            <p className="field-help">{translate("Adjust the duration of discretionary interface motion.")}</p>
+            <div className="range-labels" aria-hidden="true"><span>0%</span><span>100%</span><span>200%</span></div>
           </div>
 
           <fieldset className="appearance-fieldset">
