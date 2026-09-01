@@ -45,6 +45,7 @@
   --motion-expand: var(--motion-disclosure);
   --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
   --motion-orbit-period: 18s;
+  --z-popover: 20;
   --motion-ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
   --motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-distance: calc(5px * var(--motion-scale-effective));
@@ -841,6 +842,7 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
   width: 260px;
   height: 140px;
   border: 1px solid rgb(214 184 138 / 0.38);
+  border-style: solid dashed solid dotted;
   border-radius: 50%;
   transform: rotate(-25deg);
   transform-origin: center;
@@ -848,23 +850,11 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
   animation: orbit-rotate var(--motion-orbit-period) linear infinite;
 }
 
-.orbit::after {
-  position: absolute;
-  top: -4px;
-  left: 50%;
-  width: 8px;
-  height: 8px;
-  content: "";
-  background: var(--color-accent-strong);
-  border-radius: 50%;
-  box-shadow: 0 0 12px rgb(240 212 165 / 0.7);
-  transform: translateX(-50%);
-}
-
 .orbit-one {
   width: 310px;
   height: 170px;
   transform: rotate(32deg);
+  border-style: dashed solid dotted solid;
   animation-duration: calc(var(--motion-orbit-period) * 1.32);
   animation-direction: reverse;
 }
@@ -873,6 +863,7 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
   width: 190px;
   height: 300px;
   border-color: rgb(214 184 138 / 0.22);
+  border-style: dotted solid dashed solid;
   transform: rotate(44deg);
   animation-duration: calc(var(--motion-orbit-period) * 0.84);
 }
@@ -1645,7 +1636,7 @@ button:disabled {
   font-weight: 700;
 }
 
-.font-scale-control {
+.motion-scale-control {
   display: block;
   width: 100%;
   margin-top: 14px;
@@ -1656,14 +1647,14 @@ button:disabled {
   cursor: pointer;
 }
 
-.font-scale-control::-webkit-slider-runnable-track {
+.motion-scale-control::-webkit-slider-runnable-track {
   height: 6px;
   background: var(--color-surface-soft);
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
 }
 
-.font-scale-control::-webkit-slider-thumb {
+.motion-scale-control::-webkit-slider-thumb {
   width: 18px;
   height: 18px;
   margin-top: -7px;
@@ -1674,14 +1665,14 @@ button:disabled {
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
 }
 
-.font-scale-control::-moz-range-track {
+.motion-scale-control::-moz-range-track {
   height: 6px;
   background: var(--color-surface-soft);
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
 }
 
-.font-scale-control::-moz-range-thumb {
+.motion-scale-control::-moz-range-thumb {
   width: 14px;
   height: 14px;
   background: var(--color-accent);
@@ -2477,11 +2468,10 @@ button.official-pack-row:hover,
 }
 
 .arena-listbox-menu {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 6px);
-  width: 100%;
-  max-height: 260px;
+  position: fixed;
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
   margin: 0;
   padding: 5px;
   overflow-y: auto;

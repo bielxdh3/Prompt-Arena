@@ -4401,29 +4401,11 @@ function Settings({
 
           <div className="appearance-field">
             <div className="field-label-row">
-              <label className="field-label" htmlFor="font-scale">{translate("Font scale")}</label>
-              <output className="control-value" htmlFor="font-scale">{appearance.fontScale}%</output>
-            </div>
-            <input
-              className="font-scale-control"
-              id="font-scale"
-              type="range"
-              min="90"
-              max="115"
-              step="5"
-              value={appearance.fontScale}
-              onChange={(event) => updateAppearance("fontScale", Number(event.target.value))}
-            />
-            <div className="range-labels" aria-hidden="true"><span>{translate("Compact")}</span><span>{translate("Standard")}</span><span>{translate("Large")}</span></div>
-          </div>
-
-          <div className="appearance-field">
-            <div className="field-label-row">
               <label className="field-label" htmlFor="motion-scale">{translate("Motion scale")}</label>
               <output className="control-value" htmlFor="motion-scale" aria-live="polite">{appearance.motionScale}%</output>
             </div>
             <input
-              className="font-scale-control motion-scale-control"
+              className="motion-scale-control"
               id="motion-scale"
               type="range"
               min={MOTION_SCALE_MIN}
