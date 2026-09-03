@@ -83,9 +83,22 @@ and tests immutable app-owned calibration benchmark/result persistence, frozen A
 evidence-backed tournament outcomes/standings, and Advanced Arena save/reopen/disagreement UI. Official benchmark-version
 judge integration remains pending.
 
+Planned extension — **single-model benchmark mode**:
+
+- Run one immutable model profile against a benchmark without requiring a second competitor or an Arena session.
+- Capture the same first-class evidence and metrics available to comparable runs, including timing, latency, throughput,
+  generated-token counts, scores/verifier outcomes, effective configuration, runtime identity, and hardware snapshot where available.
+- Persist the result as an independent historical benchmark run rather than a disposable quick test.
+- Allow compatible historical runs to be compared later across models, model/profile revisions, quantizations, runtimes,
+  parameters, hardware changes, or different dates without requiring those runs to have been executed side by side.
+- Treat comparison as an optional operation over immutable benchmark evidence: a user may inspect a singular result alone
+  forever, or assemble one or more compatible historical runs into a later comparison view.
+
 P4 remains IN PROGRESS: real native Tauri acceptance and the remaining publication/security gates are still pending.
 
-Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence.
+Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence. A user can
+also benchmark one model by itself, inspect and persist its metrics/evidence, and later compare compatible historical
+results without rerunning them together.
 
 ### P5 — External BYOK — IN PROGRESS
 
