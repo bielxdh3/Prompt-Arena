@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Prompt Arena",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "identifier": "com.promptarena.desktop",
   "mainBinaryName": "prompt-arena",
   "build": {

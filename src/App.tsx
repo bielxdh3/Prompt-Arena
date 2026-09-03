@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -96,6 +96,8 @@ import {
 import {
   attemptStatusLabel,
   attemptStatusTone,
+  BLIND_RESPONSE_MAX_HEIGHT_PX,
+  buildLegacyBlindEvaluationLockRequest,
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
@@ -103,6 +105,8 @@ import {
   formatCount,
   formatDurationNs,
   objectiveVerificationEvidence,
+  reconcileLegacyBlindEvaluationRetry,
+  updateBlindEvaluationScore,
 } from "./results-ui";
 import { assessRunComparability } from "./comparability";
 import {
@@ -124,6 +128,7 @@ import {
   arenaExportCsv,
   arenaExportJson,
   arenaExportMarkdown,
+  arenaMonitorDisplay,
   arenaSummaryExportCsv,
   arenaSummaryExportJson,
   arenaSummaryExportMarkdown,
@@ -134,8 +139,15 @@ import {
   rankArenaCompetitors,
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
+  applyArenaProgress,
+  arenaTelemetryLabel,
+  createArenaTelemetry,
+  refreshArenaTelemetry,
+  visibleArenaTelemetryError,
+  visibleArenaTelemetryMetrics,
   type ArenaExecution,
   type ArenaProgress,
+  type ArenaTelemetry,
 } from "./arena-runner";
 import {
   documentJsonForDraft,
@@ -163,8 +175,11 @@ import {
 import {
   ACCENT_OPTIONS,
   APPEARANCE_STORAGE_KEY,
+  CONTRAST_OPTIONS,
   DEFAULT_APPEARANCE,
   MAX_APPEARANCE_PAYLOAD_BYTES,
+  MOTION_SCALE_MAX,
+  MOTION_SCALE_MIN,
   RADIUS_OPTIONS,
   SURFACE_OPTIONS,
   normalizeAppearance,
@@ -186,19 +201,23 @@ import {
   classifyModelRecommendation,
   DEFAULT_MODEL_SOURCE_CONFIGS,
   DEFAULT_RECOMMENDATION_THRESHOLDS,
+  deriveModelAvailability,
   filterModelCatalog,
+  findModelOperation,
   EMPTY_PROFILE_FORM,
   hardwarePreviewCopy,
   isActiveModelOperation,
   modelBackendLabel,
+  modelActionLabel,
+  modelAvailabilityLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
   modelDownloadCapabilityLabel,
   modelEmptyCopy,
   modelOperationProgressLabel,
+  modelOperationMessage,
   modelOperationStatusLabel,
   modelPreviewCopy,
-  modelRecordMetadataLabel,
   modelRecordMetadataValue,
   modelRecordQuantizationLabel,
   modelRemovalCapabilityLabel,
@@ -212,6 +231,16 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
+import { AccessibleListbox, type AccessibleListboxOption } from "./accessible-listbox";
+import {
+  formatLocaleDate,
+  formatLocaleDuration,
+  formatLocaleNumber,
+  formatLocalePercent,
+  I18nProvider,
+  translate,
+  useI18n,
+} from "./i18n";
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -239,9 +268,46 @@ function loadAppearancePreferences(): AppearancePreferences {
 }
 
 function App() {
+  return <I18nProvider><AppShell /></I18nProvider>;
+}
+
+function AppShell() {
+  const { locale } = useI18n();
+  void locale;
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
+  const mainRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const scrollRoot = root.closest<HTMLElement>(".workspace");
+    if (!scrollRoot) return;
+    const targets = Array.from(root.querySelectorAll<HTMLElement>(".view-stack > *, .models-layout > *, .settings-grid > *, .advanced-settings"));
+    targets.forEach((target) => target.classList.add("scroll-reveal"));
+    const reduced = root.closest<HTMLElement>(".app-shell")?.dataset.reducedMotion === "true"
+      || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || typeof IntersectionObserver === "undefined") {
+      targets.forEach((target) => target.classList.add("is-visible"));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, root: scrollRoot, rootMargin: "0px 0px -8% 0px" });
+    targets.forEach((target) => {
+      const targetRect = target.getBoundingClientRect();
+      const scrollRootRect = scrollRoot.getBoundingClientRect();
+      if (targetRect.top < scrollRootRect.bottom && targetRect.bottom > scrollRootRect.top) target.classList.add("is-visible");
+      else observer.observe(target);
+    });
+    return () => observer.disconnect();
+  }, [activeView]);
 
   useEffect(() => {
     let current = true;
@@ -291,24 +357,26 @@ function App() {
       data-accent={appearance.accentId}
       data-radius={appearance.radiusId}
       data-surface={appearance.surfaceId}
+      data-contrast={appearance.contrastId}
       data-reduced-motion={appearance.reducedMotion ? "true" : "false"}
+      style={{ "--motion-scale": appearance.motionScale / 100 } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">
-        Skip to content
+        {translate("Skip to content")}
       </a>
-      <aside className="sidebar" aria-label="Prompt Arena navigation">
+      <aside className="sidebar" aria-label={translate("Prompt Arena navigation")}>
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             PA
           </div>
           <div>
-            <p className="eyebrow">Local workspace</p>
-            <p className="brand-name">Prompt Arena</p>
+            <p className="eyebrow">{translate("Local workspace")}</p>
+            <p className="brand-name">{translate("Prompt Arena")}</p>
           </div>
         </div>
 
-        <nav className="primary-nav" aria-label="Primary">
-          <p className="nav-heading">Workspace</p>
+        <nav className="primary-nav" aria-label={translate("Primary")}>
+          <p className="nav-heading">{translate("Workspace")}</p>
           {NAV_ITEMS.map((item) => (
             <button
               className={`nav-item ${activeView === item.id ? "is-active" : ""}`}
@@ -317,8 +385,8 @@ function App() {
               aria-current={activeView === item.id ? "page" : undefined}
               onClick={() => setActiveView(item.id)}
             >
-              <span className="nav-item-label">{item.label}</span>
-              <span className="nav-item-description">{item.description}</span>
+              <span className="nav-item-label">{translate(item.label)}</span>
+              <span className="nav-item-description">{translate(item.description)}</span>
             </button>
           ))}
         </nav>
@@ -326,8 +394,8 @@ function App() {
         <div className="sidebar-footer">
           <span className="status-dot" aria-hidden="true" />
           <div>
-            <p className="sidebar-footer-label">Workspace</p>
-            <p className="sidebar-footer-value">Local-first by default</p>
+            <p className="sidebar-footer-label">{translate("Workspace")}</p>
+            <p className="sidebar-footer-value">{translate("Local-first by default")}</p>
           </div>
         </div>
       </aside>
@@ -335,12 +403,12 @@ function App() {
       <div className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Prompt Arena / {activeView}</p>
-            <h1>{NAV_ITEMS.find((item) => item.id === activeView)?.label}</h1>
+            <p className="eyebrow">{translate("Prompt Arena")} / {translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</p>
+            <h1>{translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</h1>
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
-            <span className="version-chip">v0.1.0</span>
+            <span className="version-chip">v0.1.4</span>
           </div>
         </header>
 
@@ -350,28 +418,30 @@ function App() {
               !
             </span>
             <div>
-              <strong>Desktop bridge unavailable</strong>
-              <p>{connection.message} The content below remains an honest local preview.</p>
+              <strong>{translate("Desktop bridge unavailable")}</strong>
+              <p>{translate(connection.message)} {translate("The content below remains an honest local preview.")}</p>
             </div>
           </div>
         )}
 
-        <main className="main-content" id="main-content">
-          {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
-          {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
-          {activeView === "advanced-arena" && <AdvancedArenaView />}
-          {activeView === "benchmarks" && <BenchmarksView />}
-          {activeView === "models" && <ModelsView />}
-          {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
-          {activeView === "settings" && (
-            <Settings
-              appearance={appearance}
-              desktop={isDesktopEnvironment()}
-              connection={connection}
-              onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
-              onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
-            />
-          )}
+        <main className="main-content" id="main-content" ref={mainRef}>
+          <div key={activeView} className="page-transition">
+            {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
+            {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
+            {activeView === "advanced-arena" && <AdvancedArenaView />}
+            {activeView === "benchmarks" && <BenchmarksView />}
+            {activeView === "models" && <ModelsView />}
+            {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
+            {activeView === "settings" && (
+              <Settings
+                appearance={appearance}
+                desktop={isDesktopEnvironment()}
+                connection={connection}
+                onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
+                onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
+              />
+            )}
+          </div>
         </main>
       </div>
     </div>
@@ -380,14 +450,14 @@ function App() {
 
 function ConnectionBadge({ connection }: { connection: ConnectionState }) {
   if (connection.status === "loading") {
-    return <span className="status-chip is-loading">Connecting locally…</span>;
+    return <span className="status-chip is-loading">{translate("Connecting locally…")}</span>;
   }
 
   if (connection.status === "error") {
-    return <span className="status-chip is-error">Preview mode</span>;
+    return <span className="status-chip is-error">{translate("Preview mode")}</span>;
   }
 
-  return <span className="status-chip is-ready">Local app ready</span>;
+  return <span className="status-chip is-ready">{translate("Local app ready")}</span>;
 }
 
 type OverviewData = {
@@ -444,9 +514,9 @@ function Overview({
   }, []);
 
   const count = (items: readonly unknown[] | undefined) => {
-    if (state.status === "preview") return "Preview";
+    if (state.status === "preview") return translate("Preview");
     if (state.status !== "ready" || !items) return state.status === "loading" ? "…" : "—";
-    return items.length.toLocaleString();
+    return formatLocaleNumber(items.length);
   };
   const data = state.status === "ready" ? state.data : null;
   const recentSummaries = data ? [...data.summaries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 3) : [];
@@ -455,14 +525,13 @@ function Overview({
     <div className="view-stack">
       <section className="hero-panel panel">
         <div className="hero-copy">
-          <p className="eyebrow">Your local comparison workspace</p>
-          <h2>Compare models with evidence, not noise.</h2>
+          <p className="eyebrow">{translate("Your local comparison workspace")}</p>
+          <h2>{translate("Compare models with evidence, not noise.")}</h2>
           <p>
-            Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record
-            on this machine. The overview below reflects only data returned by the local desktop boundary.
+            {translate("Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record on this machine. The overview below reflects only data returned by the local desktop boundary.")}
           </p>
           <button className="primary-button" type="button" onClick={() => onNavigate("arena")}>
-            Open Arena
+            {translate("Open Arena")}
             <span aria-hidden="true">→</span>
           </button>
         </div>
@@ -489,7 +558,7 @@ function Overview({
         </section>
       )}
 
-      <section className="metric-grid dashboard-metrics" aria-label="Local workspace records">
+      <section className="metric-grid dashboard-metrics" aria-label={translate("Local workspace records")}>
         <MetricCard label="Saved runs" value={count(data?.runs)} detail="Immutable execution history" />
         <MetricCard label="Arena summaries" value={count(data?.summaries)} detail="Persisted aggregate evidence" />
         <MetricCard label="Model revisions" value={count(data?.profiles)} detail="Registered local profiles" />
@@ -499,15 +568,15 @@ function Overview({
       <section className="panel dashboard-panel" aria-labelledby="overview-actions-heading">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Workspace</p>
-            <h2 id="overview-actions-heading">Choose where to work next.</h2>
+            <p className="eyebrow">{translate("Workspace")}</p>
+            <h2 id="overview-actions-heading">{translate("Choose where to work next.")}</h2>
           </div>
           <span className="section-index">01</span>
         </div>
-        <nav className="overview-nav" aria-label="Overview shortcuts">
+        <nav className="overview-nav" aria-label={translate("Overview shortcuts")}>
           {OVERVIEW_LINKS.map((link) => (
             <button className="dashboard-link" key={link.id} type="button" onClick={() => onNavigate(link.id)}>
-              <span><strong>{link.label}</strong><small>{link.description}</small></span>
+              <span><strong>{translate(link.label)}</strong><small>{translate(link.description)}</small></span>
               <span aria-hidden="true">→</span>
             </button>
           ))}
@@ -517,10 +586,10 @@ function Overview({
       <section className="panel dashboard-panel" aria-labelledby="recent-evidence-heading">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Persisted evidence</p>
-            <h2 id="recent-evidence-heading">Recent Arena summaries.</h2>
+            <p className="eyebrow">{translate("Persisted evidence")}</p>
+            <h2 id="recent-evidence-heading">{translate("Recent Arena summaries.")}</h2>
           </div>
-          <button className="text-button" type="button" onClick={() => onNavigate("runs")}>Open Runs <span aria-hidden="true">→</span></button>
+          <button className="text-button" type="button" onClick={() => onNavigate("runs")}>{translate("Open Runs")} <span aria-hidden="true">→</span></button>
         </div>
         {state.status === "ready" && recentSummaries.length === 0 && (
           <EmptyState title="No saved Arena summaries" description="Complete an Arena in the desktop app to see its aggregate evidence here. No sample records are bundled." actionLabel="Open Arena" onAction={() => onNavigate("arena")} />
@@ -531,15 +600,15 @@ function Overview({
               <div className="dashboard-activity-row" key={summary.arenaId}>
                 <div>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)} {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
                 </div>
-                <span>{summary.summary.completed === undefined ? "Completed not recorded" : `${String(summary.summary.completed)} completed`}</span>
+                <span>{typeof summary.summary.completed === "number" && Number.isFinite(summary.summary.completed) ? `${formatLocaleNumber(summary.summary.completed)} ${translate("completed")}` : translate("Completed not recorded")}</span>
               </div>
             ))}
           </div>
         )}
         {(state.status === "loading" || state.status === "preview" || state.status === "error") && (
-          <p className="field-help">Recent evidence will appear when the local workspace state is available.</p>
+          <p className="field-help">{translate("Recent evidence will appear when the local workspace state is available.")}</p>
         )}
       </section>
 
@@ -551,9 +620,9 @@ function Overview({
 function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <article className="metric-card panel">
-      <p className="eyebrow">{label}</p>
+      <p className="eyebrow">{translate(label)}</p>
       <p className="metric-value">{value}</p>
-      <p className="metric-detail">{detail}</p>
+      <p className="metric-detail">{translate(detail)}</p>
     </article>
   );
 }
@@ -568,54 +637,53 @@ function DiagnosticsSurface({
   compact?: boolean;
 }) {
   const bridgeValue = connection.status === "loading"
-    ? "Checking desktop bridge"
+    ? translate("Checking desktop bridge")
     : connection.status === "ready"
-      ? "Connected"
-      : "Unavailable";
+      ? translate("Connected")
+      : translate("Unavailable");
   const storageValue = connection.status === "ready"
-    ? "App-owned local storage"
+    ? translate("App-owned local storage")
     : desktop
-      ? "Unavailable until bridge connects"
-      : "Not available in browser preview";
+      ? translate("Unavailable until bridge connects")
+      : translate("Not available in browser preview");
   const runtimeValue = connection.status === "ready"
-    ? "Ollama loopback for local generation"
+    ? translate("Ollama loopback for local generation")
     : desktop
-      ? "Unavailable until bridge connects"
-      : "Not queried in browser preview";
+      ? translate("Unavailable until bridge connects")
+      : translate("Not queried in browser preview");
   const capabilitiesValue = connection.status === "ready"
-    ? "Runs, Arena summaries, profiles, and model metadata"
+    ? translate("Runs, Arena summaries, profiles, and model metadata")
     : desktop
-      ? "No local capability read completed"
-      : "No desktop records or runtimes are read";
-  const platform = connection.status === "ready" ? connection.appStatus.supportedPlatform : "unknown";
-  const protocol = connection.status === "ready" ? `v${connection.appStatus.protocolVersion}` : "Not reported";
+      ? translate("No local capability read completed")
+      : translate("No desktop records or runtimes are read");
+  const platform = connection.status === "ready" ? connection.appStatus.supportedPlatform : translate("unknown");
+  const protocol = connection.status === "ready" ? `v${connection.appStatus.protocolVersion}` : translate("Not reported");
   const liveMessage = connection.status === "loading"
-    ? "Checking the local desktop bridge."
+    ? translate("Checking the local desktop bridge.")
     : connection.status === "ready"
-      ? "Desktop bridge connected. Local storage and capability boundaries are available."
-      : "Desktop bridge unavailable. The app is showing an honest browser or disconnected preview.";
+      ? translate("Desktop bridge connected. Local storage and capability boundaries are available.")
+      : translate("Desktop bridge unavailable. The app is showing an honest browser or disconnected preview.");
 
   return (
     <section className={`panel diagnostics-panel ${compact ? "diagnostics-panel-compact" : ""}`} aria-labelledby={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Local diagnostics</p>
-          <h2 id={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>Know where your data lives.</h2>
+          <p className="eyebrow">{translate("Local diagnostics")}</p>
+          <h2 id={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>{translate("Know where your data lives.")}</h2>
         </div>
         <span className={`run-status ${connection.status === "ready" ? "arena-status-success" : "run-status-neutral"}`} role="status" aria-live="polite">{bridgeValue}</span>
       </div>
       <p className="diagnostics-copy">
-        Prompt Arena is local-first. This surface reports the boundary it can verify; unavailable values stay unavailable.
-        Optional external provider calls are separate, explicit actions in Settings.
+        {translate("Prompt Arena is local-first. This surface reports the boundary it can verify; unavailable values stay unavailable. Optional external provider calls are separate, explicit actions in Settings.")}
       </p>
       <dl className="diagnostics-list">
-        <div><dt>Desktop bridge</dt><dd>{bridgeValue}</dd></div>
-        <div><dt>Storage boundary</dt><dd>{storageValue}</dd></div>
-        <div><dt>Runtime boundary</dt><dd>{runtimeValue}</dd></div>
-        <div><dt>Local capabilities</dt><dd>{capabilitiesValue}</dd></div>
-        <div><dt>Platform</dt><dd>{platform}</dd></div>
-        <div><dt>Protocol</dt><dd>{protocol}</dd></div>
-        <div><dt>Network default</dt><dd>None for local Arena work</dd></div>
+        <div><dt>{translate("Desktop bridge")}</dt><dd>{bridgeValue}</dd></div>
+        <div><dt>{translate("Storage boundary")}</dt><dd>{storageValue}</dd></div>
+        <div><dt>{translate("Runtime boundary")}</dt><dd>{runtimeValue}</dd></div>
+        <div><dt>{translate("Local capabilities")}</dt><dd>{capabilitiesValue}</dd></div>
+        <div><dt>{translate("Platform")}</dt><dd>{platform}</dd></div>
+        <div><dt>{translate("Protocol")}</dt><dd>{protocol}</dd></div>
+        <div><dt>{translate("Network default")}</dt><dd>{translate("None for local Arena work")}</dd></div>
       </dl>
       <p className="sr-only" role="status" aria-live="polite">{liveMessage}</p>
     </section>
@@ -723,7 +791,7 @@ function BenchmarksView() {
 
   async function handleSave() {
     if (!isDesktopEnvironment()) {
-      setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
+      setFeedback({ kind: "info", message: translate(benchmarkPreviewCopy()) });
       return;
     }
     if (!validateBeforeDraftAction()) return;
@@ -758,7 +826,7 @@ function BenchmarksView() {
 
   async function handleValidate() {
     if (!isDesktopEnvironment()) {
-      setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
+      setFeedback({ kind: "info", message: translate(benchmarkPreviewCopy()) });
       return;
     }
     if (!validateBeforeDraftAction()) return;
@@ -782,7 +850,7 @@ function BenchmarksView() {
 
   async function handlePublish() {
     if (!isDesktopEnvironment()) {
-      setFeedback({ kind: "info", message: benchmarkPreviewCopy() });
+      setFeedback({ kind: "info", message: translate(benchmarkPreviewCopy()) });
       return;
     }
     if (!form.draftId) {
@@ -902,12 +970,10 @@ function BenchmarksView() {
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Benchmark library</p>
-        <h2>Benchmarks</h2>
+        <p className="eyebrow">{translate("Benchmark library")}</p>
+        <h2>{translate("Benchmarks")}</h2>
         <p>
-          Author one bounded benchmark draft at a time, validate it against benchmark-v1, then explicitly publish an
-          immutable local version. Bundled official packs are separate read-only source records; they are inspected
-          without editing or persistence. No remote pack or browser-side persistence is used.
+          {translate("Author one bounded benchmark draft at a time, validate it against benchmark-v1, then explicitly publish an immutable local version. Bundled official packs are separate read-only source records; they are inspected without editing or persistence. No remote pack or browser-side persistence is used.")}
         </p>
       </section>
 
@@ -915,15 +981,15 @@ function BenchmarksView() {
         <section className="panel benchmark-records" aria-live="polite">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Local records</p>
-              <h3>Drafts and versions</h3>
+              <p className="eyebrow">{translate("Local records")}</p>
+              <h3>{translate("Drafts and versions")}</h3>
             </div>
             <button className="text-button" type="button" onClick={() => void refreshRecords()} disabled={!isDesktopEnvironment() || busy}>
-              Refresh
+              {translate("Refresh")}
             </button>
           </div>
           {surface === "preview" && (
-            <StateMessage icon="◇" title="Browser preview" description={benchmarkPreviewCopy()} />
+            <StateMessage icon="◇" title="Browser preview" description={translate(benchmarkPreviewCopy())} />
           )}
           {surface === "error" && state.status === "error" && (
             <StateMessage icon="!" title="Benchmark records unavailable" description={state.message} error />
@@ -936,12 +1002,12 @@ function BenchmarksView() {
           )}
           {state.status === "ready" && state.drafts.length > 0 && (
             <div className="benchmark-record-list">
-              <p className="eyebrow record-list-label">Editable drafts</p>
+              <p className="eyebrow record-list-label">{translate("Editable drafts")}</p>
               {state.drafts.map((draft) => (
                 <button className="benchmark-record-row" type="button" key={draft.draftId} onClick={() => void handleLoadDraft(draft.draftId)}>
                   <span>
                     <strong>{draft.title}</strong>
-                    <small>{draft.benchmarkId} · revision {draft.revision}</small>
+                    <small>{draft.benchmarkId} · {translate("revision")} {draft.revision}</small>
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>
@@ -950,34 +1016,34 @@ function BenchmarksView() {
           )}
           {state.status === "ready" && state.versions.length > 0 && (
             <div className="benchmark-record-list version-list">
-              <p className="eyebrow record-list-label">Immutable versions</p>
+              <p className="eyebrow record-list-label">{translate("Immutable versions")}</p>
               {state.versions.map((version) => (
                 <article className="benchmark-record-row version-row" key={version.versionId}>
                   <span>
                     <strong>{version.versionId}</strong>
-                    <small>{version.contentHash.slice(0, 12)}… · saved {version.createdAt}</small>
+                    <small>{version.contentHash.slice(0, 12)}… · {translate("saved")} {formatDisplayTimestamp(version.createdAt)}</small>
                   </span>
-                  <span className="run-status">immutable</span>
+                  <span className="run-status">{translate("immutable")}</span>
                 </article>
               ))}
             </div>
           )}
           <button className="text-button new-draft-button" type="button" onClick={handleNewDraft}>
-            Start a new draft <span aria-hidden="true">→</span>
+            {translate("Start a new draft")} <span aria-hidden="true">→</span>
           </button>
         </section>
 
         <section className="panel benchmark-editor">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Structured authoring</p>
-              <h3>{form.draftId ? `Draft revision ${form.expectedRevision}` : "New draft"}</h3>
+              <p className="eyebrow">{translate("Structured authoring")}</p>
+              <h3>{form.draftId ? `${translate("Draft revision")} ${form.expectedRevision}` : translate("New draft")}</h3>
             </div>
             <span className="section-index">05</span>
           </div>
-          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{translate(feedback.message)}</p>}
           <fieldset className="form-section">
-            <legend>Pack</legend>
+            <legend>{translate("Pack")}</legend>
             <div className="form-grid form-grid-three">
               <FormInput id="pack-id" label="Pack ID" required error={draftValidation?.errors.packId} value={form.packId} onChange={(value) => updateField("packId", value)} />
               <FormInput id="pack-name" label="Pack name" required error={draftValidation?.errors.packName} value={form.packName} onChange={(value) => updateField("packName", value)} />
@@ -986,17 +1052,17 @@ function BenchmarksView() {
             </div>
           </fieldset>
           <fieldset className="form-section">
-            <legend>Benchmark and version</legend>
+            <legend>{translate("Benchmark and version")}</legend>
             <div className="form-grid form-grid-three">
               <FormInput id="benchmark-id" label="Benchmark ID" required error={draftValidation?.errors.benchmarkId} value={form.benchmarkId} onChange={(value) => updateField("benchmarkId", value)} />
               <FormInput id="benchmark-name" label="Benchmark title" required error={draftValidation?.errors.benchmarkName} value={form.benchmarkName} onChange={(value) => updateField("benchmarkName", value)} />
               <FormInput id="version-number" label="Version number" type="number" min="1" required error={draftValidation?.errors.versionNumber} value={form.versionNumber} onChange={(value) => updateField("versionNumber", value)} />
               <FormInput id="default-repetitions" label="Default repetitions" type="number" min="1" required error={draftValidation?.errors.defaultRepetitions} value={form.defaultRepetitions} onChange={(value) => updateField("defaultRepetitions", value)} />
-              <p className="field-help form-note">Version ID is derived deterministically as benchmark ID + @ + version number.</p>
+              <p className="field-help form-note">{translate("Version ID is derived deterministically as benchmark ID + @ + version number.")}</p>
             </div>
           </fieldset>
           <fieldset className="form-section">
-            <legend>Task and case</legend>
+            <legend>{translate("Task and case")}</legend>
             <div className="form-grid form-grid-three">
               <FormInput id="task-id" label="Task ID" required error={draftValidation?.errors.taskId} value={form.taskId} onChange={(value) => updateField("taskId", value)} />
               <FormInput id="task-name" label="Task name" required error={draftValidation?.errors.taskName} value={form.taskName} onChange={(value) => updateField("taskName", value)} />
@@ -1008,42 +1074,49 @@ function BenchmarksView() {
             </div>
           </fieldset>
           <fieldset className="form-section">
-            <legend>Rubric</legend>
+            <legend>{translate("Evaluation criteria")}</legend>
+            <p className="field-help form-section-help">{translate("Define the criteria used to evaluate and score responses.")}</p>
             <div className="form-grid form-grid-three">
-              <FormInput id="rubric-id" label="Rubric ID" required error={draftValidation?.errors.rubricId} value={form.rubricId} onChange={(value) => updateField("rubricId", value)} />
-              <FormInput id="rubric-name" label="Rubric name" required error={draftValidation?.errors.rubricName} value={form.rubricName} onChange={(value) => updateField("rubricName", value)} />
-              <FormInput id="criterion-id" label="Criterion ID" required error={draftValidation?.errors.criterionId} value={form.criterionId} onChange={(value) => updateField("criterionId", value)} />
-              <FormInput id="criterion-name" label="Criterion name" required error={draftValidation?.errors.criterionName} value={form.criterionName} onChange={(value) => updateField("criterionName", value)} />
+              <FormInput id="rubric-name" label="Evaluation name" required error={draftValidation?.errors.rubricName} value={form.rubricName} onChange={(value) => updateField("rubricName", value)} />
+              <FormInput id="criterion-name" label="Criterion" required error={draftValidation?.errors.criterionName} value={form.criterionName} onChange={(value) => updateField("criterionName", value)} />
               <FormInput id="criterion-weight" label="Criterion weight" type="number" min="0.000001" step="any" required error={draftValidation?.errors.criterionWeight} value={form.criterionWeight} onChange={(value) => updateField("criterionWeight", value)} />
               <FormTextArea className="form-span-three" id="criterion-description" label="Criterion description (optional)" value={form.criterionDescription} onChange={(value) => updateField("criterionDescription", value)} />
             </div>
+            <details className="criteria-advanced motion-disclosure" open={Boolean(draftValidation?.errors.rubricId || draftValidation?.errors.criterionId)}>
+              <summary>{translate("Advanced IDs")}</summary>
+              <p className="field-help">{translate("These IDs preserve compatibility with stored benchmark data.")}</p>
+              <div className="form-grid form-grid-two">
+                <FormInput id="rubric-id" label="Rubric ID" required error={draftValidation?.errors.rubricId} value={form.rubricId} onChange={(value) => updateField("rubricId", value)} />
+                <FormInput id="criterion-id" label="Criterion ID" required error={draftValidation?.errors.criterionId} value={form.criterionId} onChange={(value) => updateField("criterionId", value)} />
+              </div>
+            </details>
           </fieldset>
           <div className="editor-actions">
-            {draftActionMessage && <p className="form-feedback form-feedback-error draft-action-feedback" role="alert">{draftActionMessage}</p>}
+            {draftActionMessage && <p className="form-feedback form-feedback-error draft-action-feedback" role="alert">{translate(draftActionMessage)}</p>}
             <button className="primary-button" type="button" onClick={() => void handleSave()} disabled={busy || !isDesktopEnvironment()}>
-              Save draft
+              {translate("Save draft")}
             </button>
             <button className="secondary-button" type="button" onClick={() => void handleValidate()} disabled={busy || !isDesktopEnvironment()}>
-              Validate
+              {translate("Validate")}
             </button>
             <button className="secondary-button publish-button" type="button" onClick={() => void handlePublish()} disabled={busy || !isDesktopEnvironment() || !form.draftId || dirty}>
-              Publish immutable version
+              {translate("Publish immutable version")}
             </button>
           </div>
-          {!isDesktopEnvironment() && <p className="field-help">Desktop storage is required for saving, validation, and publishing. Browser preview never creates records.</p>}
+          {!isDesktopEnvironment() && <p className="field-help">{translate("Desktop storage is required for saving, validation, and publishing. Browser preview never creates records.")}</p>}
         </section>
       </div>
 
-      <section className="panel official-packs-panel" aria-live="polite" aria-label="Official benchmark packs">
+      <section className="panel official-packs-panel" aria-live="polite" aria-label={translate("Official benchmark packs")}>
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Bundled source records</p>
-            <h3>Official benchmark packs</h3>
+          <p className="eyebrow">{translate("Bundled source records")}</p>
+          <h3>{translate("Official benchmark packs")}</h3>
           </div>
-          <span className="run-status run-status-neutral">source + evidence</span>
+          <span className="run-status run-status-neutral">{translate("source + evidence")}</span>
         </div>
         {surface === "preview" && (
-          <StateMessage icon="◇" title="Browser preview" description={officialPacksPreviewCopy()} />
+          <StateMessage icon="◇" title="Browser preview" description={translate(officialPacksPreviewCopy())} />
         )}
         {state.status === "loading" && (
           <StateMessage icon="…" title="Loading official catalog" description="Validating bundled benchmark-v1 documents at the desktop boundary." />
@@ -1054,7 +1127,7 @@ function BenchmarksView() {
         {state.status === "ready" && (
           <div className="official-pack-layout">
             <div className="official-pack-list">
-              <p className="field-help">These source records are bundled with the application. Selecting one only reads its validated canonical document.</p>
+              <p className="field-help">{translate("These source records are bundled with the application. Selecting one only reads its validated canonical document.")}</p>
               {state.officialPacks.map((pack) => (
                 <button
                   className={`benchmark-record-row official-pack-row ${officialPackDetail.status === "ready" && officialPackDetail.document.summary.packId === pack.packId ? "is-selected" : ""}`}
@@ -1065,7 +1138,7 @@ function BenchmarksView() {
                   <span>
                     <strong>{pack.packName}</strong>
                     <small>{pack.versionId} · {pack.contentHash.slice(0, 12)}…</small>
-                    <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? "Docker required · blocked" : "text generation"}</small>
+                    <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? translate("Docker required · blocked") : translate("text generation")}</small>
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>
@@ -1116,15 +1189,15 @@ function BenchmarksView() {
                   <section className="official-pack-materialization results-section" aria-live="polite">
                     <div className="section-heading compact-heading">
                       <div>
-                        <p className="eyebrow">Deterministic materialization</p>
-                        <h4>Create seeded evidence</h4>
+                        <p className="eyebrow">{translate("Deterministic materialization")}</p>
+                        <h4>{translate("Create seeded evidence")}</h4>
                       </div>
-                      <span className="run-status run-status-neutral">immutable</span>
+                      <span className="run-status run-status-neutral">{translate("immutable")}</span>
                     </div>
-                    <p className="field-help">Choose a bounded seed to materialize deterministic case metadata. This stores evidence only; it does not execute the pack.</p>
+                    <p className="field-help">{translate("Choose a bounded seed to materialize deterministic case metadata. This stores evidence only; it does not execute the pack.")}</p>
                     <div className="arena-actions">
                       <label className="arena-select-control" htmlFor="official-pack-seed">
-                        <span className="field-label">Seed</span>
+                        <span className="field-label">{translate("Seed")}</span>
                         <input
                           id="official-pack-seed"
                           type="number"
@@ -1143,10 +1216,10 @@ function BenchmarksView() {
                         onClick={() => void handleMaterializeOfficialPack()}
                         disabled={busy || parsedMaterializationSeed === null}
                       >
-                        Materialize seed
+                        {translate("Materialize seed")}
                       </button>
                     </div>
-                    {parsedMaterializationSeed === null && <p className="field-help" role="alert">Seed must be a whole number from 0 through 4,294,967,295.</p>}
+                    {parsedMaterializationSeed === null && <p className="field-help" role="alert">{translate("Seed must be a whole number from 0 through 4,294,967,295.")}</p>}
                     {officialPackMaterialization.status === "loading" && (
                       <StateMessage icon="…" title="Materializing official pack" description="Deriving deterministic case seeds and writing one immutable local evidence record." />
                     )}
@@ -1162,15 +1235,15 @@ function BenchmarksView() {
                           <BoundaryRow label="Saved outcome" value={officialPackMaterialization.materialization.savedOutcome} />
                           <BoundaryRow label="Seeded cases" value={String(parseDeterministicMaterializationMetadata(officialPackMaterialization.materialization.documentJson)?.caseSeeds.length ?? 0)} />
                         </div>
-                        <details className="official-pack-document-block">
-                          <summary className="eyebrow">Materialized canonical document</summary>
+                        <details className="official-pack-document-block motion-disclosure">
+                          <summary className="eyebrow">{translate("Materialized canonical document")}</summary>
                           <pre className="official-pack-document">{officialPackMaterialization.materialization.documentJson}</pre>
                         </details>
                       </>
                     )}
                   </section>
                   <div className="official-pack-document-block">
-                    <p className="eyebrow">Validated canonical document</p>
+                    <p className="eyebrow">{translate("Validated canonical document")}</p>
                     <pre className="official-pack-document">{officialPackDetail.document.documentJson}</pre>
                   </div>
                 </>
@@ -1222,7 +1295,7 @@ function FormInput({
   return (
     <label className={`form-control ${error ? "has-error" : ""}`} htmlFor={id}>
       <span className="field-label">
-        {label}{required && <span className="required-marker" aria-hidden="true">*</span>}
+        {translate(label)}{required && <span className="required-marker" aria-hidden="true">*</span>}
       </span>
       {error && <span id={`${id}-error`} className="field-error" role="alert">{error}</span>}
       <input
@@ -1261,7 +1334,7 @@ function FormTextArea({
   return (
     <label className={`form-control ${className} ${error ? "has-error" : ""}`} htmlFor={id}>
       <span className="field-label">
-        {label}{required && <span className="required-marker" aria-hidden="true">*</span>}
+        {translate(label)}{required && <span className="required-marker" aria-hidden="true">*</span>}
       </span>
       {error && <span id={`${id}-error`} className="field-error" role="alert">{error}</span>}
       <textarea
@@ -1321,7 +1394,6 @@ function ModelsView() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [operationStarting, setOperationStarting] = useState(false);
-  const [operationAction, setOperationAction] = useState<string | null>(null);
   const [cancellingOperation, setCancellingOperation] = useState<string | null>(null);
   const [ollamaStartState, setOllamaStartState] = useState<OllamaStartState>({ status: "idle" });
   const ollamaStartInFlight = useRef(false);
@@ -1399,7 +1471,6 @@ function ModelsView() {
   async function launchOperation(request: ModelOperationRequest) {
     if (!desktop) return;
     setOperationStarting(true);
-    setOperationAction(request.operationId);
     try {
       const operation = await startModelOperation(request);
       const subject = operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model";
@@ -1415,7 +1486,6 @@ function ModelsView() {
     } finally {
       await refreshModels();
       setOperationStarting(false);
-      setOperationAction(null);
     }
   }
 
@@ -1429,6 +1499,27 @@ function ModelsView() {
   function handleDownload(model: ModelRecord) {
     try {
       void launchOperation(buildDownloadModelOperationRequest(nextOperationId("download"), model));
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
+  function handleUseModel(model: ModelRecord) {
+    setSelectedProfileModelId(model.modelId);
+    setForm((current) => ({ ...current, model: model.name }));
+    setFeedback({ kind: "info", message: `${model.name}: ${translate("selected for profile")}.` });
+  }
+
+  function handleRetry(model: ModelRecord, operation: ModelOperation) {
+    try {
+      const operationId = nextOperationId(operation.kind === "import" ? "import" : "download");
+      const request = operation.kind === "import" && operation.managedPath
+        ? buildImportModelOperationRequest(operationId, operation.managedPath)
+        : operation.kind === "download"
+          ? buildDownloadModelOperationRequest(operationId, model)
+          : null;
+      if (!request) throw new Error("This model operation cannot be retried from the available local evidence.");
+      void launchOperation(request);
     } catch (error: unknown) {
       showModelActionError(error);
     }
@@ -1560,7 +1651,7 @@ function ModelsView() {
 
   async function handleRegister() {
     if (!desktop) {
-      setFeedback({ kind: "info", message: profilePreviewCopy() });
+      setFeedback({ kind: "info", message: translate(profilePreviewCopy()) });
       return;
     }
     setBusy(true);
@@ -1588,12 +1679,10 @@ function ModelsView() {
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Model library</p>
-        <h2>Profiles and local models</h2>
+        <p className="eyebrow">{translate("Model library")}</p>
+        <h2>{translate("Profiles and local models")}</h2>
         <p>
-          Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp models through
-          explicit loopback endpoints. Import only app-managed relative GGUF paths, track persisted local operations,
-          and keep removal evidence alongside a read-only hardware baseline. No credentials, telemetry, or cloud provider.
+          {translate("Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp models through explicit loopback endpoints. Import only app-managed relative GGUF paths, track persisted local operations, and keep removal evidence alongside a read-only hardware baseline. No credentials, telemetry, or cloud provider.")}
         </p>
       </section>
 
@@ -1601,61 +1690,62 @@ function ModelsView() {
         <section className="panel model-list-panel" aria-live="polite">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Unified local catalog</p>
-              <h3>Models</h3>
+              <p className="eyebrow">{translate("Unified local catalog")}</p>
+              <h3>{translate("Models")}</h3>
             </div>
             <div className="model-actions">
-              <button className="text-button" type="button" onClick={() => void refreshModels()} disabled={!desktop || busy || operationStarting}>
-                Refresh
+              <button className="secondary-button model-toolbar-button model-refresh-button" type="button" onClick={() => void refreshModels()} disabled={!desktop || busy || operationStarting}>
+                {translate("Refresh")}
               </button>
               <button
-                className="text-button"
+                className="secondary-button model-toolbar-button model-start-button"
                 type="button"
                 onClick={() => void handleStartOllama()}
                 disabled={!desktop || busy || operationStarting || ollamaStartState.status === "starting"}
+                aria-busy={ollamaStartState.status === "starting"}
               >
-                {ollamaStartState.status === "starting" ? "Starting Ollama…" : "Start Ollama"}
+                {ollamaStartState.status === "starting" ? translate("Starting Ollama…") : translate("Start Ollama")}
               </button>
             </div>
           </div>
           <div className="profile-form form-section">
-            <p className="eyebrow">Loopback sources</p>
+            <p className="eyebrow">{translate("Loopback sources")}</p>
             <div className="form-grid">
               {sourceConfigs.map((config) => (
                 <FormInput
                   key={config.backend}
                   id={`model-endpoint-${config.backend}`}
-                  label={`${modelBackendLabel(config.backend)} endpoint`}
+                  label={`${translate(modelBackendLabel(config.backend))} endpoint`}
                   value={config.endpoint ?? ""}
                   onChange={(value) => updateSourceEndpoint(config.backend, value)}
                 />
               ))}
             </div>
-            <p className="field-help">Only HTTP endpoints on localhost, 127.0.0.1, or ::1 are accepted. Refresh applies the current source values.</p>
+            <p className="field-help">{translate("Only HTTP endpoints on localhost, 127.0.0.1, or ::1 are accepted. Refresh applies the current source values.")}</p>
             <FormInput id="model-search" label="Filter catalog" value={query} onChange={setQuery} />
           </div>
           <div className="profile-form form-section">
-            <p className="eyebrow">Managed GGUF</p>
+            <p className="eyebrow">{translate("Managed GGUF")}</p>
             <FormInput
               id="managed-gguf-path"
               label="Relative path under the managed model root"
               value={managedGgufPath}
               onChange={(value) => { setManagedGgufPath(value); setFeedback(null); }}
             />
-            <p className="field-help">Import reads an existing relative .gguf file owned by the app. No arbitrary filesystem path or browser file operation is used.</p>
+            <p className="field-help">{translate("Import reads an existing relative .gguf file owned by the app. No arbitrary filesystem path or browser file operation is used.")}</p>
             <button className="secondary-button" type="button" onClick={handleImport} disabled={!desktop || busy || operationStarting}>
-              Import managed GGUF
+              {translate("Import managed GGUF")}
             </button>
           </div>
-          {ollamaStartState.status === "starting" && <p className="field-help" role="status">Starting Ollama…</p>}
-          {ollamaStartState.status === "running" && <p className="field-help" role="status">Ollama running.</p>}
+          {ollamaStartState.status === "starting" && <p className="field-help" role="status">{translate("Starting Ollama…")}</p>}
+          {ollamaStartState.status === "running" && <p className="field-help" role="status">{translate("Ollama running.")}</p>}
           {ollamaStartState.status === "error" && (
             <p className="form-feedback form-feedback-error" role="alert">
-              <strong>Start Ollama failed:</strong> {ollamaStartState.message}
+              <strong>{translate("Start Ollama failed:")}</strong> {ollamaStartState.message}
             </p>
           )}
           {modelState.status === "preview" && (
-            <StateMessage icon="◇" title="Browser preview" description={modelPreviewCopy()} />
+            <StateMessage icon="◇" title="Browser preview" description={translate(modelPreviewCopy())} />
           )}
           {modelState.status === "loading" && (
             <StateMessage icon="…" title="Checking local sources" description="Reading model metadata from the configured loopback runtimes and managed model root." />
@@ -1667,20 +1757,20 @@ function ModelsView() {
             <div className="profile-records">
               <div className="section-heading compact-heading">
                 <div>
-                  <p className="eyebrow">Source status</p>
-                  <h3>{modelState.catalog.sources.length} configured sources</h3>
+                  <p className="eyebrow">{translate("Source status")}</p>
+                  <h3>{modelState.catalog.sources.length} {translate("configured sources")}</h3>
                 </div>
-                <span className="run-status run-status-neutral">{modelState.catalog.models.length} records</span>
+                <span className="run-status run-status-neutral">{modelState.catalog.models.length} {translate("records")}</span>
               </div>
               <div className="profile-record-list">
                 {modelState.catalog.sources.map((source) => (
                   <article className="profile-record-row" key={source.sourceId}>
                     <span>
-                      <strong>{source.label} · {modelBackendLabel(source.backend)}</strong>
-                      <small>{source.message ?? `${source.models.length} model${source.models.length === 1 ? "" : "s"} reported`}</small>
+                      <strong>{translate(source.label)} · {translate(modelBackendLabel(source.backend))}</strong>
+                      <small>{translate(source.message ?? `${source.models.length} ${translate("models reported")}`)}</small>
                     </span>
                     <span className={`run-status ${source.status === "error" ? "run-status-failure" : source.status === "unavailable" ? "run-status-neutral" : ""}`}>
-                      {modelSourceStatusLabel(source.status)}
+                      {translate(modelSourceStatusLabel(source.status))}
                     </span>
                   </article>
                 ))}
@@ -1691,22 +1781,22 @@ function ModelsView() {
             <div className="profile-records">
               <div className="section-heading compact-heading">
                 <div>
-                  <p className="eyebrow">Catalog relationships</p>
-                  <h3>Duplicate groups</h3>
+                  <p className="eyebrow">{translate("Catalog relationships")}</p>
+                  <h3>{translate("Duplicate groups")}</h3>
                 </div>
-                <span className="run-status run-status-neutral">{modelState.catalog.duplicateGroups.length} groups</span>
+                <span className="run-status run-status-neutral">{modelState.catalog.duplicateGroups.length} {translate("groups")}</span>
               </div>
               {modelState.catalog.duplicateGroups.length === 0 ? (
-                <p className="field-help">No duplicate groups reported. Quantization-distinct records remain separate rows.</p>
+                <p className="field-help">{translate("No duplicate groups reported. Quantization-distinct records remain separate rows.")}</p>
               ) : (
                 <div className="profile-record-list">
                   {modelState.catalog.duplicateGroups.map((group) => (
                     <article className="profile-record-row" key={group.groupId}>
                       <span>
                         <strong>{modelDuplicateGroupLabel(group, modelState.catalog.models)}</strong>
-                        <small>{modelDuplicateEvidenceLabel(group)} · {group.modelIds.length} records</small>
+                        <small>{translate(modelDuplicateEvidenceLabel(group))} · {group.modelIds.length} {translate("records")}</small>
                       </span>
-                      <span className="run-status run-status-neutral">duplicate</span>
+                <span className="run-status run-status-neutral">{translate("duplicate")}</span>
                     </article>
                   ))}
                 </div>
@@ -1716,108 +1806,143 @@ function ModelsView() {
           {modelState.status === "ready" && visibleModels.length === 0 && (
             <EmptyState
               title={query.trim() ? "No matching models" : "No local models"}
-              description={modelEmptyCopy()}
+              description={translate(modelEmptyCopy())}
             />
           )}
           {modelState.status === "ready" && visibleModels.length > 0 && (
             <div className="model-list">
               {visibleModels.map((model) => {
-                const rowOperation = [...modelState.operations].reverse().find((operation) => (
-                  operation.modelId === model.modelId
-                  || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
-                ));
+                const rowOperation = findModelOperation(model, modelState.operations);
+                const availability = deriveModelAvailability(model, rowOperation);
+                const sourceLabel = modelState.catalog.sources.find((source) => source.sourceId === model.sourceId)?.label ?? model.sourceId;
                 const recommendation = classifyModelRecommendation(
                   model,
                   hardwareState.status === "ready" ? hardwareState.snapshot : null,
                   thresholds,
                 );
-                const canDownload = model.backend === "ollama";
-                const canRemove = model.backend === "llama_cpp" && model.managed && model.managedPath !== null;
                 const modelOperationActive = rowOperation ? isActiveModelOperation(rowOperation) : false;
+                const operationMessage = modelOperationMessage(rowOperation);
                 return (
                 <article className="model-row" key={model.modelId}>
                   <div>
                     <h3>{model.name}</h3>
                     <p className="model-meta">
-                      {modelBackendLabel(model.backend)} · {modelRecordMetadataLabel(model)} · {modelRecordQuantizationLabel(model)}
-                    </p>
-                    <p className="model-meta">
-                      {model.contentHash
-                        ? `SHA-256 ${model.contentHash.slice(0, 12)}…`
-                        : model.digest ? `Digest ${model.digest.slice(0, 12)}…` : "Digest unavailable"}
-                      {model.managedPath ? ` · managed/${model.managedPath}` : ""}
-                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
-                    </p>
-                    <p className="model-meta">
-                      Format: {modelRecordMetadataValue(model, "format")} · License: {modelRecordMetadataValue(model, "license")} · Source: {modelRecordMetadataValue(model, "source")} · Location: {modelRecordMetadataValue(model, "location")}
+                      {translate(modelRecordQuantizationLabel(model))} · {formatModelSize(model.sizeBytes)} · {translate(modelBackendLabel(model.backend))}
                     </p>
                     <div className="model-recommendation">
-                      <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{recommendation.label}</span>
-                      <p className="model-meta">{recommendation.explanation}</p>
+                      <span className={`recommendation-badge recommendation-${recommendation.kind}`}>{translate(recommendation.label)}</span>
+                      <p className="model-meta">{translate(recommendation.explanation)}</p>
                     </div>
+                    <details className="model-details motion-disclosure">
+                      <summary>{translate("Details")}</summary>
+                      <div className="model-detail-grid">
+                        <p><strong>{translate("Source")}</strong><br />{translate(sourceLabel)} · {translate(modelBackendLabel(model.backend))}</p>
+                        <p><strong>{translate("Model ID")}</strong><br />{model.modelId}</p>
+                        <p><strong>{translate("Digest")}</strong><br />{model.digest ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Content hash")}</strong><br />{model.contentHash ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Format")}</strong><br />{translate(modelRecordMetadataValue(model, "format"))}</p>
+                        <p><strong>{translate("License")}</strong><br />{translate(modelRecordMetadataValue(model, "license"))}</p>
+                        <p><strong>{translate("Location")}</strong><br />{translate(modelRecordMetadataValue(model, "location"))}</p>
+                        <p><strong>{translate("Endpoint")}</strong><br />{model.endpoint ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Path")}</strong><br />{model.managedPath ?? model.path ?? translate("Not reported")}</p>
+                        <p><strong>{translate("Updated")}</strong><br />{model.modifiedAt ?? translate("Not reported")}</p>
+                        <p className="model-detail-copy">{translate(modelDownloadCapabilityLabel(model))}</p>
+                        <p className="model-detail-copy">{translate(modelRemovalCapabilityLabel(model))}</p>
+                      </div>
+                    </details>
                     {rowOperation && (
                       <p className="model-meta">
-                        Operation {modelOperationStatusLabel(rowOperation.status).toLowerCase()} · {modelOperationProgressLabel(rowOperation)}
-                        {rowOperation.message ? ` · ${rowOperation.message}` : ""}
+                        {translate("Operation")} {translate(modelOperationStatusLabel(rowOperation.status).toLowerCase())} · {modelOperationProgressLabel(rowOperation)}
+                        {operationMessage ? ` · ${translate(operationMessage)}` : ""}
                       </p>
                     )}
                   </div>
-                  <div className="model-actions">
-                    <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
-                    {canDownload && (
+                  <div className="model-actions model-row-actions">
+                    <span className={`run-status ${availability.state === "failed" ? "run-status-failure" : ""}`}>
+                      {translate(modelAvailabilityLabel(availability.state))}
+                    </span>
+                    {availability.actions.includes("use") && (
                       <button
-                        className="text-button"
+                        className="secondary-button model-action-button"
+                        type="button"
+                        onClick={() => handleUseModel(model)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {translate(modelActionLabel("use"))}
+                      </button>
+                    )}
+                    {availability.actions.includes("download") && (
+                      <button
+                        className="secondary-button model-action-button"
                         type="button"
                         onClick={() => handleDownload(model)}
                         disabled={!desktop || busy || operationStarting}
                       >
-                        {operationAction === rowOperation?.operationId ? "Starting…" : "Download"}
+                        {translate(modelActionLabel("download"))}
                       </button>
                     )}
-                    {canRemove && (
+                    {availability.actions.includes("cancel") && rowOperation && (
                       <button
-                        className="text-button"
+                        className="secondary-button model-action-button"
+                        type="button"
+                        onClick={() => void handleCancel(rowOperation.operationId)}
+                        disabled={!desktop || busy || cancellingOperation === rowOperation.operationId}
+                      >
+                        {cancellingOperation === rowOperation.operationId ? translate("Cancelling…") : translate(modelActionLabel("cancel"))}
+                      </button>
+                    )}
+                    {availability.actions.includes("retry") && rowOperation && (
+                      <button
+                        className="secondary-button model-action-button"
+                        type="button"
+                        onClick={() => handleRetry(model, rowOperation)}
+                        disabled={!desktop || busy || operationStarting}
+                      >
+                        {translate(modelActionLabel("retry"))}
+                      </button>
+                    )}
+                    {availability.actions.includes("remove") && (
+                      <button
+                        className="secondary-button model-action-button"
                         type="button"
                         onClick={() => handleRemove(model)}
                         disabled={!desktop || busy || operationStarting || modelOperationActive}
                       >
-                        {modelOperationActive ? "Removal blocked" : operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
+                        {modelOperationActive ? translate("Removal blocked") : translate(modelActionLabel("remove"))}
                       </button>
                     )}
-                    <span className="field-help">{modelDownloadCapabilityLabel(model)}</span>
-                    <span className="field-help">{modelRemovalCapabilityLabel(model)}</span>
                   </div>
                 </article>
                 );
               })}
             </div>
           )}
-          {!desktop && <p className="field-help">Desktop storage and local loopback runtimes are required. Preview never invents model rows.</p>}
+          {!desktop && <p className="field-help">{translate("Desktop storage and local loopback runtimes are required. Preview never invents model rows.")}</p>}
           {modelState.status === "ready" && (
             <div className="profile-records">
               <div className="section-heading compact-heading">
                 <div>
-                  <p className="eyebrow">Persisted activity</p>
-                  <h3>Model operations</h3>
+                  <p className="eyebrow">{translate("Persisted activity")}</p>
+                  <h3>{translate("Model operations")}</h3>
                 </div>
               </div>
               {modelState.operations.length === 0 ? (
-                <p className="field-help">No model operations are persisted locally.</p>
+                <p className="field-help">{translate("No model operations are persisted locally.")}</p>
               ) : (
                 <div className="profile-record-list">
                   {[...modelState.operations].reverse().map((operation) => (
                     <article className="profile-record-row" key={operation.operationId}>
                       <span>
                         <strong>{operation.kind} · {operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model"}</strong>
-                        <small>{modelBackendLabel(operation.backend)} · {modelOperationStatusLabel(operation.status)} · {modelOperationProgressLabel(operation)}{operation.message ? ` · ${operation.message}` : ""}</small>
+                        <small>{translate(modelBackendLabel(operation.backend))} · {translate(modelOperationStatusLabel(operation.status))} · {translate(modelOperationProgressLabel(operation))}{modelOperationMessage(operation) ? ` · ${translate(modelOperationMessage(operation) ?? "")}` : ""}</small>
                       </span>
                       {isActiveModelOperation(operation) ? (
                         <button className="text-button" type="button" onClick={() => void handleCancel(operation.operationId)} disabled={cancellingOperation === operation.operationId}>
-                          {cancellingOperation === operation.operationId ? "Cancelling…" : "Cancel"}
+                          {cancellingOperation === operation.operationId ? translate("Cancelling…") : translate("Cancel")}
                         </button>
                       ) : (
                         <span className={`run-status ${operation.status === "failed" ? "run-status-failure" : operation.status === "cancelled" ? "run-status-neutral" : ""}`}>
-                          {modelOperationStatusLabel(operation.status)}
+                          {translate(modelOperationStatusLabel(operation.status))}
                         </span>
                       )}
                     </article>
@@ -1830,8 +1955,8 @@ function ModelsView() {
             <div className="profile-records">
               <div className="section-heading compact-heading">
                 <div>
-                  <p className="eyebrow">Removal audit</p>
-                  <h3>Managed model evidence</h3>
+                  <p className="eyebrow">{translate("Removal audit")}</p>
+                  <h3>{translate("Managed model evidence")}</h3>
                 </div>
               </div>
               <div className="profile-record-list">
@@ -1839,9 +1964,9 @@ function ModelsView() {
                   <article className="profile-record-row" key={removal.removalId}>
                     <span>
                       <strong>{removal.modelId}</strong>
-                      <small>{removal.managedPath} · SHA-256 {removal.contentHash.slice(0, 12)}… · {removal.removedAt}</small>
+                      <small>{removal.managedPath} · SHA-256 {removal.contentHash.slice(0, 12)}… · {formatDisplayTimestamp(removal.removedAt)}</small>
                     </span>
-                    <span className="run-status run-status-neutral">{removal.outcome}</span>
+                    <span className="run-status run-status-neutral">{translate(removal.outcome)}</span>
                   </article>
                 ))}
               </div>
@@ -1852,70 +1977,68 @@ function ModelsView() {
         <section className="panel profile-panel" aria-live="polite">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Immutable profile revisions</p>
-              <h3>Register a profile</h3>
+              <p className="eyebrow">{translate("Immutable profile revisions")}</p>
+              <h3>{translate("Register a profile")}</h3>
             </div>
             <span className="section-index">06</span>
           </div>
-          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{translate(feedback.message)}</p>}
           <div className="profile-form form-section">
             <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
-            <label className="advanced-field" htmlFor="profile-discovered-model">
-              <span className="field-label">Discovered local model (optional)</span>
-              <select
-                className="font-select"
-                id="profile-discovered-model"
-                value={selectedProfileModelId}
-                onChange={(event) => {
-                  const modelId = event.currentTarget.value;
-                  setSelectedProfileModelId(modelId);
-                  const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
-                  if (model) updateField("model", model.name);
-                }}
-              >
-                <option value="">Manual Ollama model</option>
-                {modelState.status === "ready" && modelState.catalog.models.map((model) => (
-                  <option key={model.modelId} value={model.modelId}>{model.name} · {modelBackendLabel(model.backend)} · {modelRecordQuantizationLabel(model)}</option>
-                ))}
-              </select>
-            </label>
+            <AccessibleListbox
+              id="profile-discovered-model"
+              className="advanced-field"
+              label={translate("Discovered local model (optional)")}
+              value={selectedProfileModelId}
+              placeholder={translate("Manual Ollama model")}
+              options={modelState.status === "ready" ? modelState.catalog.models.map((model) => ({
+                value: model.modelId,
+                label: model.name,
+                detail: `${translate(modelBackendLabel(model.backend))} · ${translate(modelRecordQuantizationLabel(model))}`,
+              })) : []}
+              onChange={(modelId) => {
+                setSelectedProfileModelId(modelId);
+                const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
+                if (model) updateField("model", model.name);
+              }}
+            />
             <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
             <p className="field-help">
               {selectedProfileModel
-                ? `Runtime: ${modelBackendLabel(selectedProfileModel.backend)} · source: ${selectedProfileModel.sourceId} · immutable model identity is preserved.`
-                : "Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity."}
-              {" "}Derived immutable ID: <strong>{profileRevisionIdPreview(form)}</strong>
+                ? `${translate("Runtime")}: ${translate(modelBackendLabel(selectedProfileModel.backend))} · ${translate("source")}: ${selectedProfileModel.sourceId} · ${translate("immutable model identity is preserved.")}`
+                : translate("Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity.")}
+              {" "}{translate("Derived immutable ID:")} <strong>{profileRevisionIdPreview(form)}</strong>
             </p>
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>
-              Register immutable revision
+              {translate("Register immutable revision")}
             </button>
-            {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
+            {!isDesktopEnvironment() && <p className="field-help">{translate(profilePreviewCopy())}</p>}
           </div>
 
           <div className="profile-records">
             <div className="section-heading compact-heading">
               <div>
-                <p className="eyebrow">Local records</p>
-                <h3>Registered profiles</h3>
+                <p className="eyebrow">{translate("Local records")}</p>
+                <h3>{translate("Registered profiles")}</h3>
               </div>
               <button className="text-button" type="button" onClick={() => void refreshProfiles()} disabled={!isDesktopEnvironment() || busy}>
-                Refresh
+                {translate("Refresh")}
               </button>
             </div>
-            {profileState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={profilePreviewCopy()} />}
+            {profileState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={translate(profilePreviewCopy())} />}
             {profileState.status === "loading" && <StateMessage icon="…" title="Loading profiles" description="Reading immutable profile revisions from SQLite." />}
             {profileState.status === "error" && <StateMessage icon="!" title="Profiles unavailable" description={profileState.message} error />}
-            {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title="No registered profiles" description={profileEmptyCopy()} />}
+            {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title="No registered profiles" description={translate(profileEmptyCopy())} />}
             {profileState.status === "ready" && profileState.profiles.length > 0 && (
               <div className="profile-record-list">
                 {profileState.profiles.map((profile) => (
                   <article className="profile-record-row" key={profile.profileRevisionId}>
                     <span>
                       <strong>{profile.profileRevisionId}</strong>
-                      <small>{profile.model} · {profile.runtime} · registered revision {profile.revision}</small>
+                      <small>{profile.model} · {profile.runtime} · {translate("registered revision")} {profile.revision}</small>
                     </span>
-                    <span className="run-status">immutable</span>
+                    <span className="run-status">{translate("immutable")}</span>
                   </article>
                 ))}
               </div>
@@ -1927,29 +2050,38 @@ function ModelsView() {
       <section className="panel hardware-panel" aria-live="polite">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Read-only local baseline</p>
-            <h3>Hardware snapshot</h3>
+            <p className="eyebrow">{translate("Read-only local baseline")}</p>
+            <h3>{translate("Hardware snapshot")}</h3>
           </div>
           <button className="text-button" type="button" onClick={() => void refreshHardware()} disabled={!isDesktopEnvironment() || busy}>
-            Refresh
+            {translate("Refresh")}
           </button>
         </div>
-        {hardwareState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={hardwarePreviewCopy()} />}
+        {hardwareState.status === "preview" && <StateMessage icon="◇" title="Browser preview" description={translate(hardwarePreviewCopy())} />}
         {hardwareState.status === "loading" && <StateMessage icon="…" title="Reading hardware baseline" description="Detecting only bounded local CPU and memory facts; GPU and VRAM may be unavailable." />}
         {hardwareState.status === "error" && <StateMessage icon="!" title="Hardware baseline unavailable" description={hardwareState.message} error />}
         {hardwareState.status === "ready" && (
           <>
             <div className="hardware-grid">
-              <HardwareMetricRow label="Platform" value={hardwareState.snapshot.platform} detail="compile-time target" />
-              <HardwareMetricRow label="Logical CPUs" metric={hardwareState.snapshot.logicalCpuCount} format={formatHardwareCount} />
-              <HardwareMetricRow label="RAM" metric={hardwareState.snapshot.memoryBytes} format={formatHardwareBytes} />
-              <HardwareMetricRow label="GPU" metric={hardwareState.snapshot.gpuName} format={(value) => value} />
-              <HardwareMetricRow label="VRAM" metric={hardwareState.snapshot.vramBytes} format={formatHardwareBytes} />
+              <HardwareMetricRow label="Platform" value={hardwareState.snapshot.platform} detail="Local target" showDetail={false} />
+              <HardwareMetricRow label="Logical CPUs" metric={hardwareState.snapshot.logicalCpuCount} format={formatHardwareCount} showDetail={false} />
+              <HardwareMetricRow label="RAM" metric={hardwareState.snapshot.memoryBytes} format={formatHardwareBytes} showDetail={false} />
+              <HardwareMetricRow label="GPU" metric={hardwareState.snapshot.gpuName} format={(value) => value} showDetail={false} />
+              <HardwareMetricRow label="VRAM" metric={hardwareState.snapshot.vramBytes} format={formatHardwareBytes} showDetail={false} />
             </div>
-            <p className="field-help">Each metric reports its source and confidence. Unavailable values stay null and are never guessed.</p>
+            <details className="hardware-advanced motion-disclosure">
+              <summary>{translate("Advanced diagnostics")}</summary>
+              <div className="results-facts">
+                <BoundaryRow label={translate("CPU source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.logicalCpuCount.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.logicalCpuCount.confidence))}`} />
+                <BoundaryRow label={translate("Memory source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.memoryBytes.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.memoryBytes.confidence))}`} />
+                <BoundaryRow label={translate("GPU source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.gpuName.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.gpuName.confidence))}`} />
+                <BoundaryRow label={translate("VRAM source and confidence")} value={`${translate(hardwareSourceLabel(hardwareState.snapshot.vramBytes.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(hardwareState.snapshot.vramBytes.confidence))}`} />
+              </div>
+              <p className="field-help">{translate("Unavailable values stay null and are never guessed.")}</p>
+            </details>
             <div className="recommendation-settings">
-              <p className="eyebrow">Recommendation thresholds · session only</p>
-              <p className="field-help">Recommendations compare reported model size with detected RAM. These bounds are UI state only; they are not persisted or empirical performance measurements.</p>
+              <p className="eyebrow">{translate("Recommendation thresholds · session only")}</p>
+              <p className="field-help">{translate("Recommendations compare reported model size with detected RAM. These bounds are UI state only; they are not persisted or empirical performance measurements.")}</p>
               <div className="form-grid form-grid-three">
                 <FormInput
                   id="ideal-threshold"
@@ -1986,20 +2118,24 @@ function HardwareMetricRow<T>({
   format,
   value,
   detail,
+  showDetail = true,
 }: {
   label: string;
   metric?: HardwareMetric<T>;
   format?: (value: T) => string;
   value?: string;
   detail?: string;
+  showDetail?: boolean;
 }) {
   const metricValue = metric && metric.status === "available" && metric.value !== null && format
     ? format(metric.value)
-    : value ?? "Unavailable";
-  const metricDetail = detail ?? (metric ? `${metric.source} · confidence ${metric.confidence}` : "Not detected");
+    : value ?? translate("Unavailable");
+  const metricDetail = !showDetail
+    ? translate(metricValue === translate("Unavailable") ? "Not detected" : "Local measurement")
+    : detail ? translate(detail) : metric ? `${translate(metric.source)} · ${translate("confidence")} ${metric.confidence}` : translate("Not detected");
   return (
     <div className="hardware-metric">
-      <span>{label}</span>
+      <span>{translate(label)}</span>
       <strong>{metricValue}</strong>
       <small>{metricDetail}</small>
     </div>
@@ -2007,36 +2143,59 @@ function HardwareMetricRow<T>({
 }
 
 function formatHardwareCount(value: number): string {
-  return `${value} logical processor${value === 1 ? "" : "s"}`;
+  return `${value} ${translate(value === 1 ? "logical processor" : "logical processors")}`;
 }
 
 function formatHardwareBytes(value: number): string {
   return formatByteCount(value);
 }
 
+function hardwareSourceLabel(source: HardwareSnapshot["logicalCpuCount"]["source"]): string {
+  if (source === "windows_kernel32") return "Windows system API";
+  if (source === "windows_dxgi") return "Windows graphics API";
+  if (source === "linux_procfs") return "Linux system files";
+  if (source === "not_detected") return "Not detected";
+  return "Standard library";
+}
+
+function hardwareConfidenceLabel(confidence: HardwareSnapshot["logicalCpuCount"]["confidence"]): string {
+  if (confidence === "high") return "High";
+  if (confidence === "medium") return "Medium";
+  if (confidence === "low") return "Low";
+  return "Unavailable";
+}
+
 function formatArenaMetric(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? "Not recorded" : value.toFixed(2);
+  return value === null || !Number.isFinite(value)
+    ? translate("Not recorded")
+    : formatLocaleNumber(value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function summaryNumberText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? formatLocaleNumber(value) : translate("Not recorded");
 }
 
 function summaryPercentText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? formatLocalePercent(value) : translate("Not recorded");
 }
 
 function summaryMetricText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? formatArenaMetric(value) : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? formatArenaMetric(value) : translate("Not recorded");
 }
 
 function formatModelSize(sizeBytes: number | null): string {
-  if (sizeBytes === null) return "size unavailable";
-  if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
-  return `${(sizeBytes / 1024 ** 3).toFixed(1)} GB`;
+  if (sizeBytes === null) return translate("size unavailable");
+  if (sizeBytes < 1024 ** 3) return `${formatLocaleNumber(Math.round(sizeBytes / 1024 ** 2))} MB`;
+  return `${formatLocaleNumber(sizeBytes / 1024 ** 3, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GB`;
+}
+
+function formatDisplayTimestamp(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T/iu.test(value)) return value;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? formatLocaleDate(timestamp) : value;
 }
 
 type ArenaRecordsState =
@@ -2233,7 +2392,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
   async function handleExecute() {
     if (!isDesktopEnvironment()) {
-      setExecution({ status: "error", message: arenaPreviewCopy() });
+      setExecution({ status: "error", message: translate(arenaPreviewCopy()) });
       return;
     }
     if (!activeDocument || !selectedProfile || !selectedTaskId || !selectedCaseId) {
@@ -2265,115 +2424,113 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Core Arena</p>
-        <h2>Select evidence, then run one case.</h2>
+        <p className="eyebrow">{translate("Core Arena")}</p>
+        <h2>{translate("Select evidence, then run one case.")}</h2>
         <p>
-          Arena reads existing immutable benchmark versions and profile revisions, loads the selected canonical document,
-          and prepares one real task/case for the fixed local Ollama one-shot boundary. There is no raw JSON editor,
-          endpoint field, credential input, cancellation control, or invented record.
+          {translate("Arena reads existing immutable benchmark versions and profile revisions, loads the selected canonical document, and prepares one real task/case for the fixed local Ollama one-shot boundary. There is no raw JSON editor, endpoint field, credential input, cancellation control, or invented record.")}
         </p>
       </section>
 
       {records.status === "preview" && (
         <section className="panel arena-state-panel" aria-live="polite">
-          <StateMessage icon="◇" title="Browser preview / no writes" description={arenaPreviewCopy()} />
+          <StateMessage icon="◇" title={translate("Browser preview / no writes")} description={translate(arenaPreviewCopy())} />
         </section>
       )}
       {records.status === "loading" && (
         <section className="panel arena-state-panel" aria-live="polite">
-          <StateMessage icon="…" title="Loading Arena records" description="Reading immutable versions and profile revisions from the local store." />
+          <StateMessage icon="…" title={translate("Loading Arena records")} description={translate("Reading immutable versions and profile revisions from the local store.")} />
         </section>
       )}
       {records.status === "error" && (
         <section className="panel arena-state-panel" aria-live="polite">
-          <StateMessage icon="!" title="Arena records unavailable" description={records.message} error />
+          <StateMessage icon="!" title={translate("Arena records unavailable")} description={records.message} error />
         </section>
       )}
       {recordsAreEmpty && (
         <section className="panel arena-empty-grid" aria-live="polite">
-          {records.versions.length === 0 && <EmptyState title="No benchmark versions" description={arenaEmptyCopy("versions")} />}
-          {records.profiles.length === 0 && <EmptyState title="No profile revisions" description={arenaEmptyCopy("profiles")} />}
+          {records.versions.length === 0 && <EmptyState title={translate("No benchmark versions")} description={translate(arenaEmptyCopy("versions"))} />}
+          {records.profiles.length === 0 && <EmptyState title={translate("No profile revisions")} description={translate(arenaEmptyCopy("profiles"))} />}
         </section>
       )}
 
       {hasRecords && (
         <div className="arena-layout">
-          <section className="panel arena-selection-panel" aria-label="Arena selections">
+          <section className="panel arena-selection-panel" aria-label={translate("Arena selections")}>
             <div className="section-heading compact-heading">
               <div>
-                <p className="eyebrow">Existing records only</p>
-                <h3>Choose the run inputs</h3>
+                <p className="eyebrow">{translate("Existing records only")}</p>
+                <h3>{translate("Choose the run inputs")}</h3>
               </div>
               <button className="text-button" type="button" onClick={() => void refreshRecords()} disabled={execution.status === "busy"}>
-                Refresh
+                {translate("Refresh")}
               </button>
             </div>
             <div className="arena-selection-grid">
               <ArenaSelect
                 id="arena-version"
-                label="Published benchmark version"
+                label={translate("Published benchmark version")}
                 value={selectedVersionId}
                 options={versionOptions(records.versions)}
-                placeholder="Select an existing version"
+                placeholder={translate("Select an existing version")}
                 disabled={execution.status === "busy"}
                 onChange={setSelectedVersionId}
               />
               <ArenaSelect
                 id="arena-profile"
-                label="Immutable profile revision"
+                label={translate("Immutable profile revision")}
                 value={selectedProfileRevisionId}
                 options={profileOptions(records.profiles)}
-                placeholder="Select an existing profile"
+                placeholder={translate("Select an existing profile")}
                 disabled={execution.status === "busy"}
                 onChange={setSelectedProfileRevisionId}
               />
               <ArenaSelect
                 id="arena-task"
-                label="Task"
+                label={translate("Task")}
                 value={selectedTaskId}
                 options={taskSelectionOptions}
-                placeholder="Select an existing task"
+                placeholder={translate("Select an existing task")}
                 disabled={execution.status === "busy" || !activeDocument}
                 onChange={setSelectedTaskId}
               />
               <ArenaSelect
                 id="arena-case"
-                label="Case"
+                label={translate("Case")}
                 value={selectedCaseId}
                 options={caseSelectionOptions}
-                placeholder="Select an existing case"
+                placeholder={translate("Select an existing case")}
                 disabled={execution.status === "busy" || !activeDocument || !selectedTaskId}
                 onChange={setSelectedCaseId}
               />
             </div>
             {documentState.status === "loading" && (
-              <StateMessage icon="…" title="Loading the selected version" description="Reading its stored canonical document without rewriting it." />
+              <StateMessage icon="…" title={translate("Loading the selected version")} description={translate("Reading its stored canonical document without rewriting it.")} />
             )}
             {documentState.status === "malformed" && (
-              <StateMessage icon="!" title="Published document malformed" description={documentState.message} error />
+              <StateMessage icon="!" title={translate("Published document malformed")} description={documentState.message} error />
             )}
             {documentState.status === "error" && (
-              <StateMessage icon="!" title="Version unavailable" description={documentState.message} error />
+              <StateMessage icon="!" title={translate("Version unavailable")} description={documentState.message} error />
             )}
             {activeDocument && taskSelectionOptions.length === 0 && (
-              <EmptyState title="No usable tasks" description={arenaEmptyCopy("tasks")} />
+              <EmptyState title={translate("No usable tasks")} description={translate(arenaEmptyCopy("tasks"))} />
             )}
             {activeDocument && taskSelectionOptions.length > 0 && caseSelectionOptions.length === 0 && (
-              <EmptyState title="No usable cases" description={arenaEmptyCopy("cases")} />
+              <EmptyState title={translate("No usable cases")} description={translate(arenaEmptyCopy("cases"))} />
             )}
           </section>
 
           <section className="panel arena-preview-panel" aria-live="polite">
             <div className="section-heading compact-heading">
               <div>
-                <p className="eyebrow">Deterministic preview</p>
-                <h3>What will be sent</h3>
+                <p className="eyebrow">{translate("Deterministic preview")}</p>
+                <h3>{translate("What will be sent")}</h3>
               </div>
               <span className="section-index">08</span>
             </div>
-            {previewError && <StateMessage icon="!" title="Selection is not runnable" description={previewError} error />}
+            {previewError && <StateMessage icon="!" title={translate("Selection is not runnable")} description={previewError} error />}
             {!preview && !previewError && documentState.status !== "loading" && (
-              <StateMessage icon="◇" title="Select existing records" description="Choose a published version, profile revision, task, and case to see the bounded request preview." />
+              <StateMessage icon="◇" title={translate("Select existing records")} description={translate("Choose a published version, profile revision, task, and case to see the bounded request preview.")} />
             )}
             {preview && (
               <>
@@ -2384,37 +2541,37 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                   <BoundaryRow label="Generation model" value={preview.model} />
                 </div>
                 <div className="arena-prompt-block">
-                  <p className="eyebrow">System prompt</p>
-                  <pre className="arena-prompt">{preview.systemPrompt ?? "No separate system prompt."}</pre>
+                  <p className="eyebrow">{translate("System prompt")}</p>
+                  <pre className="arena-prompt">{preview.systemPrompt ?? translate("No separate system prompt.")}</pre>
                 </div>
                 <div className="arena-prompt-block">
-                  <p className="eyebrow">User prompt</p>
+                  <p className="eyebrow">{translate("User prompt")}</p>
                   <pre className="arena-prompt">{preview.prompt}</pre>
                 </div>
                 <div className="arena-boundary">
-                  <BoundaryRow label="Runtime" value="Ollama (fixed)" />
+                  <BoundaryRow label={translate("Runtime")} value={translate("Ollama (fixed)")} />
                   <BoundaryRow label="Endpoint" value={preview.endpoint} />
-                  <BoundaryRow label="Repetitions" value={String(preview.repetitions)} />
-                  <BoundaryRow label="Worker" value="One-shot" />
+                  <BoundaryRow label={translate("Repetitions")} value={String(preview.repetitions)} />
+                  <BoundaryRow label={translate("Worker")} value={translate("One-shot")} />
                 </div>
                 <div className="arena-actions">
                   <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={execution.status === "busy"}>
-                    Run one bounded case <span aria-hidden="true">→</span>
+                    {translate("Run one bounded case")} <span aria-hidden="true">→</span>
                   </button>
                   <button className="text-button" type="button" onClick={onOpenRuns}>
-                    View run history <span aria-hidden="true">→</span>
+                    {translate("View run history")} <span aria-hidden="true">→</span>
                   </button>
                 </div>
               </>
             )}
             {execution.status === "busy" && (
               <div className="arena-execution-status">
-                <StateMessage icon="…" title="Running one bounded case" description="The app-owned one-shot worker is processing the selected request. Queued cancellation and lifecycle controls are not available for this run." />
+                <StateMessage icon="…" title={translate("Running one bounded case")} description={translate("The app-owned one-shot worker is processing the selected request. Queued cancellation and lifecycle controls are not available for this run.")} />
               </div>
             )}
             {execution.status === "error" && (
               <div className="arena-execution-status">
-                <StateMessage icon="!" title="Run could not start" description={execution.message} error />
+                <StateMessage icon="!" title={translate("Run could not start")} description={execution.message} error />
               </div>
             )}
             {execution.status === "terminal" && (
@@ -2429,7 +2586,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
 type ArenaSessionState =
   | { status: "idle" }
-  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress }
+  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress; telemetry: ArenaTelemetry }
   | { status: "error"; message: string }
   | { status: "terminal"; request: ArenaExecutionRequest; results: ArenaExecution[] };
 
@@ -2459,6 +2616,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [repetitions, setRepetitions] = useState<number>(1);
+  const [blindExecution, setBlindExecution] = useState(false);
   const [session, setSession] = useState<ArenaSessionState>({ status: "idle" });
   const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
   const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
@@ -2559,6 +2717,14 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     cancelRequestedRef.current = false;
   }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions]);
 
+  useEffect(() => {
+    if (session.status !== "busy") return;
+    const timer = window.setInterval(() => {
+      setSession((current) => current.status === "busy" ? { ...current, telemetry: refreshArenaTelemetry(current.telemetry) } : current);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [session.status]);
+
   const selectedProfiles = records.status === "ready"
     ? records.profiles.filter((profile) => selectedProfileRevisionIds.includes(profile.profileRevisionId))
     : [];
@@ -2628,13 +2794,15 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       caseId: selectedCaseId,
       profiles: selectedProfiles,
       repetitions,
+      startedAtMs: Date.now(),
+      blind: blindExecution,
     };
     cancelRequestedRef.current = false;
     setResponseState({ status: "idle" });
-    setSession({ status: "busy", request, progress: { completed: 0, total: selectedProfiles.length * repetitions, currentCompetitor: "Queued", repetition: 1 } });
+    setSession({ status: "busy", request, progress: { completed: 0, total: selectedProfiles.length * repetitions, currentCompetitor: "Queued", repetition: 1, competitorOrdinal: 0, sampleIndex: 0, status: "queued", timestampMs: request.startedAtMs ?? Date.now(), sampleStartedAtMs: null, sampleElapsedMs: null, sampleDurationMs: null, metrics: { loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false }, error: null }, telemetry: createArenaTelemetry(request, request.startedAtMs) });
     try {
       const results = await executeArena(request, executeRunOnce, (progress) => {
-        setSession((current) => current.status === "busy" ? { ...current, progress } : current);
+        setSession((current) => current.status === "busy" ? { ...current, progress, telemetry: applyArenaProgress(current.telemetry, progress) } : current);
       }, () => !cancelRequestedRef.current);
       setSummaryPersistence({ status: "saving" });
       try {
@@ -2665,73 +2833,80 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Core Arena</p>
-        <h2>Compare multiple models in one reproducible Arena.</h2>
-        <p>Choose a published task, two or more immutable competitors, and repetitions. Runs execute sequentially for fair local speed metrics; a failed competitor stays visible without discarding the others.</p>
+        <p className="eyebrow">{translate("Core Arena")}</p>
+        <h2>{translate("Compare multiple models in one reproducible Arena.")}</h2>
+        <p>{translate("Choose a published task, two or more immutable competitors, and repetitions. Runs execute sequentially for fair local speed metrics; a failed competitor stays visible without discarding the others.")}</p>
       </section>
 
-      {records.status === "preview" && <section className="panel arena-state-panel"><StateMessage icon="◇" title="Browser preview / no writes" description={arenaPreviewCopy()} /></section>}
-      {records.status === "loading" && <section className="panel arena-state-panel"><StateMessage icon="…" title="Loading Arena records" description="Reading immutable versions and profile revisions from the local store." /></section>}
-      {records.status === "error" && <section className="panel arena-state-panel"><StateMessage icon="!" title="Arena records unavailable" description={records.message} error /></section>}
-      {recordsAreEmpty && <section className="panel arena-empty-grid"><EmptyState title={records.versions.length === 0 ? "No benchmark versions" : "Need two competitors"} description={records.versions.length === 0 ? arenaEmptyCopy("versions") : "Register at least two immutable profile revisions in Models before starting an Arena."} /></section>}
+      {records.status === "preview" && <section className="panel arena-state-panel"><StateMessage icon="◇" title={translate("Browser preview / no writes")} description={translate(arenaPreviewCopy())} /></section>}
+      {records.status === "loading" && <section className="panel arena-state-panel"><StateMessage icon="…" title={translate("Loading Arena records")} description={translate("Reading immutable versions and profile revisions from the local store.")} /></section>}
+      {records.status === "error" && <section className="panel arena-state-panel"><StateMessage icon="!" title={translate("Arena records unavailable")} description={records.message} error /></section>}
+      {recordsAreEmpty && <section className="panel arena-empty-grid"><EmptyState title={translate(records.versions.length === 0 ? "No benchmark versions" : "Need two competitors")} description={records.versions.length === 0 ? translate(arenaEmptyCopy("versions")) : translate("Register at least two immutable profile revisions in Models before starting an Arena.")} /></section>}
 
       {hasRecords && (
         <div className="arena-layout">
-          <section className="panel arena-selection-panel" aria-label="Arena builder">
+          <section className="panel arena-selection-panel" aria-label={translate("Arena builder")}>
             <div className="section-heading compact-heading">
-              <div><p className="eyebrow">Arena builder</p><h3>Set up a fair comparison</h3></div>
-              <button className="text-button" type="button" onClick={() => void refreshRecords()} disabled={busy}>Refresh</button>
+              <div><p className="eyebrow">{translate("Arena builder")}</p><h3>{translate("Set up a fair comparison")}</h3></div>
+              <button className="text-button" type="button" onClick={() => void refreshRecords()} disabled={busy}>{translate("Refresh")}</button>
             </div>
             <div className="arena-selection-grid">
-              <ArenaSelect id="arena-version" label="Published benchmark version" value={selectedVersionId} options={versionOptions(records.versions)} placeholder="Select an existing version" disabled={busy} onChange={setSelectedVersionId} />
-              <ArenaSelect id="arena-task" label="Task" value={selectedTaskId} options={taskSelectionOptions} placeholder="Select a task" disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
-              <ArenaSelect id="arena-case" label="Case" value={selectedCaseId} options={caseSelectionOptions} placeholder="Select a case" disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
-              <label className="arena-select-control" htmlFor="arena-repetitions">
-                <span className="field-label">Repetitions</span>
-                <select className="font-select" id="arena-repetitions" value={repetitions} disabled={busy} onChange={(event) => setRepetitions(Number(event.currentTarget.value))}>
-                  {ARENA_REPETITION_OPTIONS.map((value) => <option key={value} value={value}>{value} {value === 1 ? "sample" : "samples per competitor"}</option>)}
-                </select>
+               <ArenaSelect id="arena-version" label={translate("Published benchmark version")} value={selectedVersionId} options={versionOptions(records.versions)} placeholder={translate("Select an existing version")} disabled={busy} onChange={setSelectedVersionId} />
+               <ArenaSelect id="arena-task" label={translate("Task")} value={selectedTaskId} options={taskSelectionOptions} placeholder={translate("Select a task")} disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
+               <ArenaSelect id="arena-case" label={translate("Case")} value={selectedCaseId} options={caseSelectionOptions} placeholder={translate("Select a case")} disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
+              <AccessibleListbox
+                id="arena-repetitions"
+                label={translate("Repetitions")}
+                value={String(repetitions)}
+                placeholder={translate("Select repetitions")}
+                options={ARENA_REPETITION_OPTIONS.map((value) => ({ value: String(value), label: String(value), detail: translate(value === 1 ? "sample" : "samples per competitor") }))}
+                disabled={busy}
+                onChange={(value) => setRepetitions(Number(value))}
+              />
+              <label className="arena-select-control arena-blind-toggle">
+                <span className="field-label">{translate("Evaluation visibility")}</span>
+                <span className="field-help"><input type="checkbox" checked={blindExecution} disabled={busy} onChange={(event) => setBlindExecution(event.currentTarget.checked)} /> {translate("Blind execution labels and metrics")}</span>
               </label>
             </div>
             <fieldset className="arena-competitor-picker">
-              <legend className="field-label">Competitors ({selectedProfiles.length}/{MAX_ARENA_COMPETITORS})</legend>
-              <p className="field-help">Each row is an immutable model/runtime/parameter revision. Select at least two.</p>
+              <legend className="field-label">{translate("Competitors")} ({selectedProfiles.length}/{MAX_ARENA_COMPETITORS})</legend>
+              <p className="field-help">{translate("Each row is an immutable model/runtime/parameter revision. Select at least two.")}</p>
               <div className="competitor-list">
                 {records.profiles.map((profile) => {
                   const checked = selectedProfileRevisionIds.includes(profile.profileRevisionId);
                   return (
                     <label className={`competitor-option ${checked ? "is-selected" : ""}`} key={profile.profileRevisionId}>
                       <input type="checkbox" checked={checked} disabled={busy || (!checked && selectedProfiles.length >= MAX_ARENA_COMPETITORS)} onChange={() => setSelectedProfileRevisionIds((current) => checked ? current.filter((id) => id !== profile.profileRevisionId) : [...current, profile.profileRevisionId])} />
-                      <span><strong>{profile.model}</strong><small>{profile.profileRevisionId} · {profile.runtime} · immutable revision {profile.revision}</small></span>
+                      <span><strong>{profile.model}</strong><small>{profile.profileRevisionId} · {profile.runtime} · {translate("immutable revision")} {profile.revision}</small></span>
                     </label>
                   );
                 })}
               </div>
             </fieldset>
-            {documentState.status === "loading" && <StateMessage icon="…" title="Loading the selected version" description="Reading its stored canonical document without rewriting it." />}
-            {documentState.status === "malformed" && <StateMessage icon="!" title="Published document malformed" description={documentState.message} error />}
-            {documentState.status === "error" && <StateMessage icon="!" title="Version unavailable" description={documentState.message} error />}
+             {documentState.status === "loading" && <StateMessage icon="…" title={translate("Loading the selected version")} description={translate("Reading its stored canonical document without rewriting it.")} />}
+             {documentState.status === "malformed" && <StateMessage icon="!" title={translate("Published document malformed")} description={documentState.message} error />}
+             {documentState.status === "error" && <StateMessage icon="!" title={translate("Version unavailable")} description={documentState.message} error />}
           </section>
 
           <section className="panel arena-preview-panel" aria-live="polite">
-            <div className="section-heading compact-heading"><div><p className="eyebrow">Equivalent request preview</p><h3>What will be compared</h3></div><span className="section-index">P1</span></div>
-            {previewError && <StateMessage icon="!" title="Selection is not runnable" description={previewError} error />}
-            {!preview && !previewError && documentState.status !== "loading" && <StateMessage icon="◇" title="Select Arena inputs" description="Choose a published version, task, case, and at least two competitors." />}
+            <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Equivalent request preview")}</p><h3>{translate("What will be compared")}</h3></div><span className="section-index">P1</span></div>
+             {previewError && <StateMessage icon="!" title={translate("Selection is not runnable")} description={previewError} error />}
+             {!preview && !previewError && documentState.status !== "loading" && <StateMessage icon="◇" title={translate("Select Arena inputs")} description={translate("Choose a published version, task, case, and at least two competitors.")} />}
             {preview && (
               <>
-                <div className="arena-preview-facts"><BoundaryRow label="Benchmark" value={preview.benchmarkVersionId} /><BoundaryRow label="Task / case" value={`${preview.taskId} / ${preview.caseId}`} /><BoundaryRow label="Competitors" value={String(selectedProfiles.length)} /><BoundaryRow label="Samples" value={String(selectedProfiles.length * repetitions)} /></div>
-                <div className="arena-prompt-block"><p className="eyebrow">Prompt sent to every competitor</p><pre className="arena-prompt">{preview.prompt}</pre></div>
-                <div className="arena-boundary"><BoundaryRow label="Runtime" value="Ollama · sequential fair mode" /><BoundaryRow label="Endpoint" value={preview.endpoint} /><BoundaryRow label="Failure policy" value="Isolate competitor" /><BoundaryRow label="Worker" value="App-owned one-shot" />{preview.executionBoundary && <BoundaryRow label="Execution boundary" value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
-                {dockerExecutionBlocked && <StateMessage icon="!" title="Docker execution blocked" description="This case requires Docker, which is unavailable in this build. Host execution is never used." error />}
+                 <div className="arena-preview-facts"><BoundaryRow label={translate("Benchmark")} value={preview.benchmarkVersionId} /><BoundaryRow label={translate("Task / case")} value={`${preview.taskId} / ${preview.caseId}`} /><BoundaryRow label={translate("Competitors")} value={String(selectedProfiles.length)} /><BoundaryRow label={translate("Samples")} value={String(selectedProfiles.length * repetitions)} /></div>
+                <div className="arena-prompt-block"><p className="eyebrow">{translate("Prompt sent to every competitor")}</p><pre className="arena-prompt">{preview.prompt}</pre></div>
+                 <div className="arena-boundary"><BoundaryRow label={translate("Runtime")} value={translate("Ollama · sequential fair mode")} /><BoundaryRow label={translate("Endpoint")} value={preview.endpoint} /><BoundaryRow label={translate("Failure policy")} value={translate("Isolate competitor")} /><BoundaryRow label={translate("Worker")} value={translate("App-owned one-shot")} />{preview.executionBoundary && <BoundaryRow label={translate("Execution boundary")} value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
+                 {dockerExecutionBlocked && <StateMessage icon="!" title={translate("Docker execution blocked")} description={translate("This case requires Docker, which is unavailable in this build. Host execution is never used.")} error />}
                 <div className="arena-actions">
-                  <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}>Run Arena <span aria-hidden="true">→</span></button>
-                  {busy && <button className="secondary-button" type="button" onClick={() => { cancelRequestedRef.current = true; }}>Cancel queued work</button>}
-                  <button className="text-button" type="button" onClick={onOpenRuns}>View history <span aria-hidden="true">→</span></button>
+                  <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}>{translate("Run Arena")} <span aria-hidden="true">→</span></button>
+                  {busy && <button className="secondary-button" type="button" onClick={() => { cancelRequestedRef.current = true; }}>{translate("Cancel queued work")}</button>}
+                  <button className="text-button" type="button" onClick={onOpenRuns}>{translate("View history")} <span aria-hidden="true">→</span></button>
                 </div>
               </>
             )}
-            {busy && <div className="arena-execution-status"><StateMessage icon="…" title={summaryPersistence.status === "saving" ? "Saving Arena summary" : `Running ${session.progress.completed}/${session.progress.total}`} description={summaryPersistence.status === "saving" ? "Writing the repetition statistics and per-sample evidence to immutable local storage." : `${session.progress.currentCompetitor} · repetition ${session.progress.repetition}. Results are persisted per competitor; queued work can be cancelled.`} /></div>}
-            {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title="Arena could not start" description={session.message} error /></div>}
+            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} onCancel={() => { cancelRequestedRef.current = true; }} />}
+             {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title={translate("Arena could not start")} description={session.message} error /></div>}
           </section>
         </div>
       )}
@@ -2754,39 +2929,52 @@ function ArenaResultsSurface({
   summaryPersistence: ArenaSummaryPersistenceState;
   onOpenRuns: () => void;
 }) {
-  const [blind, setBlind] = useState(false);
+  const [blind, setBlind] = useState(request.blind === true);
   const [revealed, setRevealed] = useState(false);
-  const [scores, setScores] = useState<Record<string, number>>({});
+  const [scores, setScores] = useState<Record<string, number | null>>({});
   const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
   const [lockMessage, setLockMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState("");
   const summary = summarizeArenaExecutions(results);
-  const responseMap = responseState.status === "ready"
+  const responseMap = useMemo(() => responseState.status === "ready"
     ? new Map(Object.entries(responseState.responses).map(([key, value]) => [key, value.text]))
-    : new Map<string, string>();
-  const cards = buildBlindArenaCards(results, responseMap);
+    : new Map<string, string>(), [responseState]);
+  const cards = useMemo(() => buildBlindArenaCards(results, responseMap), [results, responseMap]);
   const grouped = groupArenaExecutions(results);
   const competitorSummaries = summarizeArenaCompetitors(results);
+  const blindExecutionLocked = request.blind === true && !revealed;
+  const showBlindEvaluation = !revealed && (blind || request.blind === true);
+  const showMeasuredResults = !blindExecutionLocked;
   const ranking = lockState === "locked"
-    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.token] ?? 3] as const)))
+    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.executionKey] ?? 3] as const)))
     : [];
 
   async function lockEvaluation() {
-    if (cards.length === 0) return;
+    if (cards.length === 0 || lockState === "busy" || lockState === "locked") return;
     setLockState("busy");
     setLockMessage(null);
     try {
       for (const card of cards) {
-        const [runId] = card.executionKey.split(":");
+        const separator = card.executionKey.indexOf(":");
+        const runId = separator > 0 ? card.executionKey.slice(0, separator) : "";
         const preparation = await prepareBlindEvaluation(runId);
-        const prepared = preparation.responses.find((response) => response.text === card.text) ?? preparation.responses[0];
-        if (!prepared) continue;
-        await lockBlindEvaluation({
-          evaluationId: preparation.evaluationId,
+        const selectedScore = scores[card.executionKey] ?? 3;
+        if (preparation.status === "locked") {
+          reconcileLegacyBlindEvaluationRetry(
+            runId,
+            card.executionKey,
+            preparation.evaluationId,
+            selectedScore,
+            await readBlindEvaluation(runId),
+          );
+          continue;
+        }
+        await lockBlindEvaluation(buildLegacyBlindEvaluationLockRequest(
           runId,
-          scores: [{ token: prepared.token, overallScore: scores[card.token] ?? 3, criterionScores: {} }],
-          ranking: [[prepared.token]],
-        });
+          card.executionKey,
+          preparation,
+          selectedScore,
+        ));
       }
       setLockState("locked");
       setRevealed(true);
@@ -2795,6 +2983,11 @@ function ArenaResultsSurface({
       setLockMessage(error instanceof Error ? error.message : "The blind evaluation could not be locked.");
     }
   }
+
+  const setScore = useCallback((executionKey: string, value: string) => {
+    setLockMessage(null);
+    setScores((current) => updateBlindEvaluationScore(current, executionKey, value));
+  }, []);
 
   function download(kind: LocalExportKind) {
     try {
@@ -2808,12 +3001,12 @@ function ArenaResultsSurface({
 
   return (
     <section className="panel arena-results-panel" aria-live="polite">
-      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{summary.completed}/{summary.total} samples completed</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
-      <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>
-      {summaryPersistence.status === "error" && <StateMessage icon="!" title="Aggregate summary unavailable" description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
-      {summaryPersistence.status === "saved" && (
+      <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Arena results")}</p><h3>{showMeasuredResults ? `${formatLocaleNumber(summary.completed)}/${formatLocaleNumber(summary.total)} ${translate("samples completed")}` : translate("Blind results locked until reveal")}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? translate("Saved") : translate("Summary unavailable")}</span></div>
+       {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label={translate("Successful")} value={formatLocaleNumber(summary.completed)} detail={`${formatLocaleNumber(summary.failed)} ${translate("failed")} · ${formatLocaleNumber(summary.cancelled)} ${translate("cancelled")}`} /><MetricCard label={translate("Success rate")} value={formatLocalePercent(summary.successRate)} detail={translate("Completed samples / total")} /><MetricCard label={translate("Average duration")} value={summary.averageDurationMs === null ? "—" : formatLocaleDuration(summary.averageDurationMs)} detail={summary.medianDurationMs === null ? translate("No timing samples") : `${translate("Median")} ${formatLocaleDuration(summary.medianDurationMs)}`} /><MetricCard label={translate("Timing spread")} value={summary.minimumDurationMs === null ? "—" : `${formatLocaleDuration(summary.minimumDurationMs)}–${summary.maximumDurationMs === null ? "—" : formatLocaleDuration(summary.maximumDurationMs)}`} detail={summary.standardDeviationDurationMs === null ? translate("No timing samples") : `σ ${formatLocaleDuration(summary.standardDeviationDurationMs)}`} /><MetricCard label={translate("Objective")} value={summary.objectiveChecked === 0 ? translate("Human review") : `${formatLocaleNumber(summary.objectivePassed)}/${formatLocaleNumber(summary.objectiveChecked)}`} detail={translate("Deterministic evidence only")} /></div>}
+       {summaryPersistence.status === "error" && <StateMessage icon="!" title={translate("Aggregate summary unavailable")} description={`${summaryPersistence.message} ${translate("Per-sample run evidence remains available.")}`} error />}
+      {showMeasuredResults && summaryPersistence.status === "saved" && (
         <div className="results-section">
-          <p className="eyebrow">Immutable Arena summary</p>
+          <p className="eyebrow">{translate("Immutable Arena summary")}</p>
           <div className="results-facts">
             <BoundaryRow label="Saved outcome" value={summaryPersistence.saveOutcome} />
             <BoundaryRow label="Content hash" value={summaryPersistence.record.contentHash} />
@@ -2821,32 +3014,170 @@ function ArenaResultsSurface({
             <BoundaryRow label="Timing tie margin" value={`${formatArenaMetric(summary.tieMargin)} ms`} />
             <BoundaryRow label="Objective uncertainty" value={formatArenaMetric(summary.objectiveUncertainty)} />
             <BoundaryRow label="Objective tie margin" value={formatArenaMetric(summary.objectiveTieMargin)} />
-            <BoundaryRow label="Per-sample evidence" value={String(summaryPersistence.record.evidence.length)} />
+            <BoundaryRow label="Per-sample evidence" value={formatLocaleNumber(summaryPersistence.record.evidence.length)} />
           </div>
         </div>
       )}
       {responseState.status === "loading" && <StateMessage icon="…" title="Reading verified response artifacts" description="Response text is loaded only from app-owned, hash-verified artifacts." />}
       {responseState.status === "error" && <StateMessage icon="!" title="Some responses are unavailable" description={responseState.message} error />}
-      {blind && !revealed ? (
+      {showBlindEvaluation ? (
         <div className="blind-arena-surface">
-          <div className="section-heading compact-heading"><div><p className="eyebrow">Blind evaluation</p><h4>Score anonymous responses before reveal</h4></div><span className="run-status run-status-neutral">Locked until submit</span></div>
-          <p className="field-help">Model, provider, runtime, timing, tokens, objective status, and rank are hidden until the evaluation lock is saved.</p>
-          {cards.length === 0 ? <EmptyState title="No completed responses" description="Only completed, verified responses can enter blind review." /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><label className="field-label" htmlFor={`score-${card.token}`}>Overall score (1–5)<select className="font-select" id={`score-${card.token}`} value={scores[card.token] ?? 3} onChange={(event) => setScores((current) => ({ ...current, [card.token]: Number(event.currentTarget.value) }))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></article>)}</div>}
-          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? "Saving evaluation…" : "Lock scores and reveal"}</button><button className="text-button" type="button" onClick={() => setBlind(false)}>Back to comparison</button></div>
+          <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Blind evaluation")}</p><h4>{translate("Score anonymous responses before reveal")}</h4></div><span className="run-status run-status-neutral">{translate("Locked until submit")}</span></div>
+          <p className="field-help">{translate("Model, provider, runtime, timing, tokens, objective status, and rank are hidden until the evaluation lock is saved.")}</p>
+            {cards.length === 0 ? <EmptyState title={translate("No completed responses")} description={translate("Only completed, verified responses can enter blind review.")} /> : <div className="blind-card-grid">{cards.map((card) => <LegacyBlindResponseCard key={card.token} card={card} score={scores[card.executionKey] ?? 3} disabled={lockState === "busy"} onScore={setScore} />)}</div>}
+          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? translate("Saving evaluation…") : translate("Lock scores and reveal")}</button>{request.blind !== true && <button className="text-button" type="button" onClick={() => setBlind(false)}>{translate("Back to comparison")}</button>}</div>
           {lockMessage && <p className="field-help" role="alert">{lockMessage}</p>}
         </div>
       ) : (
         <>
-          <div className="section-heading compact-heading"><div><p className="eyebrow">Comparison</p><h4>Responses by competitor</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>Blind evaluate</button><button className="text-button" type="button" onClick={onOpenRuns}>Open history →</button></div></div>
-          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">Competitor</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} sample{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">No response text is available for this competitor. Inspect run history for verified evidence.</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · objective ${evidence.objectivePassed ? "pass" : "fail"}`} {item.error ? `· ${item.error}` : ""}</li>; })}</ul></article>; })}</div>
-          {ranking.length > 0 && <div className="arena-ranking" aria-label="Arena ranking"><div className="section-heading compact-heading"><div><p className="eyebrow">Ranking</p><h4>Human scores after immutable lock</h4></div><span className="run-status arena-status-success">Revealed</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${entry.value.toFixed(2)}/5 average` : `${Math.round(entry.value * 100)}% objective pass rate`} · n={entry.sampleSize}</span></li>)}</ol></div>}
-          {revealed && lockState === "locked" && <p className="field-help" role="status">Blind scores are locked in immutable per-run evaluation records. Responses are now identified.</p>}
-           <div className="export-actions" role="group" aria-label="Current Arena evidence exports"><button className="secondary-button" type="button" onClick={() => download("json")}>Export JSON</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>Export Markdown</button><button className="secondary-button" type="button" onClick={() => download("csv")}>Export CSV</button></div>
+          <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Comparison")}</p><h4>{translate("Responses by competitor")}</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>{translate("Blind evaluate")}</button><button className="text-button" type="button" onClick={onOpenRuns}>{translate("Open history →")}</button></div></div>
+           <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => {
+             const first = items[0];
+             const completed = items.find((item) => item.execution?.attempt.status === "completed");
+             const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : "";
+             const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined;
+             const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId);
+             return (
+               <article className="competitor-result-card" key={competitorId}>
+                 <div className="section-heading compact-heading">
+                   <div><p className="eyebrow">{translate("Competitor")}</p><h4>{first.competitorLabel}</h4></div>
+                   <span className="field-help">{items.length} {translate(items.length === 1 ? "sample" : "samples")}</span>
+                 </div>
+                 <div className="results-facts">
+                   <BoundaryRow label={translate("Status")} value={items.every((item) => item.execution?.attempt.status === "completed") ? translate("Completed") : translate("Partial / failed")} />
+                   <BoundaryRow label={translate("Profile revision")} value={competitorId} />
+                   <BoundaryRow label={translate("Latest run")} value={completed?.runId ?? first.runId} />
+                   {competitorSummary && <><BoundaryRow label={translate("Objective uncertainty")} value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label={translate("Objective tie margin")} value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}
+                 </div>
+                 {response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}
+                 <ul className="arena-sample-list">{items.map((item) => {
+                   const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined;
+                   return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {translate(item.execution?.attempt.status ?? (item.error ? "failed before persistence" : "cancelled"))} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${formatLocaleDuration(evidence.durationMs)}`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? `· ${item.error}` : ""}</li>;
+                 })}</ul>
+               </article>
+             );
+           })}</div>
+          {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? `${formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/5 ${translate("average")}` : `${formatLocalePercent(entry.value)} ${translate("objective pass rate")} `} · n=${formatLocaleNumber(entry.sampleSize)}</span></li>)}</ol></div>}
+          {revealed && lockState === "locked" && <p className="field-help" role="status">{translate("Blind scores are locked in immutable per-run evaluation records. Responses are now identified.")}</p>}
+           <div className="export-actions" role="group" aria-label={translate("Current Arena evidence exports")}><button className="secondary-button" type="button" onClick={() => download("json")}>{translate("Export JSON")}</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>{translate("Export Markdown")}</button><button className="secondary-button" type="button" onClick={() => download("csv")}>{translate("Export CSV")}</button></div>
            {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
         </>
       )}
     </section>
   );
+}
+
+const LegacyBlindResponseCard = memo(function LegacyBlindResponseCard({
+  card,
+  score,
+  disabled,
+  onScore,
+}: {
+  card: ReturnType<typeof buildBlindArenaCards>[number];
+  score: number;
+  disabled: boolean;
+  onScore: (executionKey: string, value: string) => void;
+}) {
+  return (
+    <article className="blind-response-card">
+      <p className="eyebrow">{card.label}</p>
+      <div className="arena-response-text" tabIndex={0}>{card.text}</div>
+      <div className="blind-score-control">
+        <AccessibleListbox
+          id={`score-${card.token}`}
+          label={translate("Overall score (1–5)")}
+          value={String(score)}
+          placeholder={translate("Choose a score")}
+          options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: String(value) }))}
+          disabled={disabled}
+          onChange={(value) => onScore(card.executionKey, value)}
+        />
+      </div>
+    </article>
+  );
+});
+
+function ArenaExecutionMonitor({
+  telemetry,
+  blind,
+  saving,
+  onCancel,
+}: {
+  telemetry: ArenaTelemetry;
+  blind: boolean;
+  saving: boolean;
+  onCancel: () => void;
+}) {
+  const { locale } = useI18n();
+  const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
+    ?? [...telemetry.samples].reverse().find((sample) => sample.status !== "queued");
+  const competitors = [...new Map(telemetry.samples.map((sample) => [sample.competitorId, telemetry.samples.filter((candidate) => candidate.competitorId === sample.competitorId)])).values()];
+  const activeDisplay = arenaMonitorDisplay(telemetry, active?.sampleIndex ?? null, blind);
+  const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
+  return (
+    <div className="arena-execution-monitor" role="status" aria-live="polite">
+      <div className="section-heading compact-heading">
+        <div><p className="eyebrow">{translate("Live execution monitor")}</p><h4>{saving ? translate("Saving measured evidence") : telemetry.state === "running" ? translate("Arena is running") : translate(telemetry.state)}</h4></div>
+        <span className="run-status run-status-neutral">{formatLocaleNumber(telemetry.completed)}/{formatLocaleNumber(telemetry.total)}</span>
+      </div>
+      <div className="arena-live-facts">
+         <BoundaryRow label={translate("Arena state")} value={saving ? translate("saving") : translate(telemetry.state)} />
+         <BoundaryRow label={translate("Progress")} value={`${formatLocaleNumber(telemetry.completed)} / ${formatLocaleNumber(telemetry.total)} ${translate("samples")}`} />
+         <BoundaryRow label={translate("Arena wall time")} value={blind ? translate("Hidden during blind execution") : formatArenaMs(telemetry.wallElapsedMs)} />
+         <BoundaryRow label={translate("ETA")} value={blind ? translate("Hidden during blind execution") : telemetry.etaMs === null ? translate("Unavailable · needs 2 measured samples") : `~${formatArenaMs(telemetry.etaMs)}`} />
+      </div>
+      {active && (
+        <div className="arena-live-current">
+          <p className="eyebrow">{translate("Current sample")}</p>
+          <strong>{blind ? "" : `${arenaTelemetryLabel(active, false, locale)} · `}{translate("Sample")} {formatLocaleNumber(activeDisplay.currentSampleNumber ?? active.sampleIndex + 1)}/{formatLocaleNumber(activeDisplay.totalSamples)}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · ${translate("Repetition")} ${formatLocaleNumber(activeDisplay.repetitionNumber)}/${formatLocaleNumber(activeDisplay.repetitionsPerCompetitor)}` : ""}</strong>
+           <span>{translate(active.status)} · {blind ? translate("Elapsed hidden during blind execution") : formatArenaMs(active.elapsedMs)}</span>
+          {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
+        </div>
+      )}
+      <div className="arena-live-table" role="table" aria-label={translate("Arena competitor execution status")}>
+        <div className="arena-live-header" role="row">
+          <span role="columnheader">{translate(blind ? "Competitor" : "Model")}</span>
+          <span role="columnheader">{translate("Status")}</span>
+          <span role="columnheader">{translate("Competitor progress")}</span>
+          <span role="columnheader">{translate("Arena wall time")}</span>
+          <span role="columnheader">{translate("Metrics")}</span>
+        </div>
+        {competitors.map((samples) => {
+          const first = samples[0];
+          const latest = [...samples].reverse().find((sample) => sample.status !== "queued") ?? first;
+          const rowDisplay = arenaMonitorDisplay(telemetry, first.sampleIndex, blind);
+          const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
+          const latestError = visibleArenaTelemetryError(latest.error, blind);
+          return <div className="arena-live-row" role="row" key={first.competitorId}>
+            <strong role="cell">{arenaTelemetryLabel(first, blind, locale)}</strong>
+            <span role="cell">{translate(latest.status)}</span>
+            <span role="cell">{translate("Completed")} {formatLocaleNumber(samples.filter((sample) => sample.status === "completed").length)}/{formatLocaleNumber(samples.length)} {translate("samples")}</span>
+            <span role="cell">{blind ? translate("Timing hidden") : `${translate("Competitor total")} ${formatArenaMs(rowDisplay.competitorElapsedMs)} · ${translate("Arena total")} ${formatArenaMs(rowDisplay.arenaElapsedMs)}`}</span>
+            <span role="cell">{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
+            {latestError && <em role="cell">{translate(latestError)}</em>}
+          </div>;
+        })}
+      </div>
+      {lastError && <p className="field-help" role="alert">{translate("Failure recorded")}: {translate(lastError)}</p>}
+      {telemetry.state === "cancelled" && <p className="field-help" role="status">{translate("Cancellation recorded. Queued samples were skipped; completed evidence was retained.")}</p>}
+      {telemetry.state === "failed" && <p className="field-help" role="alert">{translate("One or more samples failed. Other sequential competitors continued where possible.")}</p>}
+       <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total}>{translate("Cancel queued work")}</button></div>
+      <p className="field-help">{translate("Sample time is measured from Arena dispatch to terminal result. Generation metrics use authoritative runtime values; unsupported values show unavailable. Local execution remains sequential.")}</p>
+    </div>
+  );
+}
+
+function formatArenaMs(value: number | null): string {
+  return formatLocaleDuration(value ?? Number.NaN);
+}
+
+function formatArenaMetrics(metrics: ReturnType<typeof visibleArenaTelemetryMetrics>): string {
+  const values = [
+    metrics.tokensPerSecond === null ? translate("tokens/s unavailable") : `${formatLocaleNumber(metrics.tokensPerSecond, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} tok/s`,
+    metrics.completionTokens === null ? translate("output unavailable") : `${formatLocaleNumber(metrics.completionTokens)} ${translate("output tokens")}`,
+    metrics.ttftMs === null ? translate("TTFT unavailable") : `TTFT ${formatLocaleDuration(metrics.ttftMs)}`,
+  ];
+  return values.join(" · ");
 }
 
 function ArenaSelect({
@@ -2861,24 +3192,18 @@ function ArenaSelect({
   id: string;
   label: string;
   value: string;
-  options: readonly { value: string; label: string; detail: string }[];
+  options: readonly AccessibleListboxOption[];
   placeholder: string;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  return (
-    <label className="arena-select-control" htmlFor={id}>
-      <span className="field-label">{label}</span>
-      <select className="font-select" id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.currentTarget.value)}>
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label} — {option.detail}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
+  const { t } = useI18n();
+  const translatedOptions = useMemo(() => options.map((option) => ({
+    ...option,
+    label: t(option.label),
+    detail: option.detail ? t(option.detail) : option.detail,
+  })), [options, t]);
+  return <AccessibleListbox id={id} label={label} value={value} options={translatedOptions} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
 }
 
 function ArenaExecutionResult({
@@ -2889,38 +3214,38 @@ function ArenaExecutionResult({
   onOpenRuns: () => void;
 }) {
   const status = arenaTerminalStatus(execution.attempt.status);
-  const statusLabel = status === "success" ? "Completed" : status === "cancelled" ? "Cancelled" : "Failed";
+  const statusLabel = translate(status === "success" ? "Completed" : status === "cancelled" ? "Cancelled" : "Failed");
   return (
     <div className="arena-terminal" role="status">
-      <div className="section-heading compact-heading">
+       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Terminal outcome</p>
+          <p className="eyebrow">{translate("Terminal outcome")}</p>
           <h3>{statusLabel}</h3>
         </div>
-        <span className={`run-status arena-status-${status}`}>{execution.attempt.status}</span>
+         <span className={`run-status arena-status-${status}`}>{translate(execution.attempt.status)}</span>
       </div>
       <div className="arena-terminal-facts">
-        <BoundaryRow label="Run ID" value={execution.run.runId} />
-        <BoundaryRow label="Attempt ID" value={execution.attempt.attemptId} />
-        <BoundaryRow label="Saved outcome" value={execution.saveOutcome} />
+         <BoundaryRow label={translate("Run ID")} value={execution.run.runId} />
+         <BoundaryRow label={translate("Attempt ID")} value={execution.attempt.attemptId} />
+         <BoundaryRow label={translate("Saved outcome")} value={execution.saveOutcome} />
       </div>
       <div className="arena-progress">
-        <p className="eyebrow">Progress</p>
+        <p className="eyebrow">{translate("Progress")}</p>
         {execution.progress.length === 0 ? (
-          <p className="field-help">No progress events were returned.</p>
+          <p className="field-help">{translate("No progress events were returned.")}</p>
         ) : (
           <ul className="arena-progress-list">
             {execution.progress.map((event) => (
               <li key={`${event.sequence}-${event.kind}`}>
-                <strong>#{event.sequence} {event.kind}</strong>
-                {event.text ? ` · ${event.text}` : ""}
+                <strong>#{event.sequence} {translate(event.kind)}</strong>
+                {event.text ? ` · ${translate(event.text)}` : ""}
               </li>
             ))}
           </ul>
         )}
       </div>
       <button className="text-button" type="button" onClick={onOpenRuns}>
-        Open run history <span aria-hidden="true">→</span>
+        {translate("Open run history")} <span aria-hidden="true">→</span>
       </button>
     </div>
   );
@@ -3063,33 +3388,32 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Execution history</p>
-        <h2>Runs</h2>
+        <p className="eyebrow">{translate("Execution history")}</p>
+        <h2>{translate("Runs")}</h2>
         <p>
-          Runs and Arena summaries are read from the app-owned local store. Select a record to inspect its persisted
-          configuration, verified response evidence, and deterministic metrics. Browser preview never creates sample data.
+          {translate("Runs and Arena summaries are read from the app-owned local store. Select a record to inspect its persisted configuration, verified response evidence, and deterministic metrics. Browser preview never creates sample data.")}
         </p>
       </section>
       <section className="panel runs-panel" aria-live="polite">
         {state.status === "loading" && (
-          <StateMessage icon="…" title="Loading local runs" description="Reading immutable run records from the app store." />
+           <StateMessage icon="…" title={translate("Loading local runs")} description={translate("Reading immutable run records from the app store.")} />
         )}
         {state.status === "error" && (
           <StateMessage
             icon="!"
-            title="Run history unavailable"
+             title={translate("Run history unavailable")}
             description={state.message}
             error
           />
         )}
         {state.status === "preview" && (
-          <StateMessage icon="◇" title="Browser preview / no reads" description="The browser preview cannot read desktop runs or response artifacts. Open the desktop app to inspect persisted evidence; this view invents no records." />
+           <StateMessage icon="◇" title={translate("Browser preview / no reads")} description={translate("The browser preview cannot read desktop runs or response artifacts. Open the desktop app to inspect persisted evidence; this view invents no records.")} />
         )}
         {state.status === "ready" && state.runs.length === 0 && state.summaries.length === 0 && (
           <EmptyState
-            title="No run history"
-            description="There are no local run records yet. No sample runs are bundled or invented in this view."
-            actionLabel="Open Arena"
+             title={translate("No run history")}
+             description={translate("There are no local run records yet. No sample runs are bundled or invented in this view.")}
+             actionLabel={translate("Open Arena")}
             onAction={() => onNavigate("arena")}
           />
         )}
@@ -3097,30 +3421,30 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
           <>
             <div className="history-toolbar">
               <label className="history-filter-label" htmlFor="run-history-filter">
-                <span className="field-label">Find a run</span>
+                <span className="field-label">{translate("Find a run")}</span>
                 <input
                   className="history-filter"
                   id="run-history-filter"
                   type="search"
                   value={historyQuery}
                   onChange={(event) => setHistoryQuery(event.currentTarget.value)}
-                  placeholder="Run, benchmark, profile, or status"
+                  placeholder={translate("Run, benchmark, profile, or status")}
                 />
               </label>
-              <span className="field-help" role="status">{filteredRuns.length} of {state.runs.length} runs shown</span>
+              <span className="field-help" role="status">{filteredRuns.length} {translate("of")} {state.runs.length} {translate("runs shown")}</span>
             </div>
             {filteredRuns.length === 0 ? (
-              <EmptyState title="No matching runs" description="No persisted run matches this local filter. Clear the filter to see all records." />
+               <EmptyState title={translate("No matching runs")} description={translate("No persisted run matches this local filter. Clear the filter to see all records.")} />
             ) : (
               <div className="runs-layout">
-                <div className="runs-list" aria-label="Run records">
+                 <div className="runs-list" aria-label={translate("Run records")}>
                   {filteredRuns.map((run) => (
                 <button
                   className={`run-row ${selectedRunId === run.runId ? "is-selected" : ""}`}
                   key={run.runId}
                   type="button"
                   aria-pressed={selectedRunId === run.runId}
-                  aria-label={`${run.runId}, ${attemptStatusLabel(run.status)}, ${run.attemptIds.length} attempts`}
+                   aria-label={`${run.runId}, ${translate(attemptStatusLabel(run.status))}, ${run.attemptIds.length} ${translate("attempts")}`}
                   onClick={() => {
                     setBlindEvaluationStatus("loading");
                     setSelectedRunId(run.runId);
@@ -3130,11 +3454,11 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                     <p className="eyebrow">{run.benchmarkVersionId}</p>
                     <h3>{run.runId}</h3>
                     <p className="run-meta">
-                      {run.attemptIds.length} attempt{run.attemptIds.length === 1 ? "" : "s"} · {run.profileRevisionIds.length} profile revision{run.profileRevisionIds.length === 1 ? "" : "s"} · started {run.startedAt}
+                      {formatLocaleNumber(run.attemptIds.length)} {translate(run.attemptIds.length === 1 ? "attempt" : "attempts")} · {formatLocaleNumber(run.profileRevisionIds.length)} {translate(run.profileRevisionIds.length === 1 ? "profile revision" : "profile revisions")} · {translate("started")} {formatDisplayTimestamp(run.startedAt)}
                     </p>
                   </div>
                   <span className={`run-status run-status-${attemptStatusTone(run.status)}`}>
-                    {attemptStatusLabel(run.status)}
+                     {translate(attemptStatusLabel(run.status))}
                   </span>
                 </button>
               ))}
@@ -3142,22 +3466,22 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
             <section
               className="attempts-panel"
               aria-live="polite"
-              aria-label={selectedRun && blindReviewHidesAttemptEvidence(blindEvaluationStatus) ? "Blind human evaluation" : "Attempt evidence"}
+              aria-label={translate(selectedRun && blindReviewHidesAttemptEvidence(blindEvaluationStatus) ? "Blind human evaluation" : "Attempt evidence")}
             >
               {!selectedRun && (
-                <StateMessage icon="◇" title="Select a run" description="Choose one existing run to read its immutable attempt evidence." />
+                 <StateMessage icon="◇" title={translate("Select a run")} description={translate("Choose one existing run to read its immutable attempt evidence.")} />
               )}
               {selectedRun && <BlindEvaluationPanel key={selectedRun.runId} runId={selectedRun.runId} onStatusChange={setBlindEvaluationStatus} />}
               {selectedRun && !blindReviewHidesAttemptEvidence(blindEvaluationStatus) && (
                 <>
                   {attemptsState.status === "loading" && (
-                    <StateMessage icon="…" title="Loading attempts" description="Reading typed attempt records from the app-owned store." />
+                     <StateMessage icon="…" title={translate("Loading attempts")} description={translate("Reading typed attempt records from the app-owned store.")} />
                   )}
                   {attemptsState.status === "error" && (
-                    <StateMessage icon="!" title="Attempts unavailable" description={attemptsState.message} error />
+                     <StateMessage icon="!" title={translate("Attempts unavailable")} description={attemptsState.message} error />
                   )}
                   {attemptsState.status === "ready" && attemptsState.attempts.length === 0 && (
-                    <EmptyState title="No attempts for this run" description="The local store returned no attempt records; this view does not invent them." />
+                     <EmptyState title={translate("No attempts for this run")} description={translate("The local store returned no attempt records; this view does not invent them.")} />
                   )}
                       {attemptsState.status === "ready" && attemptsState.attempts.length > 0 && (
                     <div className="attempts-list">
@@ -3166,8 +3490,8 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                       ))}
                     </div>
                   )}
-                  {responsesState.status === "loading" && <StateMessage icon="…" title="Reading verified responses" description="Opening only hash-verified response artifacts from the selected run." />}
-                  {responsesState.status === "partial" && <p className="field-help" role="status">{responsesState.message} Available response artifacts remain visible below.</p>}
+                   {responsesState.status === "loading" && <StateMessage icon="…" title={translate("Reading verified responses")} description={translate("Opening only hash-verified response artifacts from the selected run.")} />}
+                  {responsesState.status === "partial" && <p className="field-help" role="status">{translate(responsesState.message)} {translate("Available response artifacts remain visible below.")}</p>}
                   {attemptsState.status === "ready" && (
                     <ComparabilityPanel run={selectedRun} attempts={attemptsState.attempts} />
                   )}
@@ -3229,40 +3553,40 @@ function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] })
   }
 
   return (
-    <section className="results-section" aria-live="polite" aria-label="Arena summary history">
+    <section className="results-section" aria-live="polite" aria-label={translate("Arena summary history")}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Aggregate evidence</p>
-          <h3>Arena summaries</h3>
+          <p className="eyebrow">{translate("Aggregate evidence")}</p>
+          <h3>{translate("Arena summaries")}</h3>
         </div>
-        <span className="run-status run-status-neutral">immutable</span>
+        <span className="run-status run-status-neutral">{translate("immutable")}</span>
       </div>
       {summaries.length === 0 ? (
-        <p className="field-help">No aggregate Arena summaries have been saved yet.</p>
+        <p className="field-help">{translate("No aggregate Arena summaries have been saved yet.")}</p>
       ) : (
         <div className="runs-layout">
-          <div className="runs-list" aria-label="Arena summary records">
+          <div className="runs-list" aria-label={translate("Arena summary records")}>
             {orderedSummaries.map((summary) => (
               <button
                 className={`benchmark-record-row ${selectedArenaId === summary.arenaId ? "is-selected" : ""}`}
                 key={summary.arenaId}
                 type="button"
                 aria-pressed={selectedArenaId === summary.arenaId}
-                aria-label={`${summary.arenaId}, ${summary.evidence.length} persisted samples, saved ${summary.createdAt}`}
+                   aria-label={`${summary.arenaId}, ${formatLocaleNumber(summary.evidence.length)} ${translate("persisted samples")}, ${translate("saved")} ${formatDisplayTimestamp(summary.createdAt)}`}
                 onClick={() => void selectSummary(summary.arenaId)}
               >
                 <span>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)} {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
                 </span>
                 <span aria-hidden="true">→</span>
               </button>
             ))}
           </div>
           <div className="attempts-panel">
-            {detail.status === "idle" && <StateMessage icon="◇" title="Select an Arena summary" description="Choose an immutable aggregate record to reload its statistics and sample evidence." />}
-            {detail.status === "loading" && <StateMessage icon="…" title="Loading Arena summary" description="Reading the selected immutable aggregate record." />}
-            {detail.status === "error" && <StateMessage icon="!" title="Arena summary unavailable" description={detail.message} error />}
+             {detail.status === "idle" && <StateMessage icon="◇" title={translate("Select an Arena summary")} description={translate("Choose an immutable aggregate record to reload its statistics and sample evidence.")} />}
+             {detail.status === "loading" && <StateMessage icon="…" title={translate("Loading Arena summary")} description={translate("Reading the selected immutable aggregate record.")} />}
+             {detail.status === "error" && <StateMessage icon="!" title={translate("Arena summary unavailable")} description={detail.message} error />}
             {detail.status === "ready" && (
               <ArenaSummaryHistoryDetail record={detail.record} />
             )}
@@ -3310,16 +3634,16 @@ function ArenaSummaryExportActions({ record }: { record: ArenaSummaryRecord }) {
     <section className="results-section export-section" aria-labelledby="persisted-export-heading">
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Local export</p>
-          <h4 id="persisted-export-heading">Download persisted evidence</h4>
+      <p className="eyebrow">{translate("Local export")}</p>
+          <h4 id="persisted-export-heading">{translate("Download persisted evidence")}</h4>
         </div>
-        <span className="run-status run-status-neutral">bounded</span>
+        <span className="run-status run-status-neutral">{translate("bounded")}</span>
       </div>
-      <p className="field-help">Exports use the saved Arena summary only. They contain deterministic metadata and metrics, never response text, API keys, or credential material.</p>
-      <div className="export-actions" role="group" aria-label="Persisted Arena evidence exports">
-        <button className="secondary-button" type="button" onClick={() => exportRecord("json")}>JSON</button>
-        <button className="secondary-button" type="button" onClick={() => exportRecord("markdown")}>Markdown</button>
-        <button className="secondary-button" type="button" onClick={() => exportRecord("csv")}>CSV</button>
+      <p className="field-help">{translate("Exports use the saved Arena summary only. They contain deterministic metadata and metrics, never response text, API keys, or credential material.")}</p>
+      <div className="export-actions" role="group" aria-label={translate("Persisted Arena evidence exports")}>
+        <button className="secondary-button" type="button" onClick={() => exportRecord("json")}>{translate("JSON")}</button>
+        <button className="secondary-button" type="button" onClick={() => exportRecord("markdown")}>{translate("Markdown")}</button>
+        <button className="secondary-button" type="button" onClick={() => exportRecord("csv")}>{translate("CSV")}</button>
       </div>
       {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
     </section>
@@ -3333,9 +3657,9 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       <div className="results-facts">
         <BoundaryRow label="Arena" value={record.arenaId} />
         <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
-        <BoundaryRow label="Saved" value={record.createdAt} />
+        <BoundaryRow label="Saved" value={formatDisplayTimestamp(record.createdAt)} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
-        <BoundaryRow label="Samples" value={String(record.evidence.length)} />
+        <BoundaryRow label="Samples" value={formatLocaleNumber(record.evidence.length)} />
         <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
         <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
         <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
@@ -3344,40 +3668,40 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
         <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
       </div>
       <div className="results-section">
-        <p className="eyebrow">Competitor summaries</p>
+        <p className="eyebrow">{translate("Competitor summaries")}</p>
         {record.competitors.length === 0 ? (
-          <p className="field-help">No competitor summary rows were persisted in this record.</p>
+          <p className="field-help">{translate("No competitor summary rows were persisted in this record.")}</p>
         ) : (
           <ul className="arena-sample-list">
             {record.competitors.map((competitor, index) => (
               <li key={`${String(competitor.competitorId ?? index)}`}>
                 <strong>{String(competitor.competitorLabel ?? competitor.competitorId ?? `Competitor ${index + 1}`)}</strong>
-                {` · ${summaryNumberText(competitor, "completed")}/${summaryNumberText(competitor, "total")} completed`}
-                {` · uncertainty ${summaryMetricText(competitor, "uncertainty")}`}
-                {` · tie margin ${summaryMetricText(competitor, "tieMargin")}`}
+                {` · ${summaryNumberText(competitor, "completed")}/${summaryNumberText(competitor, "total")} ${translate("completed")}`}
+                {` · ${translate("uncertainty")} ${summaryMetricText(competitor, "uncertainty")}`}
+                {` · ${translate("tie margin")} ${summaryMetricText(competitor, "tieMargin")}`}
               </li>
             ))}
           </ul>
         )}
       </div>
       <div className="results-section">
-        <p className="eyebrow">Per-sample evidence</p>
+        <p className="eyebrow">{translate("Per-sample evidence")}</p>
         {record.evidence.length === 0 ? (
-          <p className="field-help">No per-sample evidence was persisted in this record.</p>
+          <p className="field-help">{translate("No per-sample evidence was persisted in this record.")}</p>
         ) : (
           <div className="evidence-table-wrap">
             <table className="evidence-table">
-              <caption className="sr-only">Persisted Arena sample evidence</caption>
+              <caption className="sr-only">{translate("Persisted Arena sample evidence")}</caption>
               <thead>
                 <tr>
-                  <th scope="col">Competitor</th>
-                  <th scope="col">Sample</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Run / attempt</th>
-                  <th scope="col">Duration</th>
-                  <th scope="col">Tokens/s</th>
-                  <th scope="col">Completion tokens</th>
-                  <th scope="col">Objective</th>
+                  <th scope="col">{translate("Competitor")}</th>
+                  <th scope="col">{translate("Sample")}</th>
+                  <th scope="col">{translate("Status")}</th>
+                  <th scope="col">{translate("Run / attempt")}</th>
+                  <th scope="col">{translate("Duration")}</th>
+                  <th scope="col">{translate("Tokens/s")}</th>
+                  <th scope="col">{translate("Completion tokens")}</th>
+                  <th scope="col">{translate("Objective")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -3385,12 +3709,12 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
                   <tr key={`${evidence.runId}-${evidence.repetition}-${index}`}>
                     <th scope="row">{evidence.competitorLabel}</th>
                     <td>#{evidence.repetition}</td>
-                    <td>{evidence.status}</td>
+                    <td>{translate(evidence.status)}</td>
                     <td><code>{evidence.runId}{evidence.attemptId ? ` / ${evidence.attemptId}` : ""}</code></td>
-                    <td>{evidence.durationMs === null ? "Not recorded" : `${evidence.durationMs.toFixed(0)} ms`}</td>
-                    <td>{evidence.tokensPerSecond === null || evidence.tokensPerSecond === undefined ? "Not recorded" : evidence.tokensPerSecond.toFixed(2)}</td>
-                    <td>{evidence.completionTokens === null ? "Not recorded" : evidence.completionTokens}</td>
-                    <td>{evidence.objectivePassed === null ? "Not recorded" : evidence.objectivePassed ? "Pass" : "Fail"}</td>
+                    <td>{evidence.durationMs === null ? translate("Not recorded") : formatLocaleDuration(evidence.durationMs)}</td>
+                    <td>{evidence.tokensPerSecond === null || evidence.tokensPerSecond === undefined ? translate("Not recorded") : formatLocaleNumber(evidence.tokensPerSecond, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td>{evidence.completionTokens === null ? translate("Not recorded") : formatLocaleNumber(evidence.completionTokens)}</td>
+                    <td>{evidence.objectivePassed === null ? translate("Not recorded") : evidence.objectivePassed ? translate("Pass") : translate("Fail")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3407,28 +3731,27 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
   const diagnostic = assessRunComparability(run, attempts);
   const { dimensions } = diagnostic;
   const terminalStatus = dimensions.terminalStatus.runTerminal && dimensions.terminalStatus.attemptsTerminal
-    ? "Terminal"
-    : "Not terminal";
+    ? translate("Terminal")
+    : translate("Not terminal");
   const configuration = dimensions.configurationConsistency === "consistent"
-    ? "Consistent"
+    ? translate("Consistent")
     : dimensions.configurationConsistency === "inconsistent"
-      ? "Inconsistent"
-      : "Unavailable";
+      ? translate("Inconsistent")
+      : translate("Unavailable");
 
   return (
-    <section className="comparability-panel results-section" aria-live="polite" aria-label="Comparability diagnostic">
+    <section className="comparability-panel results-section" aria-live="polite" aria-label={translate("Comparability diagnostic")}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Read-only diagnostic</p>
-          <h3>Comparability check</h3>
+          <p className="eyebrow">{translate("Read-only diagnostic")}</p>
+          <h3>{translate("Comparability check")}</h3>
         </div>
         <span className={`run-status ${diagnostic.status === "ready" ? "" : "run-status-neutral"}`}>
           {diagnostic.label}
         </span>
       </div>
       <p className="field-help">
-        This bounded single-run diagnostic is not an official ranking, cross-run comparison, regression, tournament,
-        human score, or AI judgment.
+        {translate("This bounded single-run diagnostic is not an official ranking, cross-run comparison, regression, tournament, human score, or AI judgment.")}
       </p>
       <div className="results-facts">
         <BoundaryRow label="Benchmark version identity" value={dimensions.benchmarkVersionIdentity === "declared" ? "Declared" : "Missing"} />
@@ -3449,13 +3772,13 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
         <div className="comparability-diagnostic">
           <p className="eyebrow">{diagnostic.objectiveDiagnostic.label}</p>
           <p className="field-help">
-            Exact-text pass/fail groups are shown for completed attempts only; this is diagnostic evidence, not a score.
+            {translate("Exact-text pass/fail groups are shown for completed attempts only; this is diagnostic evidence, not a score.")}
           </p>
           <ol className="comparability-ordering">
             {diagnostic.objectiveDiagnostic.groups.map((group) => (
               <li key={`${group.rank}-${group.outcome}`}>
-                <strong>Position {group.rank}: {group.outcome === "passed" ? "objective pass" : "objective fail"}</strong>
-                <span>{group.relation === "tie" ? "Tie" : "Order"} · {group.attemptIds.join(", ")}</span>
+                <strong>{translate("Position")} {group.rank}: {translate(group.outcome === "passed" ? "objective pass" : "objective fail")}</strong>
+                <span>{translate(group.relation === "tie" ? "Tie" : "Order")} · {group.attemptIds.join(", ")}</span>
               </li>
             ))}
           </ol>
@@ -3475,6 +3798,39 @@ type BlindEvaluationState =
   | { status: "error"; message: string };
 
 type BlindEvaluationSurfaceStatus = BlindEvaluationState["status"];
+
+const BlindResponsePane = memo(function BlindResponsePane({
+  response,
+  score,
+  onScore,
+}: {
+  response: BlindEvaluationPreparation["responses"][number];
+  score: number | null;
+  onScore: (token: string, value: string) => void;
+}) {
+  return (
+    <article className="blind-response-card" key={response.token}>
+      <p className="eyebrow">{response.label}</p>
+      <div
+        className="blind-response-text"
+        tabIndex={0}
+        style={{ maxHeight: `${BLIND_RESPONSE_MAX_HEIGHT_PX}px`, overflowY: "auto" }}
+      >
+        {response.text}
+      </div>
+      <div className="blind-score-control">
+        <AccessibleListbox
+          id={`blind-score-${response.token}`}
+          label={translate("Overall score")}
+          value={score === null ? "" : String(score)}
+          placeholder={translate("Choose 1–5")}
+          options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: `${value}/5` }))}
+          onChange={(value) => onScore(response.token, value)}
+        />
+      </div>
+    </article>
+  );
+});
 
 function BlindEvaluationPanel({
   runId,
@@ -3541,14 +3897,16 @@ function BlindEvaluationPanel({
     }
   };
 
-  const setScore = (token: string, value: string) => {
-    if (state.status !== "prepared") return;
+  const setScore = useCallback((token: string, value: string) => {
     setValidationMessage("");
-    updateState({
-      ...state,
-      scores: { ...state.scores, [token]: value ? Number(value) : null },
+    setState((current) => {
+      if (current.status !== "prepared") return current;
+      return {
+        ...current,
+        scores: updateBlindEvaluationScore(current.scores, token, value),
+      };
     });
-  };
+  }, []);
 
   const setRankingToken = (index: number, token: string) => {
     if (state.status !== "prepared" || !state.rankingTokens) return;
@@ -3561,14 +3919,14 @@ function BlindEvaluationPanel({
     if (state.status !== "prepared") return;
     const responses = state.preparation.responses;
     if (responses.some((response) => state.scores[response.token] === null || state.scores[response.token] === undefined)) {
-      setValidationMessage("Score every anonymous response from 1 to 5 before locking.");
+       setValidationMessage(translate("Score every anonymous response from 1 to 5 before locking."));
       return;
     }
     if (state.rankingTokens && new Set(state.rankingTokens).size !== responses.length) {
-      setValidationMessage("Complete the ranking without duplicate responses, or remove ranking.");
+       setValidationMessage(translate("Complete the ranking without duplicate responses, or remove ranking."));
       return;
     }
-    if (!window.confirm("Lock this blind evaluation? It becomes immutable and cannot be changed.")) return;
+     if (!window.confirm(translate("Lock this blind evaluation? It becomes immutable and cannot be changed."))) return;
     const scores: BlindEvaluationScore[] = responses.map((response) => ({
       token: response.token,
       overallScore: state.scores[response.token] as number,
@@ -3592,98 +3950,92 @@ function BlindEvaluationPanel({
   };
 
   return (
-    <section className="evaluation-panel results-section" aria-live="polite" aria-label="Blind human evaluation">
+     <section className="evaluation-panel results-section" aria-live="polite" aria-label={translate("Blind human evaluation")}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Human evaluation</p>
-          <h3>Blind response review</h3>
+           <p className="eyebrow">{translate("Human evaluation")}</p>
+           <h3>{translate("Blind response review")}</h3>
         </div>
         {state.status !== "idle" && state.status !== "loading" && state.status !== "preparing" && (
           <span className="run-status run-status-neutral">{blindEvaluationStatusLabel(state.status === "prepared" || state.status === "empty" ? state.preparation.status : state.status)}</span>
         )}
       </div>
       {!isDesktopEnvironment() && (
-        <StateMessage icon="◇" title="Browser preview / no writes" description="Blind evaluation reads real local run artifacts only in the desktop workspace; preview invents no responses." />
+         <StateMessage icon="◇" title={translate("Browser preview / no writes")} description={translate("Blind evaluation reads real local run artifacts only in the desktop workspace; preview invents no responses.")} />
       )}
       {isDesktopEnvironment() && state.status === "loading" && (
-        <StateMessage icon="…" title="Checking evaluation state" description="Reading only the selected run's immutable evaluation record." />
+         <StateMessage icon="…" title={translate("Checking evaluation state")} description={translate("Reading only the selected run's immutable evaluation record.")} />
       )}
       {isDesktopEnvironment() && state.status === "idle" && (
         <>
-          <p className="field-help">Prepare a blind presentation from completed generation responses. Model, profile, provider, endpoint, metrics, objective evidence, and attempt IDs stay out of the presentation.</p>
-          <button className="secondary-button" type="button" onClick={() => void prepare()}>Prepare anonymous responses</button>
+           <p className="field-help">{translate("Prepare a blind presentation from completed generation responses. Model, profile, provider, endpoint, metrics, objective evidence, and attempt IDs stay out of the presentation.")}</p>
+           <button className="secondary-button" type="button" onClick={() => void prepare()}>{translate("Prepare anonymous responses")}</button>
         </>
       )}
       {isDesktopEnvironment() && state.status === "preparing" && (
-        <StateMessage icon="…" title="Preparing anonymous responses" description="Verifying app-owned generation artifacts and building a stable anonymous order." />
+         <StateMessage icon="…" title={translate("Preparing anonymous responses")} description={translate("Verifying app-owned generation artifacts and building a stable anonymous order.")} />
       )}
       {isDesktopEnvironment() && state.status === "error" && (
         <StateMessage icon="!" title="Evaluation unavailable" description={state.message} error />
       )}
       {isDesktopEnvironment() && state.status === "empty" && (
-        <StateMessage icon="—" title={blindEvaluationStatusLabel(state.preparation.status)} description="This run has no completed attempts with verified generation-response artifacts." />
+         <StateMessage icon="—" title={translate(blindEvaluationStatusLabel(state.preparation.status))} description={translate("This run has no completed attempts with verified generation-response artifacts.")} />
       )}
       {isDesktopEnvironment() && state.status === "prepared" && (
         <div className="blind-review-content">
-          <p className="blind-review-warning">Responses below are untrusted plain text. They are rendered as text only; no identity metadata is available before lock.</p>
+          <p className="blind-review-warning">{translate("Responses below are untrusted plain text. They are rendered as text only; no identity metadata is available before lock.")}</p>
           <div className="blind-response-grid">
             {state.preparation.responses.map((response) => (
-              <article className="blind-response-card" key={response.token}>
-                <p className="eyebrow">{response.label}</p>
-                <div className="blind-response-text">{response.text}</div>
-                <label className="blind-score-control">
-                  <span>Overall score</span>
-                  <select value={state.scores[response.token] ?? ""} onChange={(event) => setScore(response.token, event.target.value)}>
-                    <option value="">Choose 1–5</option>
-                    {[1, 2, 3, 4, 5].map((score) => <option key={score} value={score}>{score}/5</option>)}
-                  </select>
-                </label>
-              </article>
+              <BlindResponsePane key={response.token} response={response} score={state.scores[response.token]} onScore={setScore} />
             ))}
           </div>
           <div className="blind-ranking-controls">
             <div className="section-heading compact-heading">
               <div>
-                <p className="eyebrow">Optional ranking</p>
-                <p className="field-help">Choose a complete order; equal positions can be represented by the typed lock request.</p>
+                 <p className="eyebrow">{translate("Optional ranking")}</p>
+                 <p className="field-help">{translate("Choose a complete order; equal positions can be represented by the typed lock request.")}</p>
               </div>
               {state.rankingTokens ? (
-                <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: null })}>Remove ranking</button>
+                 <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: null })}>{translate("Remove ranking")}</button>
               ) : (
-                <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: state.preparation.responses.map((response) => response.token) })}>Add ranking</button>
+                 <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: state.preparation.responses.map((response) => response.token) })}>{translate("Add ranking")}</button>
               )}
             </div>
             {state.rankingTokens && state.rankingTokens.map((token, index) => {
               const current = state.preparation.responses.find((response) => response.token === token);
               const usedElsewhere = new Set(state.rankingTokens?.filter((_, position) => position !== index));
               return (
-                <label className="blind-score-control" key={`${token}-${index}`}>
-                  <span>Rank {index + 1}</span>
-                  <select value={token} onChange={(event) => setRankingToken(index, event.target.value)}>
-                    {state.preparation.responses
+                <div className="blind-score-control" key={`${token}-${index}`}>
+                  <AccessibleListbox
+                    id={`blind-rank-${index}`}
+                    label={`${translate("Rank")} ${index + 1}`}
+                    value={token}
+                    placeholder={translate("Choose a response")}
+                    options={state.preparation.responses
                       .filter((response) => response.token === token || !usedElsewhere.has(response.token))
-                      .map((response) => <option key={response.token} value={response.token}>{response.label}</option>)}
-                  </select>
+                      .map((response) => ({ value: response.token, label: response.label }))}
+                    onChange={(value) => setRankingToken(index, value)}
+                  />
                   <span className="sr-only">{current?.label}</span>
-                </label>
+                </div>
               );
             })}
           </div>
           {validationMessage && <p className="field-help evaluation-validation" role="alert">{validationMessage}</p>}
-          <button className="primary-button" type="button" onClick={() => void lock()}>Lock blind evaluation</button>
-          <p className="field-help">Locking stores only anonymous presentation evidence, resolved attempt IDs for audit, scores, ranking, and timestamps. Response text is not stored in the evaluation record.</p>
+           <button className="primary-button" type="button" onClick={() => void lock()}>{translate("Lock blind evaluation")}</button>
+           <p className="field-help">{translate("Locking stores only anonymous presentation evidence, resolved attempt IDs for audit, scores, ranking, and timestamps. Response text is not stored in the evaluation record.")}</p>
         </div>
       )}
       {isDesktopEnvironment() && state.status === "locked" && (
         <div className="locked-evaluation">
-          <p className="blind-review-warning">This evaluation is immutable and read-only. Response text is omitted; audit identity is shown only after lock.</p>
+           <p className="blind-review-warning">{translate("This evaluation is immutable and read-only. Response text is omitted; audit identity is shown only after lock.")}</p>
           <ul className="locked-evaluation-list">
             {state.record.presentation.map((entry) => {
               const score = state.record.scores.find((candidate) => candidate.token === entry.token);
-              return <li key={entry.token}><strong>{entry.label}</strong><span>Attempt {entry.attemptId} · {blindEvaluationScoreLabel(score?.overallScore)}</span></li>;
+               return <li key={entry.token}><strong>{entry.label}</strong><span>{translate("Attempt")} {entry.attemptId} · {translate(blindEvaluationScoreLabel(score?.overallScore))}</span></li>;
             })}
           </ul>
-          {state.record.ranking && <p className="field-help">A complete ranking or tie-group representation is recorded.</p>}
+           {state.record.ranking && <p className="field-help">{translate("A complete ranking or tie-group representation is recorded.")}</p>}
         </div>
       )}
     </section>
@@ -3704,110 +4056,110 @@ function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response
     <article className="attempt-card">
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Attempt evidence</p>
+           <p className="eyebrow">{translate("Attempt evidence")}</p>
           <h3>{attempt.attemptId}</h3>
         </div>
         <span className={`run-status run-status-${tone}`}>{attemptStatusLabel(attempt.status)}</span>
       </div>
       <div className="results-facts">
-        <BoundaryRow label="Run ID" value={attempt.runId} />
-        <BoundaryRow label="Profile revision" value={attempt.profileRevisionId} />
-        <BoundaryRow label="Case" value={attempt.caseId} />
+         <BoundaryRow label={translate("Run ID")} value={attempt.runId} />
+         <BoundaryRow label={translate("Profile revision")} value={attempt.profileRevisionId} />
+         <BoundaryRow label={translate("Case")} value={attempt.caseId} />
       </div>
 
       <div className="results-section">
-        <p className="eyebrow">Response summary</p>
+         <p className="eyebrow">{translate("Response summary")}</p>
         {summary ? (
           <div className="results-facts">
-            <BoundaryRow label="Model" value={summary.model} />
-            <BoundaryRow label="Finish reason" value={summary.finishReason ?? "Not recorded"} />
-            <BoundaryRow label="Response size" value={formatByteCount(summary.responseTextByteCount)} />
-            <BoundaryRow label="Tool calls" value={formatCount(summary.toolCallCount)} />
+             <BoundaryRow label={translate("Model")} value={summary.model} />
+             <BoundaryRow label={translate("Finish reason")} value={summary.finishReason ?? translate("Not recorded")} />
+             <BoundaryRow label={translate("Response size")} value={formatByteCount(summary.responseTextByteCount)} />
+             <BoundaryRow label={translate("Tool calls")} value={formatCount(summary.toolCallCount)} />
             {summary.usage && (
               <>
-                <BoundaryRow label="Prompt tokens" value={formatCount(summary.usage.promptTokens)} />
-                <BoundaryRow label="Completion tokens" value={formatCount(summary.usage.completionTokens)} />
-                <BoundaryRow label="Total tokens" value={formatCount(summary.usage.totalTokens)} />
+                 <BoundaryRow label={translate("Prompt tokens")} value={formatCount(summary.usage.promptTokens)} />
+                 <BoundaryRow label={translate("Completion tokens")} value={formatCount(summary.usage.completionTokens)} />
+                 <BoundaryRow label={translate("Total tokens")} value={formatCount(summary.usage.totalTokens)} />
               </>
             )}
             {summary.timing && (
               <>
-                <BoundaryRow label="Total duration" value={formatDurationNs(summary.timing.totalDurationNs)} />
-                <BoundaryRow label="Load duration" value={formatDurationNs(summary.timing.loadDurationNs)} />
-                <BoundaryRow label="Prompt eval duration" value={formatDurationNs(summary.timing.promptEvalDurationNs)} />
-                <BoundaryRow label="Eval duration" value={formatDurationNs(summary.timing.evalDurationNs)} />
+                 <BoundaryRow label={translate("Total duration")} value={formatDurationNs(summary.timing.totalDurationNs)} />
+                 <BoundaryRow label={translate("Load duration")} value={formatDurationNs(summary.timing.loadDurationNs)} />
+                 <BoundaryRow label={translate("Prompt eval duration")} value={formatDurationNs(summary.timing.promptEvalDurationNs)} />
+                 <BoundaryRow label={translate("Eval duration")} value={formatDurationNs(summary.timing.evalDurationNs)} />
               </>
             )}
           </div>
         ) : (
-          <p className="field-help">No response summary was persisted for this terminal attempt.</p>
+           <p className="field-help">{translate("No response summary was persisted for this terminal attempt.")}</p>
         )}
       </div>
 
       <div className="results-section">
-        <p className="eyebrow">Verified response</p>
+         <p className="eyebrow">{translate("Verified response")}</p>
         {response ? (
           <>
             <div className="results-facts response-evidence-facts">
-              <BoundaryRow label="Verified bytes" value={formatByteCount(response.byteCount)} />
+               <BoundaryRow label={translate("Verified bytes")} value={formatByteCount(response.byteCount)} />
               <BoundaryRow label="SHA-256" value={response.sha256} />
             </div>
             <ResponsePreview text={response.text} />
           </>
         ) : (
-          <p className="field-help">No readable hash-verified response text is available for this attempt. The stored artifact reference remains below.</p>
+           <p className="field-help">{translate("No readable hash-verified response text is available for this attempt. The stored artifact reference remains below.")}</p>
         )}
       </div>
 
       <div className="results-section">
-        <p className="eyebrow">Objective verification</p>
+         <p className="eyebrow">{translate("Objective verification")}</p>
         {objectiveScore ? (
           <div className="results-facts">
             <div className="boundary-row">
-              <span>Status</span>
+               <span>{translate("Status")}</span>
               <strong className={objectiveScore.passed ? "objective-status-pass" : "objective-status-fail"}>
-                {objectiveScore.passed ? "Pass" : "Fail"}
+                 {objectiveScore.passed ? translate("Pass") : translate("Fail")}
               </strong>
             </div>
-            <BoundaryRow label="Verifier" value={objectiveScore.verifierKind === "exact_text" ? "Exact text" : objectiveScore.verifierKind} />
-            <BoundaryRow label="Expected normalized size" value={formatByteCount(objectiveScore.expectedNormalizedByteCount)} />
-            <BoundaryRow label="Actual normalized size" value={formatByteCount(objectiveScore.actualNormalizedByteCount)} />
-            <BoundaryRow label="Expected SHA-256" value={objectiveScore.expectedSha256} />
-            <BoundaryRow label="Actual SHA-256" value={objectiveScore.actualSha256} />
+             <BoundaryRow label={translate("Verifier")} value={objectiveScore.verifierKind === "exact_text" ? translate("Exact text") : objectiveScore.verifierKind} />
+             <BoundaryRow label={translate("Expected normalized size")} value={formatByteCount(objectiveScore.expectedNormalizedByteCount)} />
+             <BoundaryRow label={translate("Actual normalized size")} value={formatByteCount(objectiveScore.actualNormalizedByteCount)} />
+             <BoundaryRow label={translate("Expected SHA-256")} value={objectiveScore.expectedSha256} />
+             <BoundaryRow label={translate("Actual SHA-256")} value={objectiveScore.actualSha256} />
           </div>
         ) : (
-          <p className="field-help">No objective exact-text evidence was persisted for this result.</p>
+           <p className="field-help">{translate("No objective exact-text evidence was persisted for this result.")}</p>
         )}
-        <p className="field-help">This is deterministic hash/count evidence only; human/AI evaluation and rankings are not part of this stored result.</p>
+         <p className="field-help">{translate("This is deterministic hash/count evidence only; human/AI evaluation and rankings are not part of this stored result.")}</p>
       </div>
 
       <div className="results-section">
-        <p className="eyebrow">Effective configuration boundary</p>
+         <p className="eyebrow">{translate("Effective configuration boundary")}</p>
         <div className="results-facts">
-          <BoundaryRow label="Provider" value={effectiveConfigText(attempt.effectiveConfig, "provider")} />
-          <BoundaryRow label="Runtime" value={effectiveConfigText(attempt.effectiveConfig, "runtime")} />
-          <BoundaryRow label="Endpoint" value={effectiveConfigText(attempt.effectiveConfig, "endpoint")} />
-          <BoundaryRow label="Model" value={effectiveConfigText(attempt.effectiveConfig, "model")} />
-          <BoundaryRow label="Snapshot fields" value={formatCount(Object.keys(attempt.effectiveConfig).length)} />
+           <BoundaryRow label={translate("Provider")} value={effectiveConfigText(attempt.effectiveConfig, "provider")} />
+           <BoundaryRow label={translate("Runtime")} value={effectiveConfigText(attempt.effectiveConfig, "runtime")} />
+           <BoundaryRow label={translate("Endpoint")} value={effectiveConfigText(attempt.effectiveConfig, "endpoint")} />
+           <BoundaryRow label={translate("Model")} value={effectiveConfigText(attempt.effectiveConfig, "model")} />
+           <BoundaryRow label={translate("Snapshot fields")} value={formatCount(Object.keys(attempt.effectiveConfig).length)} />
         </div>
-        <p className="field-help">The stored configuration snapshot is read-only; request and response payloads are not rendered here.</p>
+         <p className="field-help">{translate("The stored configuration snapshot is read-only; request and response payloads are not rendered here.")}</p>
       </div>
 
       <div className="results-section">
-        <p className="eyebrow">Immutable artifact evidence</p>
+         <p className="eyebrow">{translate("Immutable artifact evidence")}</p>
         {artifacts.length === 0 ? (
-          <p className="field-help">No immutable artifact reference is recorded for this attempt.</p>
+           <p className="field-help">{translate("No immutable artifact reference is recorded for this attempt.")}</p>
         ) : (
           <ul className="artifact-evidence-list">
             {artifacts.map((artifact) => (
               <li key={artifact.artifactId}>
                 <strong>{artifact.artifactId}</strong>
-                <span>{artifact.relativePath} · {artifact.sha256 ? "SHA-256 recorded" : "SHA-256 not recorded"}</span>
+                 <span>{artifact.relativePath} · {artifact.sha256 ? translate("SHA-256 recorded") : translate("SHA-256 not recorded")}</span>
               </li>
             ))}
           </ul>
         )}
-        <p className="field-help">The artifact reference is read-only. The response preview above came only from the hash-verified artifact.</p>
+         <p className="field-help">{translate("The artifact reference is read-only. The response preview above came only from the hash-verified artifact.")}</p>
       </div>
     </article>
   );
@@ -3836,8 +4188,8 @@ function StateMessage({
         {icon}
       </span>
       <div className="state-copy">
-        <h3>{title}</h3>
-        <p>{description}</p>
+        <h3>{translate(title)}</h3>
+        <p>{translate(description)}</p>
       </div>
     </div>
   );
@@ -3870,7 +4222,7 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
     }
     const days = Number(olderThanDays);
     if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
-      setState({ status: "error", message: "Choose a whole number of days from 1 through 3,650." });
+      setState({ status: "error", message: translate("Choose a whole number of days from 1 through 3,650.") });
       return;
     }
     setBusy(true);
@@ -3880,7 +4232,7 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
     try {
       setState({ status: "ready", preview: await previewStorageRetention(days) });
     } catch (error: unknown) {
-      setState({ status: "error", message: error instanceof Error ? error.message : "The local retention preview is unavailable." });
+      setState({ status: "error", message: error instanceof Error ? error.message : translate("The local retention preview is unavailable.") });
     } finally {
       setBusy(false);
     }
@@ -3897,11 +4249,11 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
         expectedRecords: state.preview.eligibleRecords,
         confirmation,
       });
-      setNotice(`${result.deletedRecords.toLocaleString()} local history record${result.deletedRecords === 1 ? "" : "s"} removed. Protected source records and artifacts were retained.`);
+      setNotice(`${formatLocaleNumber(result.deletedRecords)} ${translate(result.deletedRecords === 1 ? "local history record removed." : "local history records removed.")} ${translate("Protected source records and artifacts were retained.")}`);
       setConfirmation("");
       await refresh();
     } catch (error: unknown) {
-      setState({ status: "error", message: error instanceof Error ? error.message : "The local retention cleanup is unavailable." });
+      setState({ status: "error", message: error instanceof Error ? error.message : translate("The local retention cleanup is unavailable.") });
     } finally {
       setBusy(false);
     }
@@ -3911,49 +4263,49 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
     <section className="panel settings-card" aria-labelledby="retention-heading" aria-live="polite">
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Local storage</p>
-          <h3 id="retention-heading">Review and clean history</h3>
+          <p className="eyebrow">{translate("Local storage")}</p>
+          <h3 id="retention-heading">{translate("Review and clean history")}</h3>
         </div>
         <span className="section-index">C</span>
       </div>
-      <p className="field-help">Preview old derived history before removing it. The operation is bounded to 256 records, requires an exact confirmation, and never removes immutable sources, audit records, or response artifacts.</p>
-      {state.status === "unsupported" && <StateMessage icon="◇" title="Browser preview / no cleanup" description="Retention controls read and write the local desktop database only." />}
+      <p className="field-help">{translate("Preview old derived history before removing it. The operation is bounded to 256 records, requires an exact confirmation, and never removes immutable sources, audit records, or response artifacts.")}</p>
+      {state.status === "unsupported" && <StateMessage icon="◇" title={translate("Browser preview / no cleanup")} description={translate("Retention controls read and write the local desktop database only.")} />}
       {desktop && (
         <>
           <div className="form-control">
-            <label className="field-label" htmlFor="retention-age">Remove derived history older than</label>
+            <label className="field-label" htmlFor="retention-age">{translate("Remove derived history older than")}</label>
             <div className="field-label-row">
               <input id="retention-age" type="number" min="1" max="3650" step="1" value={olderThanDays} onChange={(event) => { setOlderThanDays(event.currentTarget.value); setState({ status: "idle" }); setConfirmation(""); setNotice(""); }} />
-              <span className="control-value">days</span>
+              <span className="control-value">{translate("days")}</span>
             </div>
           </div>
           <div className="export-actions">
-            <button className="secondary-button" type="button" onClick={() => void refresh()} disabled={busy}>Preview cleanup</button>
+            <button className="secondary-button" type="button" onClick={() => void refresh()} disabled={busy}>{translate("Preview cleanup")}</button>
           </div>
-          {state.status === "loading" && <StateMessage icon="…" title="Loading retention preview" description="Counting removable local history without changing records." />}
-          {state.status === "idle" && <StateMessage icon="◇" title="Preview required" description="Choose an age and prepare a fresh cleanup preview." />}
-          {state.status === "error" && <StateMessage icon="!" title="Retention unavailable" description={state.message} error />}
-          {state.status === "ready" && state.preview.eligibleRecords === 0 && <StateMessage icon="—" title="No removable history" description="No derived records are older than the selected age. Nothing was changed." />}
+          {state.status === "loading" && <StateMessage icon="…" title={translate("Loading retention preview")} description={translate("Counting removable local history without changing records.")} />}
+          {state.status === "idle" && <StateMessage icon="◇" title={translate("Preview required")} description={translate("Choose an age and prepare a fresh cleanup preview.")} />}
+          {state.status === "error" && <StateMessage icon="!" title={translate("Retention unavailable")} description={state.message} error />}
+          {state.status === "ready" && state.preview.eligibleRecords === 0 && <StateMessage icon="—" title={translate("No removable history")} description={translate("No derived records are older than the selected age. Nothing was changed.")} />}
           {state.status === "ready" && state.preview.eligibleRecords > 0 && (
             <>
               <div className="results-facts">
-                {state.preview.tables.filter((table) => table.eligibleRecords > 0).map((table) => <BoundaryRow key={table.table} label={table.table} value={table.eligibleRecords.toLocaleString()} />)}
-                <BoundaryRow label="Total eligible" value={`${state.preview.eligibleRecords.toLocaleString()} / ${state.preview.maxDeleteRecords.toLocaleString()} maximum`} />
-                <BoundaryRow label="Cutoff" value={`before ${state.preview.cutoffAt}`} />
+                {state.preview.tables.filter((table) => table.eligibleRecords > 0).map((table) => <BoundaryRow key={table.table} label={table.table} value={formatLocaleNumber(table.eligibleRecords)} />)}
+                <BoundaryRow label="Total eligible" value={`${formatLocaleNumber(state.preview.eligibleRecords)} / ${formatLocaleNumber(state.preview.maxDeleteRecords)} ${translate("maximum")}`} />
+                <BoundaryRow label="Cutoff" value={`${translate("before")} ${state.preview.cutoffAt}`} />
               </div>
               {state.preview.eligibleRecords > state.preview.maxDeleteRecords ? (
-                <StateMessage icon="!" title="Preview exceeds the safety bound" description="Narrow the age window before cleanup. No records can be removed from this preview." error />
+                <StateMessage icon="!" title={translate("Preview exceeds the safety bound")} description={translate("Narrow the age window before cleanup. No records can be removed from this preview.")} error />
               ) : (
                 <div className="form-control">
-                  <label className="field-label" htmlFor="retention-confirmation">Type {state.preview.confirmation} to confirm</label>
+                  <label className="field-label" htmlFor="retention-confirmation">{translate("Type")} {state.preview.confirmation} {translate("to confirm")}</label>
                   <input id="retention-confirmation" type="text" value={confirmation} autoComplete="off" onChange={(event) => setConfirmation(event.currentTarget.value)} />
-                  <p className="field-help">Protected: {state.preview.protectedTables.join(", ")}. These source and audit tables are never part of cleanup.</p>
-                  <button className="secondary-button" type="button" onClick={() => void cleanup()} disabled={busy || confirmation !== state.preview.confirmation}>Remove eligible history</button>
+                  <p className="field-help">{translate("Protected:")} {state.preview.protectedTables.join(", ")}. {translate("These source and audit tables are never part of cleanup.")}</p>
+                  <button className="secondary-button" type="button" onClick={() => void cleanup()} disabled={busy || confirmation !== state.preview.confirmation}>{translate("Remove eligible history")}</button>
                 </div>
               )}
             </>
           )}
-          {notice && <p className="form-feedback form-feedback-success" role="status">{notice}</p>}
+          {notice && <p className="form-feedback form-feedback-success" role="status">{translate(notice)}</p>}
         </>
       )}
     </section>
@@ -3973,6 +4325,7 @@ function Settings({
   onAppearanceChange: (next: AppearancePreferences) => void;
   onRestoreDefaults: () => void;
 }) {
+  const { locale, setLocale } = useI18n();
   const appearanceFileInput = useRef<HTMLInputElement>(null);
   const [appearanceTransferMessage, setAppearanceTransferMessage] = useState("");
 
@@ -3983,80 +4336,91 @@ function Settings({
   function exportAppearance() {
     try {
       downloadLocalText("appearance-preferences", "json", serializeAppearancePreferences(appearance));
-      setAppearanceTransferMessage("Sanitized appearance preferences downloaded locally.");
+      setAppearanceTransferMessage(translate("Sanitized appearance preferences downloaded locally."));
     } catch (error: unknown) {
-      setAppearanceTransferMessage(error instanceof Error ? error.message : "The appearance export could not be prepared.");
+      setAppearanceTransferMessage(error instanceof Error ? error.message : translate("The appearance export could not be prepared."));
     }
   }
 
   async function importAppearanceFile(file: File) {
     if (file.size > MAX_APPEARANCE_PAYLOAD_BYTES) {
-      setAppearanceTransferMessage("Appearance preference files must be 8 KiB or smaller.");
+      setAppearanceTransferMessage(translate("Appearance preference files must be 8 KiB or smaller."));
       return;
     }
     try {
       onAppearanceChange(importAppearancePreferences(await file.text()));
-      setAppearanceTransferMessage("Appearance preferences imported and normalized locally.");
+      setAppearanceTransferMessage(translate("Appearance preferences imported and normalized locally."));
     } catch (error: unknown) {
-      setAppearanceTransferMessage(error instanceof Error ? error.message : "The appearance import could not be applied.");
+      setAppearanceTransferMessage(error instanceof Error ? error.message : translate("The appearance import could not be applied."));
     }
   }
 
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Appearance and boundaries</p>
-        <h2>Settings</h2>
-        <p>
-          Shape this local workspace for reading comfort. Changes preview immediately and stay inside the current
-          installation; there is no account, cloud sync, external font, or theme service.
-        </p>
+        <p className="eyebrow">{translate("Appearance and boundaries")}</p>
+        <h2>{translate("Settings")}</h2>
+      </section>
+
+      <section className="panel settings-card language-settings" aria-labelledby="language-heading">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">{translate("Interface language")}</p>
+            <h3 id="language-heading">{translate("Choose your language")}</h3>
+          </div>
+          <span className="section-index">L</span>
+        </div>
+        <AccessibleListbox
+          id="interface-language"
+          label={translate("Interface language")}
+          value={locale}
+          placeholder={translate("Choose your language")}
+          options={[{ value: "en", label: translate("English") }, { value: "pt-BR", label: translate("Português (Brasil)") }]}
+          onChange={(value) => setLocale(value as typeof locale)}
+        />
       </section>
 
       <section className="appearance-grid">
         <div className="panel settings-card appearance-controls">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Personalization</p>
-              <h3>Make the workspace yours</h3>
+              <p className="eyebrow">{translate("Personalization")}</p>
+              <h3>{translate("Make the workspace yours")}</h3>
             </div>
             <span className="section-index">A</span>
           </div>
 
-          <label className="field-label" htmlFor="font-choice">Interface font</label>
-          <select
-            className="font-select"
+          <AccessibleListbox
             id="font-choice"
+            label={translate("Interface font")}
             value={appearance.fontId}
-            onChange={(event) => updateAppearance("fontId", event.target.value)}
-          >
-            {FONT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
-          <p className="field-help">
-            Seven local system stacks are available. Times New Roman remains the default intent, with honest Linux
-            fallbacks when a font is not installed.
-          </p>
+            placeholder={translate("Choose an interface font")}
+            options={FONT_OPTIONS.map((option) => ({ value: option.id, label: translate(option.label) }))}
+            onChange={(value) => updateAppearance("fontId", value)}
+          />
 
           <div className="appearance-field">
             <div className="field-label-row">
-              <label className="field-label" htmlFor="font-scale">Font scale</label>
-              <output className="control-value" htmlFor="font-scale">{appearance.fontScale}%</output>
+              <label className="field-label" htmlFor="motion-scale">{translate("Motion scale")}</label>
+              <output className="control-value" htmlFor="motion-scale" aria-live="polite">{appearance.motionScale}%</output>
             </div>
             <input
-              className="font-scale-control"
-              id="font-scale"
+              className="motion-scale-control"
+              id="motion-scale"
               type="range"
-              min="90"
-              max="115"
-              step="5"
-              value={appearance.fontScale}
-              onChange={(event) => updateAppearance("fontScale", Number(event.target.value))}
+              min={MOTION_SCALE_MIN}
+              max={MOTION_SCALE_MAX}
+              step="1"
+              value={appearance.motionScale}
+              aria-valuetext={`${appearance.motionScale}%`}
+              onChange={(event) => updateAppearance("motionScale", Number(event.target.value))}
             />
-            <div className="range-labels" aria-hidden="true"><span>Compact</span><span>Standard</span><span>Large</span></div>
+            <p className="field-help">{translate("Adjust the duration of discretionary interface motion.")}</p>
+            <div className="range-labels" aria-hidden="true"><span>0%</span><span>100%</span><span>200%</span></div>
           </div>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Accent color</legend>
+            <legend className="field-label">{translate("Accent color")}</legend>
             <div className="appearance-choice-grid">
               {ACCENT_OPTIONS.map((option) => (
                 <button
@@ -4068,14 +4432,14 @@ function Settings({
                   onClick={() => updateAppearance("accentId", option.id)}
                 >
                   <span className="appearance-swatch" data-accent={option.id} aria-hidden="true" />
-                  <span>{option.label}</span>
+                  <span>{translate(option.label)}</span>
                 </button>
               ))}
             </div>
           </fieldset>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Corner shape</legend>
+            <legend className="field-label">{translate("Corner shape")}</legend>
             <div className="appearance-choice-grid appearance-choice-grid-two">
               {RADIUS_OPTIONS.map((option) => (
                 <button
@@ -4085,14 +4449,14 @@ function Settings({
                   aria-pressed={appearance.radiusId === option.id}
                   onClick={() => updateAppearance("radiusId", option.id)}
                 >
-                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
                 </button>
               ))}
             </div>
           </fieldset>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Surface</legend>
+            <legend className="field-label">{translate("Surface")}</legend>
             <div className="appearance-choice-grid">
               {SURFACE_OPTIONS.map((option) => (
                 <button
@@ -4102,7 +4466,24 @@ function Settings({
                   aria-pressed={appearance.surfaceId === option.id}
                   onClick={() => updateAppearance("surfaceId", option.id)}
                 >
-                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="appearance-fieldset">
+            <legend className="field-label">{translate("Contrast")}</legend>
+            <div className="appearance-choice-grid appearance-choice-grid-two">
+              {CONTRAST_OPTIONS.map((option) => (
+                <button
+                  className={`appearance-choice appearance-choice-wide ${appearance.contrastId === option.id ? "is-selected" : ""}`}
+                  key={option.id}
+                  type="button"
+                  aria-pressed={appearance.contrastId === option.id}
+                  onClick={() => updateAppearance("contrastId", option.id)}
+                >
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
                 </button>
               ))}
             </div>
@@ -4114,78 +4495,58 @@ function Settings({
               checked={appearance.reducedMotion}
               onChange={(event) => updateAppearance("reducedMotion", event.target.checked)}
             />
-            <span><strong>Reduce motion</strong><small>Keep transitions and animations minimal.</small></span>
+            <span><strong>{translate("Reduce motion")}</strong><small>{translate("Keep transitions and animations minimal.")}</small></span>
           </label>
 
           <button className="secondary-button restore-button" type="button" onClick={onRestoreDefaults}>
-            Restore defaults
+            {translate("Restore defaults")}
           </button>
 
           <div className="appearance-transfer">
             <div className="field-label-row">
-              <span className="field-label" id="appearance-transfer-heading">Preference file</span>
-              <span className="control-value">versioned JSON</span>
+              <span className="field-label" id="appearance-transfer-heading">{translate("Preference file")}</span>
+              <span className="control-value">{translate("versioned JSON")}</span>
             </div>
-            <p className="field-help">Download or import only bounded presentation preferences. Unknown fields are ignored; prompts, responses, credentials, and headers are not part of this payload.</p>
+            <p className="field-help">{translate("Download or import only bounded presentation preferences. Unknown fields are ignored; prompts, responses, credentials, and headers are not part of this payload.")}</p>
             <div className="export-actions" role="group" aria-labelledby="appearance-transfer-heading">
-              <button className="secondary-button" type="button" onClick={exportAppearance}>Download JSON</button>
-              <button className="secondary-button" type="button" onClick={() => appearanceFileInput.current?.click()}>Import JSON</button>
-              <input ref={appearanceFileInput} type="file" accept="application/json,.json" hidden aria-label="Import appearance preference JSON" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importAppearanceFile(file); }} />
+              <button className="secondary-button" type="button" onClick={exportAppearance}>{translate("Download JSON")}</button>
+              <button className="secondary-button" type="button" onClick={() => appearanceFileInput.current?.click()}>{translate("Import JSON")}</button>
+              <input ref={appearanceFileInput} type="file" accept="application/json,.json" hidden aria-label={translate("Import appearance preference JSON")} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importAppearanceFile(file); }} />
             </div>
-            {appearanceTransferMessage && <p className="field-help" role="status">{appearanceTransferMessage}</p>}
+            {appearanceTransferMessage && <p className="field-help" role="status">{translate(appearanceTransferMessage)}</p>}
           </div>
         </div>
 
-        <div className="panel settings-card appearance-preview-card">
-          <div className="section-heading compact-heading">
-            <div>
-              <p className="eyebrow">Live preview</p>
-              <h3>Read it before you keep it</h3>
-            </div>
-            <span className="section-index">B</span>
-          </div>
-
-          <div className="appearance-preview" aria-live="polite">
-            <p className="eyebrow">Current presentation</p>
-            <h3>Evidence over noise.</h3>
-            <p>One quiet surface for inspecting prompts, runs, and local records.</p>
-            <div className="preview-sample-row">
-              <span className="status-chip is-ready">Local only</span>
-              <button className="primary-button" type="button">Sample action <span aria-hidden="true">→</span></button>
-            </div>
-          </div>
-
-          <p className="field-help preview-note">
-            This sample uses the current font, scale, accent, surface, corner, and motion settings. It is a visual
-            preview only; it creates no record.
-          </p>
-
+        <div className="panel settings-card appearance-status-card">
           <div className="storage-notice" role="status">
             <span className="storage-notice-mark" aria-hidden="true">{desktop ? "✓" : "◇"}</span>
             <div>
-              <strong>{desktop ? "Saved in this desktop webview" : "Browser preview: not persisted"}</strong>
+              <strong>{translate(desktop ? "Saved in this desktop webview" : "Browser preview: not persisted")}</strong>
               <p>
                 {desktop
-                  ? "Only sanitized presentation preferences are stored locally. No desktop records, telemetry, or cloud sync are involved."
-                  : "Changes are temporary and this preview does not read or write localStorage or desktop records."}
+                  ? translate("Only sanitized presentation preferences are stored locally. No desktop records, telemetry, or cloud sync are involved.")
+                  : translate("Changes are temporary and this preview does not read or write localStorage or desktop records.")}
               </p>
             </div>
           </div>
 
           <div className="boundary-list appearance-boundary-list">
-            <BoundaryRow label="Prompt Arena server" value="None" />
-            <BoundaryRow label="External fonts" value="Disabled" />
-            <BoundaryRow label="Theme telemetry" value="Disabled" />
-            <BoundaryRow label="Theme sync" value="Not available" />
+            <BoundaryRow label={translate("Prompt Arena server")} value={translate("None")} />
+            <BoundaryRow label={translate("External fonts")} value={translate("Disabled")} />
+            <BoundaryRow label={translate("Theme telemetry")} value={translate("Disabled")} />
+            <BoundaryRow label={translate("Theme sync")} value={translate("Not available")} />
           </div>
         </div>
       </section>
 
-      <StorageRetentionControls desktop={desktop} />
-
-      <DiagnosticsSurface connection={connection} desktop={desktop} />
-
-      <ByokPanel desktop={desktop} />
+      <details className="advanced-settings motion-disclosure">
+        <summary>{translate("Advanced local controls")}</summary>
+        <div className="advanced-settings-content">
+          <StorageRetentionControls desktop={desktop} />
+          <DiagnosticsSurface connection={connection} desktop={desktop} />
+          <ByokPanel desktop={desktop} />
+        </div>
+      </details>
     </div>
   );
 }
@@ -4198,7 +4559,7 @@ function ResponsePreview({ text }: { text: string }) {
   return (
     <div className="response-preview-block">
       <pre className="attempt-response">{visible}</pre>
-      {truncated && <p className="field-help">Response preview is bounded at {maxCharacters.toLocaleString()} characters. The verified byte count and hash cover the complete artifact.</p>}
+      {truncated && <p className="field-help">{translate("Response preview is bounded at")} {formatLocaleNumber(maxCharacters)} {translate("characters. The verified byte count and hash cover the complete artifact.")}</p>}
     </div>
   );
 }
@@ -4268,7 +4629,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         if (current) setMetadataState({ status: "ready", providers });
       })
       .catch((error: unknown) => {
-        if (current) setMetadataState({ status: "error", message: byokErrorMessage(error) });
+        if (current) setMetadataState({ status: "error", message: translate(byokErrorMessage(error)) });
       });
 
     return () => {
@@ -4291,7 +4652,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         if (current) setHistoryState({ status: "ready", records });
       })
       .catch((error: unknown) => {
-        if (current) setHistoryState({ status: "error", message: byokErrorMessage(error) });
+        if (current) setHistoryState({ status: "error", message: translate(byokErrorMessage(error)) });
       });
 
     return () => {
@@ -4354,7 +4715,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
     try {
       setMetadataState({ status: "ready", providers: await readExternalProviders() });
     } catch (error: unknown) {
-      setMetadataState({ status: "error", message: byokErrorMessage(error) });
+      setMetadataState({ status: "error", message: translate(byokErrorMessage(error)) });
     }
   }
 
@@ -4367,7 +4728,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
     try {
       setHistoryState({ status: "ready", records: await readExternalGenerationEvidence() });
     } catch (error: unknown) {
-      setHistoryState({ status: "error", message: byokErrorMessage(error) });
+      setHistoryState({ status: "error", message: translate(byokErrorMessage(error)) });
     }
   }
 
@@ -4407,11 +4768,11 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
     const configuration = validateByokConfiguration({ endpoint, model, apiKey });
     const policy = validateByokBudget(budgetDraft);
     if (!configuration.valid) {
-      setNotice({ kind: "error", message: firstByokValidationError(configuration.errors) });
+      setNotice({ kind: "error", message: translate(firstByokValidationError(configuration.errors)) });
       return;
     }
     if (!policy.valid || !policy.policy) {
-      setNotice({ kind: "error", message: firstByokValidationError(policy.errors) });
+      setNotice({ kind: "error", message: translate(firstByokValidationError(policy.errors)) });
       return;
     }
 
@@ -4425,9 +4786,9 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         costPolicy: policy.policy,
       });
       updateMetadata(next);
-      setNotice({ kind: "success", message: `${providerLabel(selectedProviderId)} configuration saved in OS secure storage.` });
+      setNotice({ kind: "success", message: `${providerLabel(selectedProviderId)} ${translate("configuration saved in OS secure storage.")}` });
     } catch (error: unknown) {
-      setNotice({ kind: "error", message: byokErrorMessage(error) });
+      setNotice({ kind: "error", message: translate(byokErrorMessage(error)) });
     } finally {
       setApiKey("");
       setAction(null);
@@ -4440,7 +4801,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
     setNotice(null);
     const policy = validateByokBudget(budgetDraft);
     if (!policy.valid || !policy.policy) {
-      setNotice({ kind: "error", message: firstByokValidationError(policy.errors) });
+      setNotice({ kind: "error", message: translate(firstByokValidationError(policy.errors)) });
       return;
     }
 
@@ -4451,10 +4812,10 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         costPolicy: policy.policy,
       });
       updateMetadata(next);
-      setNotice({ kind: "success", message: "Cost policy updated. The hard ceiling remains enforced by the desktop boundary." });
+      setNotice({ kind: "success", message: translate("Cost policy updated. The hard ceiling remains enforced by the desktop boundary.") });
       clearGenerationEvidence();
     } catch (error: unknown) {
-      setNotice({ kind: "error", message: byokErrorMessage(error) });
+      setNotice({ kind: "error", message: translate(byokErrorMessage(error)) });
     } finally {
       setAction(null);
     }
@@ -4462,7 +4823,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
 
   async function handleRemove() {
     if (!selectedMetadata?.configured || busy) return;
-    if (typeof window !== "undefined" && !window.confirm(`Remove the stored ${providerLabel(selectedProviderId)} configuration?`)) return;
+    if (typeof window !== "undefined" && !window.confirm(`${translate("Remove the stored configuration for")} ${providerLabel(selectedProviderId)}?`)) return;
     setNotice(null);
     setAction({ kind: "remove", providerId: selectedProviderId });
     try {
@@ -4488,13 +4849,13 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
               : provider),
           };
         });
-        setNotice({ kind: "success", message: "Stored provider configuration removed. No key is displayed or exported." });
+        setNotice({ kind: "success", message: translate("Stored provider configuration removed. No key is displayed or exported.") });
         clearGenerationEvidence();
       } else {
-        setNotice({ kind: "success", message: "No stored provider configuration was found." });
+        setNotice({ kind: "success", message: translate("No stored provider configuration was found.") });
       }
     } catch (error: unknown) {
-      setNotice({ kind: "error", message: byokErrorMessage(error) });
+      setNotice({ kind: "error", message: translate(byokErrorMessage(error)) });
     } finally {
       setApiKey("");
       setAction(null);
@@ -4524,61 +4885,57 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
       });
       setGenerationResult(result);
       void refreshHistory();
-      setNotice({ kind: "success", message: "Generation completed. Only sanitized usage, cost, and identity evidence is shown." });
+      setNotice({ kind: "success", message: translate("Generation completed. Only sanitized usage, cost, and identity evidence is shown.") });
     } catch (error: unknown) {
-      setNotice({ kind: "error", message: byokErrorMessage(error) });
+      setNotice({ kind: "error", message: translate(byokErrorMessage(error)) });
     } finally {
       setAction(null);
     }
   }
 
   return (
+    <div className="byok-stack">
     <section className="panel provider-panel byok-panel" aria-labelledby="provider-controls-heading">
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Bring your own key</p>
-          <h3 id="provider-controls-heading">Optional external providers</h3>
+          <p className="eyebrow">{translate("Bring your own key")}</p>
+          <h3 id="provider-controls-heading">{translate("Optional external providers")}</h3>
         </div>
         <div className="byok-heading-actions">
           <button className="text-button" type="button" onClick={() => void refreshMetadata()} disabled={!desktop || busy}>
-            Refresh
+            {translate("Refresh")}
           </button>
           <span className="section-index">C</span>
         </div>
       </div>
-      <p className="provider-intro">
-        Configure one of four supported provider adapters with a key you own. Desktop mode reads only redacted metadata
-        from OS secure storage; provider calls happen only after you submit a form with explicit network consent.
-      </p>
+      <p className="provider-intro">{translate("Configure one of four supported provider adapters with a key you own. Desktop mode reads only redacted metadata from OS secure storage; provider calls happen only after you submit a form with explicit network consent.")}</p>
 
       {notice && (
         <p className={`form-feedback form-feedback-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
-          {notice.message}
+          {translate(notice.message)}
         </p>
       )}
 
       {metadataState.status === "loading" && (
-        <StateMessage icon="…" title="Loading provider metadata" description="Reading configured status and redacted settings from the desktop secure-storage boundary." />
+        <StateMessage icon="…" title={translate("Loading provider metadata")} description={translate("Reading configured status and redacted settings from the desktop secure-storage boundary.")} />
       )}
 
       {metadataState.status === "error" && (
         <>
-          <StateMessage icon="!" title="Provider metadata unavailable" description={metadataState.message} error />
+            <StateMessage icon="!" title={translate("Provider metadata unavailable")} description={metadataState.message} error />
           <button className="secondary-button" type="button" onClick={() => void refreshMetadata()} disabled={busy}>
-            Try again
+            {translate("Try again")}
           </button>
         </>
       )}
 
       {metadataState.status === "unsupported" && (
         <>
-          <StateMessage icon="◇" title="Browser preview / no provider writes" description={providerPreviewCopy()} />
+          <StateMessage icon="◇" title={translate("Browser preview / no provider writes")} description={translate(providerPreviewCopy())} />
           <div className="provider-grid">
             {PROVIDER_CATALOG.map((provider) => <ProviderStatusCard key={provider.id} provider={provider} />)}
           </div>
-          <p className="field-help provider-boundary-copy">
-            No API key field, secure-storage write, cost-policy update, removal, or provider generation is available in browser preview.
-          </p>
+          <p className="field-help provider-boundary-copy">{translate("No API key field, secure-storage write, cost-policy update, removal, or provider generation is available in browser preview.")}</p>
         </>
       )}
 
@@ -4602,23 +4959,23 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
               <section className="byok-editor-card" aria-labelledby="byok-configuration-heading">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">{selectedMetadata.configured ? "Replace configuration" : "New configuration"}</p>
+                    <p className="eyebrow">{translate(selectedMetadata.configured ? "Replace configuration" : "New configuration")}</p>
                     <h4 id="byok-configuration-heading">{selectedMetadata.label}</h4>
                   </div>
-                  <span className="provider-state">{selectedMetadata.configured ? "Configured" : "Not configured"}</span>
+                  <span className="provider-state">{translate(selectedMetadata.configured ? "Configured" : "Not configured")}</span>
                 </div>
 
                 <form className="byok-form" onSubmit={(event) => void handleConfigure(event)}>
                   <label className="form-control" htmlFor="byok-endpoint">
-                    <span className="field-label">HTTPS endpoint</span>
+                    <span className="field-label">{translate("HTTPS endpoint")}</span>
                     <input id="byok-endpoint" type="url" value={endpoint} onChange={(event) => setEndpoint(event.currentTarget.value)} autoComplete="url" />
                   </label>
                   <label className="form-control" htmlFor="byok-model">
-                    <span className="field-label">Model ID</span>
+                    <span className="field-label">{translate("Model ID")}</span>
                     <input id="byok-model" type="text" value={model} onChange={(event) => setModel(event.currentTarget.value)} autoComplete="off" />
                   </label>
                   <label className="form-control" htmlFor="byok-api-key">
-                    <span className="field-label">API key</span>
+                    <span className="field-label">{translate("API key")}</span>
                     <input
                       id="byok-api-key"
                       type="password"
@@ -4628,22 +4985,22 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                       spellCheck={false}
                     />
                   </label>
-                  <p className="field-help byok-key-note">Password field only. The key is sent once to OS secure storage, then cleared immediately; it is never rendered, logged, exported, or written to localStorage.</p>
+                  <p className="field-help byok-key-note">{translate("Password field only. The key is sent once to OS secure storage, then cleared immediately; it is never rendered, logged, exported, or written to localStorage.")}</p>
                   <button className="primary-button" type="submit" disabled={busy}>
-                    {action?.kind === "configure" ? "Saving configuration…" : "Save configuration"} <span aria-hidden="true">→</span>
+                    {translate(action?.kind === "configure" ? "Saving configuration…" : "Save configuration")} <span aria-hidden="true">→</span>
                   </button>
                 </form>
 
                 <form className="byok-policy-form" onSubmit={(event) => void handlePolicyUpdate(event)}>
                   <div className="section-heading compact-heading">
                     <div>
-                      <p className="eyebrow">Paid-work guardrails</p>
-                      <h4>Cost policy</h4>
+                      <p className="eyebrow">{translate("Paid-work guardrails")}</p>
+                      <h4>{translate("Cost policy")}</h4>
                     </div>
                   </div>
-                  <div className="byok-form-grid">
+                  <div className="byok-form-grid byok-policy-fields">
                     <label className="form-control" htmlFor="byok-confirmation-threshold">
-                      <span className="field-label">Confirmation threshold (USD)</span>
+                      <span className="field-label">{translate("Confirmation threshold (USD)")}</span>
                       <input
                         id="byok-confirmation-threshold"
                         type="number"
@@ -4655,7 +5012,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                       />
                     </label>
                     <label className="form-control" htmlFor="byok-ceiling">
-                      <span className="field-label">Hard ceiling (USD)</span>
+                      <span className="field-label">{translate("Hard ceiling (USD)")}</span>
                       <input
                         id="byok-ceiling"
                         type="number"
@@ -4667,76 +5024,76 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                       />
                     </label>
                   </div>
-                  <p className="field-help">Blank means no threshold. The desktop boundary refuses invalid policy values and work above the hard ceiling.</p>
+                  <p className="field-help">{translate("Blank means no threshold. The desktop boundary refuses invalid policy values and work above the hard ceiling.")}</p>
                   <button className="secondary-button" type="submit" disabled={busy || !selectedMetadata.configured}>
-                    {action?.kind === "policy" ? "Updating policy…" : "Update cost policy"}
+                    {translate(action?.kind === "policy" ? "Updating policy…" : "Update cost policy")}
                   </button>
                 </form>
 
-                <button className="text-button byok-remove-button" type="button" onClick={() => void handleRemove()} disabled={busy || !selectedMetadata.configured}>
-                  Remove stored configuration
+                <button className="secondary-button byok-remove-button" type="button" onClick={() => void handleRemove()} disabled={busy || !selectedMetadata.configured}>
+                  {translate("Remove stored configuration")}
                 </button>
               </section>
 
               <section className="byok-generation-card" aria-labelledby="byok-generation-heading">
                 <div className="section-heading compact-heading">
                   <div>
-                    <p className="eyebrow">Explicit test action</p>
-                    <h4 id="byok-generation-heading">Test provider generation</h4>
+                    <p className="eyebrow">{translate("Explicit test action")}</p>
+                    <h4 id="byok-generation-heading">{translate("Test provider generation")}</h4>
                   </div>
                   <span className="section-index">D</span>
                 </div>
-                <p className="field-help byok-generation-intro">Nothing is sent automatically. This form requires a dated USD price snapshot and an explicit consent checkbox before the provider call.</p>
+                <p className="field-help byok-generation-intro">{translate("Nothing is sent automatically. This form requires a dated USD price snapshot and an explicit consent checkbox before the provider call.")}</p>
 
                 {!selectedMetadata.configured ? (
-                  <StateMessage icon="◇" title="Configure a provider first" description="The generation form appears after this provider has a stored configuration." />
+                  <StateMessage icon="◇" title={translate("Configure a provider first")} description={translate("The generation form appears after this provider has a stored configuration.")} />
                 ) : (
                   <form className="byok-form" onSubmit={(event) => void handleGeneration(event)}>
                     <label className="form-control" htmlFor="byok-prompt">
-                      <span className="field-label">Prompt</span>
+                      <span className="field-label">{translate("Prompt")}</span>
                       <textarea
                         id="byok-prompt"
                         value={generationPrompt}
                         onChange={(event) => { setGenerationPrompt(event.currentTarget.value); clearGenerationEvidence(); }}
-                        placeholder="Enter a small prompt for the explicit provider test."
+                        placeholder={translate("Enter a small prompt for the explicit provider test.")}
                       />
                     </label>
                     <label className="form-control byok-max-token-control" htmlFor="byok-max-output-tokens">
-                      <span className="field-label">Maximum output tokens</span>
+                      <span className="field-label">{translate("Maximum output tokens")}</span>
                       <input id="byok-max-output-tokens" type="number" min="1" max="100000000" step="1" value={maxOutputTokens} onChange={(event) => { setMaxOutputTokens(event.currentTarget.value); clearGenerationEvidence(); }} />
                     </label>
 
                     <fieldset className="form-section byok-price-section">
-                      <legend>Dated price snapshot (USD)</legend>
+                      <legend>{translate("Dated price snapshot (USD)")}</legend>
                       <div className="byok-form-grid">
                         <label className="form-control" htmlFor="byok-price-model">
-                          <span className="field-label">Snapshot model ID</span>
+                          <span className="field-label">{translate("Snapshot model ID")}</span>
                           <input id="byok-price-model" type="text" value={priceSnapshot.modelId} onChange={(event) => updatePriceSnapshot("modelId", event.currentTarget.value)} />
                         </label>
                         <label className="form-control" htmlFor="byok-price-date">
-                          <span className="field-label">Captured on</span>
+                          <span className="field-label">{translate("Captured on")}</span>
                           <input id="byok-price-date" type="date" value={priceSnapshot.capturedOn} onChange={(event) => updatePriceSnapshot("capturedOn", event.currentTarget.value)} />
                         </label>
                         <label className="form-control" htmlFor="byok-input-rate">
-                          <span className="field-label">Input USD / 1M tokens</span>
+                          <span className="field-label">{translate("Input USD / 1M tokens")}</span>
                           <input id="byok-input-rate" type="number" min="0" max="1000000" step="0.000001" value={priceSnapshot.inputUsdPerMillionTokens} onChange={(event) => updatePriceSnapshot("inputUsdPerMillionTokens", event.currentTarget.value)} />
                         </label>
                         <label className="form-control" htmlFor="byok-output-rate">
-                          <span className="field-label">Output USD / 1M tokens</span>
+                          <span className="field-label">{translate("Output USD / 1M tokens")}</span>
                           <input id="byok-output-rate" type="number" min="0" max="1000000" step="0.000001" value={priceSnapshot.outputUsdPerMillionTokens} onChange={(event) => updatePriceSnapshot("outputUsdPerMillionTokens", event.currentTarget.value)} />
                         </label>
                       </div>
-                      <p className="field-help">The snapshot model must match the configured model. Missing or invalid prices fail closed. Currency is fixed to USD at the boundary.</p>
+                      <p className="field-help">{translate("The snapshot model must match the configured model. Missing or invalid prices fail closed. Currency is fixed to USD at the boundary.")}</p>
                     </fieldset>
 
                     {generationValidation?.estimate?.status === "estimated" && (
                       <div className="byok-cost-preview" aria-live="polite">
-                        <p className="eyebrow">Preflight cost evidence</p>
+                        <p className="eyebrow">{translate("Preflight cost evidence")}</p>
                         <div className="results-facts">
-                          <BoundaryRow label="Input estimate" value={`${formatByokTokens(generationValidation.inputTokens)} tokens · ${formatByokMoney(generationValidation.estimate.inputCostUsd)}`} />
-                          <BoundaryRow label="Output cap" value={`${formatByokTokens(generationValidation.maxOutputTokens)} tokens · ${formatByokMoney(generationValidation.estimate.outputCostUsd)}`} />
+                          <BoundaryRow label="Input estimate" value={`${formatByokTokens(generationValidation.inputTokens)} ${translate("tokens")} · ${formatByokMoney(generationValidation.estimate.inputCostUsd)}`} />
+                          <BoundaryRow label="Output cap" value={`${formatByokTokens(generationValidation.maxOutputTokens)} ${translate("tokens")} · ${formatByokMoney(generationValidation.estimate.outputCostUsd)}`} />
                           <BoundaryRow label="Estimated total" value={formatByokMoney(generationValidation.estimate.totalCostUsd)} />
-                          <BoundaryRow label="Budget decision" value={formatByokDecision(generationValidation.budgetDecision?.decision)} />
+                          <BoundaryRow label="Budget decision" value={translate(formatByokDecision(generationValidation.budgetDecision?.decision))} />
                         </div>
                       </div>
                     )}
@@ -4744,21 +5101,21 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                     {generationValidation?.budgetDecision?.decision === "confirm" && (
                       <label className="byok-consent-label">
                         <input type="checkbox" checked={costConfirmed} onChange={(event) => setCostConfirmed(event.currentTarget.checked)} />
-                        <span><strong>Confirm this estimated cost</strong><small>The configured threshold was reached. This confirmation applies only to this submitted generation.</small></span>
+                        <span><strong>{translate("Confirm this estimated cost")}</strong><small>{translate("The configured threshold was reached. This confirmation applies only to this submitted generation.")}</small></span>
                       </label>
                     )}
 
                     <label className="byok-consent-label">
                       <input type="checkbox" checked={networkConsent} onChange={(event) => { setNetworkConsent(event.currentTarget.checked); clearGenerationEvidence(); }} />
-                      <span><strong>Allow one external network call</strong><small>Nothing is sent until this explicit consent is checked and the form is submitted.</small></span>
+                      <span><strong>{translate("Allow one external network call")}</strong><small>{translate("Nothing is sent until this explicit consent is checked and the form is submitted.")}</small></span>
                     </label>
 
                     {generationSubmitted && generationValidation && !generationValidation.valid && (
-                      <p className="form-feedback form-feedback-error" role="alert">{firstByokValidationError(generationValidation.errors)}</p>
+                      <p className="form-feedback form-feedback-error" role="alert">{translate(firstByokValidationError(generationValidation.errors))}</p>
                     )}
 
                     <button className="primary-button" type="submit" disabled={busy}>
-                      {action?.kind === "generate" ? "Calling provider…" : "Test provider generation"} <span aria-hidden="true">→</span>
+                      {translate(action?.kind === "generate" ? "Calling provider…" : "Test provider generation")} <span aria-hidden="true">→</span>
                     </button>
                   </form>
                 )}
@@ -4767,27 +5124,32 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
               </section>
             </div>
           ) : (
-            <StateMessage icon="!" title="Provider metadata incomplete" description="The desktop bridge did not return a usable record for the selected provider." error />
+            <StateMessage icon="!" title={translate("Provider metadata incomplete")} description={translate("The desktop bridge did not return a usable record for the selected provider.")} error />
           )}
         </>
       )}
 
+    </section>
+
       <section className="panel byok-history-card" aria-labelledby="byok-history-heading">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Immutable local history</p>
-            <h4 id="byok-history-heading">External generation evidence</h4>
+            <p className="eyebrow">{translate("Immutable local history")}</p>
+            <h4 id="byok-history-heading">{translate("External generation evidence")}</h4>
           </div>
-          <button className="text-button" type="button" onClick={() => void refreshHistory()} disabled={!desktop || busy}>
-            Refresh history
+          <button className="secondary-button byok-history-refresh" type="button" onClick={() => void refreshHistory()} disabled={!desktop || busy}>
+            {translate("Refresh history")}
           </button>
         </div>
-        <p className="field-help">History stores sanitized provider, model, identity, usage, cost, dated-price, budget, and network evidence only. Prompt text, returned text, API keys, credential blobs, and headers are never stored or exported.</p>
-        {historyState.status === "loading" && <StateMessage icon="…" title="Loading external history" description="Reading sanitized evidence from local app storage." />}
-        {historyState.status === "unsupported" && <StateMessage icon="◇" title="Browser preview / no history writes" description="External generation history is available only in the local desktop workspace." />}
-        {historyState.status === "error" && <StateMessage icon="!" title="External history unavailable" description={historyState.message} error />}
+        <details className="byok-policy-details motion-disclosure">
+          <summary>{translate("Storage and privacy")}</summary>
+          <p className="field-help">{translate("History stores sanitized provider, model, identity, usage, cost, dated-price, budget, and network evidence only. Prompt text, returned text, API keys, credential blobs, and headers are never stored or exported.")}</p>
+        </details>
+        {historyState.status === "loading" && <StateMessage icon="…" title={translate("Loading external history")} description={translate("Reading sanitized evidence from local app storage.")} />}
+        {historyState.status === "unsupported" && <StateMessage icon="◇" title={translate("Browser preview / no history writes")} description={translate("External generation history is available only in the local desktop workspace.")} />}
+        {historyState.status === "error" && <StateMessage icon="!" title={translate("External history unavailable")} description={historyState.message} error />}
         {historyState.status === "ready" && historyState.records.length === 0 && (
-          <p className="field-help">No successful external generations have been recorded.</p>
+          <p className="field-help">{translate("No successful external generations have been recorded.")}</p>
         )}
         {historyState.status === "ready" && historyState.records.length > 0 && (
           <div className="byok-history-list">
@@ -4796,15 +5158,11 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         )}
       </section>
 
-      <div className="provider-safety-note byok-safety-note">
-        <p className="eyebrow">No-secret boundary</p>
-        <p>
-          API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Returned text is shown
-          in memory only; local history persists sanitized usage, cost, identity, price, and network evidence without
-          prompt or response text.
-        </p>
-      </div>
-    </section>
+      <details className="provider-safety-note byok-safety-note motion-disclosure">
+        <summary>{translate("No-secret boundary")}</summary>
+        <p>{translate("API keys never appear in metadata, results, logs, exports, snapshots, or localStorage. Returned text is shown in memory only; local history persists sanitized usage, cost, identity, price, and network evidence without prompt or response text.")}</p>
+      </details>
+    </div>
   );
 }
 
@@ -4827,21 +5185,21 @@ function ByokProviderCard({
     <article className={`provider-card byok-provider-card ${selected ? "is-selected" : ""}`} data-provider={provider.id}>
       <div className="provider-card-heading">
         <div>
-          <p className="eyebrow">{kindLabel}</p>
+          <p className="eyebrow">{translate(kindLabel)}</p>
           <h4>{metadata?.label ?? provider.label}</h4>
         </div>
-        <span className="provider-state">{configured ? "Configured" : "Not configured"}</span>
+        <span className="provider-state">{translate(configured ? "Configured" : "Not configured")}</span>
       </div>
       <div className="provider-facts">
-        <div><span>Configured</span><strong>{configured ? "Yes" : "No"}</strong></div>
-        <div><span>Storage</span><strong>{formatStorageStatus(metadata?.storageStatus)}</strong></div>
-        <div><span>Credentials</span><strong>{formatCredentialSource(metadata?.credentialSource)}</strong></div>
-        <div><span>Endpoint</span><strong>{metadata?.endpoint ?? "Not configured"}</strong></div>
-        <div><span>Model</span><strong>{metadata?.model ?? "Not configured"}</strong></div>
-        <div><span>Identity</span><strong>{formatIdentityConfidence(metadata?.identityConfidence)}</strong></div>
+        <div><span>{translate("Configured")}</span><strong>{translate(configured ? "Yes" : "No")}</strong></div>
+        <div><span>{translate("Storage")}</span><strong>{translate(formatStorageStatus(metadata?.storageStatus))}</strong></div>
+        <div><span>{translate("Credentials")}</span><strong>{translate(formatCredentialSource(metadata?.credentialSource))}</strong></div>
+        <div><span>{translate("Endpoint")}</span><strong>{metadata?.endpoint ?? translate("Not configured")}</strong></div>
+        <div><span>{translate("Model")}</span><strong>{metadata?.model ?? translate("Not configured")}</strong></div>
+        <div><span>{translate("Identity")}</span><strong>{translate(formatIdentityConfidence(metadata?.identityConfidence))}</strong></div>
       </div>
       <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata} aria-pressed={selected}>
-        {selected ? "Selected" : "Manage provider"}
+        {translate(selected ? "Selected" : "Manage provider")}
       </button>
     </article>
   );
@@ -4852,28 +5210,28 @@ function ByokGenerationSuccess({ result }: { result: ExternalGenerationResult })
     <div className="byok-success" role="status" aria-live="polite">
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Sanitized result</p>
-          <h4>Provider generation completed</h4>
+          <p className="eyebrow">{translate("Sanitized result")}</p>
+          <h4>{translate("Provider generation completed")}</h4>
         </div>
-        <span className="run-status arena-status-success">Success</span>
+        <span className="run-status arena-status-success">{translate("Success")}</span>
       </div>
       <div className="results-facts">
         <BoundaryRow label="Provider" value={providerLabel(result.providerId)} />
         <BoundaryRow label="Requested model" value={result.requestedModel} />
         <BoundaryRow label="Provider model" value={result.providerModel} />
-        <BoundaryRow label="Identity confidence" value={formatIdentityConfidence(result.identityConfidence)} />
-        <BoundaryRow label="Network used" value={result.networkUsed ? "Yes · consented" : "No"} />
-        <BoundaryRow label="Usage" value={`${formatByokTokens(result.usage.inputTokens)} input · ${formatByokTokens(result.usage.outputTokens)} output · ${formatByokTokens(result.usage.totalTokens)} total`} />
+        <BoundaryRow label="Identity confidence" value={translate(formatIdentityConfidence(result.identityConfidence))} />
+        <BoundaryRow label="Network used" value={translate(result.networkUsed ? "Yes · consented" : "No")} />
+        <BoundaryRow label="Usage" value={`${formatByokTokens(result.usage.inputTokens)} ${translate("input")} · ${formatByokTokens(result.usage.outputTokens)} ${translate("output")} · ${formatByokTokens(result.usage.totalTokens)} ${translate("total")}`} />
         <BoundaryRow label="Estimated cost" value={formatByokMoney(result.cost.estimated.totalCostUsd)} />
         <BoundaryRow label="Actual cost" value={formatByokMoney(result.cost.actual.totalCostUsd)} />
-        <BoundaryRow label="Final decision" value={formatByokDecision(result.cost.finalDecision)} />
+        <BoundaryRow label="Final decision" value={translate(formatByokDecision(result.cost.finalDecision))} />
         <BoundaryRow label="Price snapshot" value={`${result.cost.priceSnapshot.modelId} · ${result.cost.priceSnapshot.capturedOn} · ${result.cost.priceSnapshot.currency}`} />
       </div>
       <div className="byok-response-block">
-        <p className="eyebrow">Returned text</p>
+        <p className="eyebrow">{translate("Returned text")}</p>
         <pre className="byok-response">{result.text}</pre>
       </div>
-      <p className="field-help">Returned text is displayed in memory only. Sanitized evidence is saved to immutable local history; prompt text, response text, API keys, and headers are never stored or exported.</p>
+      <p className="field-help">{translate("Returned text is displayed in memory only. Sanitized evidence is saved to immutable local history; prompt text, response text, API keys, and headers are never stored or exported.")}</p>
     </div>
   );
 }
@@ -4883,22 +5241,22 @@ function ByokEvidenceHistoryEntry({ record }: { record: ExternalGenerationEviden
     <article className="byok-success" data-generation-id={record.generationId}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Sanitized evidence</p>
+          <p className="eyebrow">{translate("Sanitized evidence")}</p>
           <h4>{providerLabel(record.providerId)} · {record.requestedModel}</h4>
         </div>
-        <span className="run-status run-status-neutral">immutable</span>
+        <span className="run-status run-status-neutral">{translate("immutable")}</span>
       </div>
       <div className="results-facts">
         <BoundaryRow label="Provider" value={`${providerLabel(record.providerId)} (${record.providerId})`} />
         <BoundaryRow label="Requested model" value={record.requestedModel} />
-        <BoundaryRow label="Provider model" value={`${record.providerModel} · ${formatIdentityConfidence(record.identityConfidence)}`} />
-        <BoundaryRow label="Network disclosure" value={record.networkUsed ? "Yes · external HTTPS call consented" : "No network used"} />
-        <BoundaryRow label="Usage" value={`${formatByokTokens(record.usage.inputTokens)} input · ${formatByokTokens(record.usage.outputTokens)} output · ${formatByokTokens(record.usage.totalTokens)} total`} />
+        <BoundaryRow label="Provider model" value={`${record.providerModel} · ${translate(formatIdentityConfidence(record.identityConfidence))}`} />
+        <BoundaryRow label="Network disclosure" value={translate(record.networkUsed ? "Yes · external HTTPS call consented" : "No network used")} />
+        <BoundaryRow label="Usage" value={`${formatByokTokens(record.usage.inputTokens)} ${translate("input")} · ${formatByokTokens(record.usage.outputTokens)} ${translate("output")} · ${formatByokTokens(record.usage.totalTokens)} ${translate("total")}`} />
         <BoundaryRow label="Estimated cost" value={formatByokMoney(record.estimated.totalCostUsd)} />
         <BoundaryRow label="Actual cost" value={formatByokMoney(record.actual.totalCostUsd)} />
-        <BoundaryRow label="Budget decisions" value={`preflight ${formatByokDecision(record.preflightDecision)} · final ${formatByokDecision(record.finalDecision)}`} />
-        <BoundaryRow label="Price snapshot" value={`${record.priceSnapshot.modelId} · ${record.priceSnapshot.capturedOn} · ${record.priceSnapshot.currency} · ${formatByokMoney(record.priceSnapshot.inputUsdPerMillionTokens)} input / ${formatByokMoney(record.priceSnapshot.outputUsdPerMillionTokens)} output per 1M`} />
-        <BoundaryRow label="Created" value={record.createdAt} />
+        <BoundaryRow label="Budget decisions" value={`${translate("preflight")} ${translate(formatByokDecision(record.preflightDecision))} · ${translate("final")} ${translate(formatByokDecision(record.finalDecision))}`} />
+        <BoundaryRow label="Price snapshot" value={`${record.priceSnapshot.modelId} · ${record.priceSnapshot.capturedOn} · ${record.priceSnapshot.currency} · ${formatByokMoney(record.priceSnapshot.inputUsdPerMillionTokens)} ${translate("input")} / ${formatByokMoney(record.priceSnapshot.outputUsdPerMillionTokens)} ${translate("output")} ${translate("per 1M")}`} />
+        <BoundaryRow label="Created" value={formatDisplayTimestamp(record.createdAt)} />
       </div>
     </article>
   );
@@ -4910,17 +5268,17 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
     <article className="provider-card" data-provider={provider.id}>
       <div className="provider-card-heading">
         <div>
-          <p className="eyebrow">{kindLabel}</p>
+          <p className="eyebrow">{translate(kindLabel)}</p>
           <h4>{provider.label}</h4>
         </div>
-        <span className="provider-state">Unconfigured</span>
+        <span className="provider-state">{translate("Unconfigured")}</span>
       </div>
       <div className="provider-facts">
-        <div><span>Transport</span><strong>External HTTPS available when explicitly consented</strong></div>
-        <div><span>Credentials</span><strong>OS secure storage not configured</strong></div>
-        <div><span>Identity</span><strong>Unverified until configured</strong></div>
-        <div><span>Execution</span><strong>Requires configuration and consent</strong></div>
-        <div><span>Cost</span><strong>Dated price snapshot required</strong></div>
+        <div><span>{translate("Transport")}</span><strong>{translate("External HTTPS available when explicitly consented")}</strong></div>
+        <div><span>{translate("Credentials")}</span><strong>{translate("OS secure storage not configured")}</strong></div>
+        <div><span>{translate("Identity")}</span><strong>{translate("Unverified until configured")}</strong></div>
+        <div><span>{translate("Execution")}</span><strong>{translate("Requires configuration and consent")}</strong></div>
+        <div><span>{translate("Cost")}</span><strong>{translate("Dated price snapshot required")}</strong></div>
       </div>
     </article>
   );
@@ -4929,7 +5287,7 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
 function BoundaryRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="boundary-row">
-      <span>{label}</span>
+      <span>{translate(label)}</span>
       <strong>{value}</strong>
     </div>
   );
@@ -4952,11 +5310,11 @@ function EmptyState({
         —
       </span>
       <div className="state-copy">
-        <h3>{title}</h3>
-        <p>{description}</p>
+        <h3>{translate(title)}</h3>
+        <p>{translate(description)}</p>
         {actionLabel && onAction && (
           <button className="text-button" type="button" onClick={onAction}>
-            {actionLabel} <span aria-hidden="true">→</span>
+            {translate(actionLabel)} <span aria-hidden="true">→</span>
           </button>
         )}
       </div>

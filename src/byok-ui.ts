@@ -18,6 +18,7 @@ import type {
   CredentialSource,
   PriceSnapshot,
 } from "./bridge";
+import { formatLocaleCurrency, formatLocaleNumber, translate } from "./i18n";
 
 export const MAX_BYOK_PROMPT_BYTES = 64 * 1024;
 export const MAX_BYOK_ENDPOINT_LENGTH = 2 * 1024;
@@ -280,14 +281,14 @@ export function providerLabel(providerId: ExternalProviderId): string {
 
 export function formatByokMoney(value: number | null | undefined): string {
   return value === null || value === undefined || !Number.isFinite(value) || value < 0
-    ? "Not set"
-    : `$${value.toFixed(6)}`;
+    ? translate("Not set")
+    : formatLocaleCurrency(value, undefined, "USD", { minimumFractionDigits: 6, maximumFractionDigits: 6 });
 }
 
 export function formatByokTokens(value: number | null | undefined): string {
   return value === null || value === undefined || !Number.isSafeInteger(value) || value < 0
-    ? "Not recorded"
-    : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+    ? translate("Not recorded")
+    : formatLocaleNumber(value, undefined, { maximumFractionDigits: 0 });
 }
 
 export function formatIdentityConfidence(value: IdentityConfidence | null | undefined): string {

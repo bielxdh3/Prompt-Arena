@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   attemptStatusLabel,
   attemptStatusTone,
+  BLIND_RESPONSE_MAX_HEIGHT_PX,
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
+  buildLegacyBlindEvaluationLockRequest,
   formatByteCount,
   formatCount,
   formatDurationNs,
   objectiveVerificationEvidence,
+  reconcileLegacyBlindEvaluationRetry,
+  updateBlindEvaluationScore,
 } from "./results-ui";
 
 describe("read-only results formatting", () => {
@@ -58,5 +62,58 @@ describe("read-only results formatting", () => {
     expect(blindEvaluationStatusLabel("unknown")).toBe("Evaluation unavailable");
     expect(blindEvaluationScoreLabel(5)).toBe("5/5");
     expect(blindEvaluationScoreLabel(0)).toBe("Not scored");
+  });
+
+  it("keeps score edits local, bounded, and prepared", () => {
+    const scores = { "run-a:attempt-a": null, "run-b:attempt-b": 2 };
+    expect(updateBlindEvaluationScore(scores, "run-a:attempt-a", "5")).toEqual({ "run-a:attempt-a": 5, "run-b:attempt-b": 2 });
+    expect(updateBlindEvaluationScore(scores, "run-a:attempt-a", "9")).toEqual(scores);
+    expect(blindReviewHidesAttemptEvidence("prepared")).toBe(true);
+  });
+
+  it("locks the prepared response for the selected run without text matching", () => {
+    const preparation = {
+      evaluationId: "blind-a",
+      runId: "run-a",
+      status: "prepared" as const,
+      responses: [{ label: "Response 1", token: "stable-token-a", text: "same response" }],
+    };
+    expect(buildLegacyBlindEvaluationLockRequest("run-a", "run-a:attempt-a", preparation, 4)).toEqual({
+      evaluationId: "blind-a",
+      runId: "run-a",
+      scores: [{ token: "stable-token-a", overallScore: 4, criterionScores: {} }],
+      ranking: [["stable-token-a"]],
+    });
+    expect(() => buildLegacyBlindEvaluationLockRequest("run-b", "run-b:attempt-b", preparation, 4)).toThrow("does not belong");
+    expect(() => buildLegacyBlindEvaluationLockRequest("run-a", "run-a:attempt-a", { ...preparation, responses: [] }, 4)).toThrow("one prepared response");
+  });
+
+  it("reconciles an immutable legacy lock before retrying", () => {
+    const record = {
+      evaluationId: "blind-a",
+      runId: "run-a",
+      status: "locked" as const,
+      presentation: [{ label: "Response 1", token: "stable-token-a", attemptId: "attempt-a" }],
+      scores: [{ token: "stable-token-a", overallScore: 4, criterionScores: {} }],
+      ranking: [["stable-token-a"]],
+      createdAt: "2026-08-30T00:00:00Z",
+      lockedAt: "2026-08-30T00:00:01Z",
+    };
+    expect(reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-a", "blind-a", 4, record)).toBe("skip");
+    expect(() => reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-a", "blind-a", 5, record)).toThrow("conflicts");
+    expect(() => reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-a", "blind-a", 4, null)).toThrow("record is missing");
+    expect(() => reconcileLegacyBlindEvaluationRetry("run-a", "run-a:attempt-b", "blind-a", 4, record)).toThrow("missing the selected response");
+  });
+
+  it("keeps blind results hidden until the immutable lock state", () => {
+    expect(blindEvaluationStatusLabel("prepared")).toBe("Ready for blind review");
+    expect(blindReviewHidesAttemptEvidence("prepared")).toBe(true);
+    expect(blindEvaluationStatusLabel("locked")).toBe("Locked and read-only");
+    expect(blindReviewHidesAttemptEvidence("locked")).toBe(false);
+  });
+
+  it("keeps the full response pane inside a bounded scroll region", () => {
+    expect(BLIND_RESPONSE_MAX_HEIGHT_PX).toBe(320);
+    expect(BLIND_RESPONSE_MAX_HEIGHT_PX).toBeGreaterThan(0);
   });
 });

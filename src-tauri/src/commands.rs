@@ -10,6 +10,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
@@ -118,6 +121,8 @@ const OLLAMA_EXECUTABLE: &str = "ollama";
 const OLLAMA_SERVE_ARGUMENT: &str = "serve";
 const OLLAMA_START_RETRIES: usize = 20;
 const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
+#[cfg(windows)]
+const WINDOWS_CREATE_NO_WINDOW: u32 = 0x08000000;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
@@ -783,12 +788,30 @@ fn ollama_is_healthy(provider: &OllamaProvider) -> bool {
 
 fn ollama_server_command() -> Command {
     let mut command = Command::new(OLLAMA_EXECUTABLE);
+    configure_background_command(&mut command);
     command
         .arg(OLLAMA_SERVE_ARGUMENT)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
+}
+
+fn configure_background_command(command: &mut Command) {
+    let _flags = background_process_creation_flags();
+    #[cfg(windows)]
+    command.creation_flags(_flags);
+}
+
+fn background_process_creation_flags() -> u32 {
+    #[cfg(windows)]
+    {
+        WINDOWS_CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
 }
 
 fn start_ollama_with<F, L, T, S>(
@@ -940,8 +963,31 @@ pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus
 
 /// Execute exactly one bounded generation in the app-owned worker, then persist
 /// its terminal outcome in the app-owned store.
+fn spawn_blocking_execution<F, R>(work: F) -> tauri::async_runtime::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+}
+
 #[tauri::command]
-pub fn execute_run_once(app: AppHandle, plan: RunPlan) -> Result<PersistedExecution, CommandError> {
+pub async fn execute_run_once(
+    app: AppHandle,
+    plan: RunPlan,
+) -> Result<PersistedExecution, CommandError> {
+    spawn_blocking_execution(move || execute_run_once_blocking(app, plan))
+        .await
+        .map_err(|_| CommandError {
+            code: "worker_failed",
+            message: "the run worker task failed".to_owned(),
+        })?
+}
+
+fn execute_run_once_blocking(
+    app: AppHandle,
+    plan: RunPlan,
+) -> Result<PersistedExecution, CommandError> {
     let outcome = invoke_worker_once(&app, &plan)?;
     persist_terminal_outcome(&storage_for(&app)?, &outcome, &now_marker()).map_err(Into::into)
 }
@@ -974,7 +1020,9 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         .ok();
     let worker_executable =
         resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
-    let mut child = Command::new(worker_executable)
+    let mut child = Command::new(worker_executable);
+    configure_background_command(&mut child);
+    let mut child = child
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1214,13 +1262,15 @@ mod tests {
         fs,
         path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
+        thread,
     };
 
     use super::{
-        app_status, ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
-        resolve_worker_executable, start_ollama_with, worker_executable_name,
-        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus, StorageState,
-        OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
+        app_status, background_process_creation_flags, ollama_server_command, ollama_spawn_error,
+        read_benchmark_version_from_storage, resolve_worker_executable, spawn_blocking_execution,
+        start_ollama_with, worker_executable_name, worker_executable_path,
+        worker_sidecar_resource_path, OllamaStartStatus, StorageState, OLLAMA_START_RETRIES,
+        WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
 
@@ -1231,6 +1281,24 @@ mod tests {
         let status = app_status();
         assert!(matches!(status.storage_state, StorageState::Local));
         assert_eq!(status.protocol_version, 1);
+    }
+
+    #[test]
+    fn execution_is_delegated_to_the_blocking_executor() {
+        let caller_thread = thread::current().id();
+        let worker_thread =
+            tauri::async_runtime::block_on(spawn_blocking_execution(|| thread::current().id()))
+                .expect("blocking task completes");
+        assert_ne!(caller_thread, worker_thread);
+    }
+
+    #[test]
+    fn blocking_execution_propagates_failure_without_deadlocking() {
+        let result = tauri::async_runtime::block_on(spawn_blocking_execution(|| {
+            Err::<(), _>("mock failure")
+        }))
+        .expect("blocking task completes");
+        assert_eq!(result, Err("mock failure"));
     }
 
     #[test]
@@ -1280,6 +1348,14 @@ mod tests {
                 .map(OsStr::to_string_lossy)
                 .collect::<Vec<_>>(),
             vec!["serve"]
+        );
+    }
+
+    #[test]
+    fn background_processes_use_the_windows_no_window_flag() {
+        assert_eq!(
+            background_process_creation_flags(),
+            if cfg!(windows) { 0x08000000 } else { 0 }
         );
     }
 

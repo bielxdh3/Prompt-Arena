@@ -5,11 +5,11 @@
 **A local-first desktop workspace for reproducible AI benchmarking and model comparison.**
 
 [![Status](https://img.shields.io/badge/status-active%20development-orange)](#project-status)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](#project-status)
+[![Version](https://img.shields.io/badge/version-0.1.4-blue)](#project-status)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#requirements)
 [![Desktop](https://img.shields.io/badge/desktop-Tauri%202-FFC131)](#technology)
 [![Runtime](https://img.shields.io/badge/local%20runtime-Ollama-111111)](#local-first-boundary)
-[![Installers](https://img.shields.io/badge/installers-NSIS%20%7C%20DEB%20%7C%20AppImage-6f42c1)](#installers)
+[![Installers](https://img.shields.io/badge/installers-MSI%20%7C%20NSIS%20%7C%20DEB%20%7C%20AppImage-6f42c1)](#installers)
 
 Prompt Arena lets you define benchmarks, run local models, preserve immutable execution evidence, and review results without requiring an account, telemetry, or a hosted Prompt Arena service.
 
@@ -137,7 +137,7 @@ The current bounded Arena executes one selected benchmark case with one immutabl
 
 ## Project status
 
-The current `0.1.0` development baseline includes:
+The current `0.1.4` development/QA baseline includes:
 
 - [x] Tauri 2 + React + TypeScript + Rust desktop foundation;
 - [x] Windows and Linux CI boundaries;
@@ -151,12 +151,12 @@ The current `0.1.0` development baseline includes:
 - [x] three bundled official benchmark packs;
 - [x] read-only hardware baseline and transparent model-size heuristics;
 - [x] bounded within-run comparability diagnostics;
-- [x] sanitized local appearance preferences;
+- [x] sanitized local appearance preferences, motion scaling, and reduced-motion support;
 - [x] external-provider and cost-safety architecture without network execution;
 - [x] repository boundary checks, secret screening, and review-readiness CI.
 
 > [!NOTE]
-> Prompt Arena is functional software under active development, not a finished benchmark suite or a production release. Broader model management, cross-run ranking, AI judging, external provider execution, packaging, and release hardening are still evolving.
+> Prompt Arena is functional software under active development, not a finished benchmark suite or a signed production release. Broader model management, cross-run ranking, AI judging, external provider execution, packaging, and release hardening are still evolving.
 
 ## Technology
 
@@ -187,12 +187,25 @@ Prompt Arena is configured to produce native desktop bundles for both supported 
 
 | Platform | Package | Intended use |
 |---|---|---|
-| Windows | NSIS `.exe` installer | Standard Windows installation |
+| Windows | MSI `.msi` installer | Current remote Windows QA artifact |
+| Windows | NSIS `.exe` installer | Standard Windows installation bundle |
 | Linux | `.deb` | Debian/Ubuntu-family package installation |
 | Linux | `.AppImage` | Portable desktop execution |
 
+### Windows QA download
+
+<!-- WINDOWS_MSI_DOWNLOAD:START -->
+[Download Prompt Arena 0.1.4 for Windows (MSI)](downloadable-artifacts/Prompt-Arena-0.1.4-windows-x64.msi)
+
+SHA-256: `3205fa00a8c8d1c366473f501d8596f01915c654d138cbec5bf10fb353dfd0a2`
+
+Built from product commit: `81930d0c8327251ff4e4cda172f8a0ed1fc9781b`
+<!-- WINDOWS_MSI_DOWNLOAD:END -->
+
 > [!WARNING]
-> There is no official prebuilt GitHub Release published yet. Until the first reviewed release exists, installers must be built from source and should be treated as development artifacts rather than signed production binaries.
+> The MSI above is an unsigned QA artifact stored in the repository. There is no reviewed GitHub Release or signed production installer yet, so Windows may show SmartScreen warnings.
+
+The Windows release helper synchronizes application version metadata, builds the MSI, stores the versioned artifact under `downloadable-artifacts/`, writes its SHA-256 sidecar, and updates the marked README block. Remote publication remains a separately reviewed action.
 
 To build the configured desktop bundles:
 
@@ -201,9 +214,15 @@ npm install
 npm run tauri:build
 ```
 
+For the repository-standard Windows MSI path:
+
+```bash
+npm run build:windows-msi
+```
+
 Tauri writes generated packages under the release bundle directory inside `src-tauri/target/`. The build also prepares the packaged Prompt Arena worker sidecar automatically.
 
-When official binaries are published, they will live on the repository's [Releases](https://github.com/bielxdh3/Prompt-Arena/releases) page.
+When reviewed releases are published, they will live on the repository's [Releases](https://github.com/bielxdh3/Prompt-Arena/releases) page.
 
 ## Quick start
 
@@ -250,6 +269,7 @@ Prompt-Arena/
 ├── schemas/                 Versioned benchmark contracts
 ├── scripts/                 Boundary checks and packaging helpers
 ├── docs/                    Architecture, privacy, security, testing, design
+├── downloadable-artifacts/  Versioned QA installers and checksums
 ├── .github/                 Windows/Linux CI configuration
 ├── ROADMAP.md               Implementation roadmap and phase status
 └── README.md
@@ -264,6 +284,7 @@ npm run typecheck
 npm run test
 npm run test:boundaries
 npm run check:boundaries
+npm run check:version
 npm audit --omit=dev --audit-level=high
 npm run build
 ```
@@ -305,7 +326,7 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md) 
 - secure API credential storage and real provider cost capture are not implemented;
 - GPU and VRAM hardware detection remain explicitly unavailable where no safe feature detection exists;
 - the programming benchmark pack is text-only because Docker-backed coding sandbox execution is not implemented;
-- official prebuilt installers and release signing have not been published yet;
+- signed installers and a reviewed GitHub Release have not been published yet;
 - clean-install production validation remains human-gated future work;
 - macOS is not supported and is not on the official roadmap.
 

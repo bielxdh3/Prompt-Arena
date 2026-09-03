@@ -1,6 +1,9 @@
-import type { ObjectiveVerificationEvidence } from "./bridge";
+import type { BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord, ObjectiveVerificationEvidence } from "./bridge";
+import { formatLocaleNumber, translate } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
+
+export const BLIND_RESPONSE_MAX_HEIGHT_PX = 320;
 
 export function blindReviewHidesAttemptEvidence(status: string): boolean {
   switch (status.trim().toLowerCase()) {
@@ -35,6 +38,60 @@ export function blindEvaluationScoreLabel(score: number | null | undefined): str
   return score !== null && score !== undefined && Number.isInteger(score) && score >= 1 && score <= 5
     ? `${score}/5`
     : "Not scored";
+}
+
+export function updateBlindEvaluationScore(
+  scores: Readonly<Record<string, number | null>>,
+  token: string,
+  value: string,
+): Record<string, number | null> {
+  const score = value === "" ? null : Number(value);
+  if (score !== null && (!Number.isInteger(score) || score < 1 || score > 5)) return { ...scores };
+  return { ...scores, [token]: score };
+}
+
+export function buildLegacyBlindEvaluationLockRequest(
+  runId: string,
+  executionKey: string,
+  preparation: BlindEvaluationPreparation,
+  overallScore: number,
+): BlindEvaluationLockRequest {
+  if (preparation.runId !== runId || !executionKey.startsWith(`${runId}:`)) {
+    throw new Error("The prepared response does not belong to the selected Arena run.");
+  }
+  if (preparation.status !== "prepared" || preparation.responses.length !== 1) {
+    throw new Error("The selected Arena run did not resolve to one prepared response.");
+  }
+  if (!Number.isInteger(overallScore) || overallScore < 1 || overallScore > 5) {
+    throw new Error("Scores must be between 1 and 5.");
+  }
+  const response = preparation.responses[0];
+  return {
+    evaluationId: preparation.evaluationId,
+    runId,
+    scores: [{ token: response.token, overallScore, criterionScores: {} }],
+    ranking: [[response.token]],
+  };
+}
+
+export function reconcileLegacyBlindEvaluationRetry(
+  runId: string,
+  executionKey: string,
+  evaluationId: string,
+  selectedScore: number,
+  record: BlindEvaluationRecord | null,
+): "skip" {
+  const prefix = `${runId}:`;
+  if (!record) throw new Error("The immutable blind evaluation record is missing; retry cannot continue.");
+  if (record.runId !== runId || record.evaluationId !== evaluationId || !executionKey.startsWith(prefix)) {
+    throw new Error("The immutable blind evaluation record does not match the selected run.");
+  }
+  const attemptId = executionKey.slice(prefix.length);
+  const presentation = record.presentation.find((entry) => entry.attemptId === attemptId);
+  if (!presentation) throw new Error("The immutable blind evaluation record is missing the selected response.");
+  const savedScore = record.scores.find((score) => score.token === presentation.token)?.overallScore;
+  if (savedScore !== selectedScore) throw new Error("The selected score conflicts with the immutable saved score.");
+  return "skip";
 }
 
 export function objectiveVerificationEvidence(value: unknown): ObjectiveVerificationEvidence | null {
@@ -117,27 +174,27 @@ export function attemptStatusTone(status: string): AttemptStatusTone {
 
 export function formatCount(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
-    return "Not recorded";
+    return translate("Not recorded");
   }
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+  return formatLocaleNumber(value, undefined, { maximumFractionDigits: 0 });
 }
 
 export function formatByteCount(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
-    return "Not recorded";
+    return translate("Not recorded");
   }
   if (value < 1024) return `${formatCount(value)} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  if (value < 1024 ** 2) return `${formatLocaleNumber(value / 1024, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} KiB`;
+  if (value < 1024 ** 3) return `${formatLocaleNumber(value / 1024 ** 2, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MiB`;
+  return `${formatLocaleNumber(value / 1024 ** 3, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GiB`;
 }
 
 export function formatDurationNs(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
-    return "Not recorded";
+    return translate("Not recorded");
   }
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} s`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} ms`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(2)} μs`;
+  if (value >= 1_000_000_000) return `${formatLocaleNumber(value / 1_000_000_000, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} s`;
+  if (value >= 1_000_000) return `${formatLocaleNumber(value / 1_000_000, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ms`;
+  if (value >= 1_000) return `${formatLocaleNumber(value / 1_000, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} μs`;
   return `${formatCount(value)} ns`;
 }
