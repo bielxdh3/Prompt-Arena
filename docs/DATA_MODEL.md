@@ -78,7 +78,7 @@ the immutable `benchmark_versions` row.
 
 The pure TypeScript plan builder consumes that published record, a real immutable `ProfileRevision`, and explicit task
 and case IDs. It validates the summary/document benchmark identity, positive version number, exact `profile-id@revision`
-identity, fixed `ollama` runtime, bounded model and profile request data, and exactly one benchmark repetition. It then
+identity, one supported local runtime (`ollama`, `lm_studio`, or `llama_cpp`), bounded model and profile request data, and exactly one benchmark repetition. It then
 selects one matching task and case, requires a non-empty bounded task prompt, combines task and optional case prompts
 with `\n\n`, combines profile and task system prompts in profile-then-task order, and sets the generation model from the
 profile. Profile revisions keep serde-flattened unknown fields at the top level: the browser form emits only explicit
@@ -253,3 +253,14 @@ benchmark versions. Every competitor/repetition is persisted as its own immutabl
 identity. `src/arena-runner.ts` retains the Arena grouping in memory for comparison and export; an aggregate Arena table
 is intentionally still a future migration. Response text is retrieved only through the verified `read_attempt_response`
 command and is never copied into metadata or exports as a filesystem path.
+
+## Phase 17 roadmap evidence records
+
+Migration `0009_roadmap_records.sql` adds an append-only `roadmap_records` table for derived product evidence. Each
+record has a bounded portable ID, an allowlisted feature kind (`single_model_benchmark`, `performance_lab`,
+`historical_regression`, `model_ratings`, `robustness_arena`, or `repro_bundle`), canonical JSON payload, SHA-256
+content hash, and creation timestamp. Replaying an ID with identical content is idempotent; changing content is an
+immutable conflict. Source runs and Arena summaries remain the authoritative inputs: derived records never overwrite
+them. Performance metrics retain value, unit, source, sampling method, confidence, temperature, and an explicit
+unavailable state. Repro bundles are bounded, secret-sanitized JSON with an integrity manifest and import verification.
+Browser preview exposes only the no-record explanation; execution and persistence require the desktop bridge.

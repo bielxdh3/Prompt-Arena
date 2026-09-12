@@ -69,9 +69,33 @@ function tauriMsiCandidates() {
     .map((entry) => path.join(directory, entry.name));
 }
 
+// Generated bundle output is disposable; repository-published QA artifacts live
+// under downloadable-artifacts and are never touched by this cleanup.
+export function prepareGeneratedMsiOutput(repositoryRoot = REPOSITORY_ROOT) {
+  const directory = path.resolve(repositoryRoot, "src-tauri", "target", "release", "bundle", "msi");
+  const targetRoot = path.resolve(repositoryRoot, "src-tauri", "target");
+  if (path.dirname(directory) !== path.join(targetRoot, "release", "bundle")) {
+    throw new Error("MSI output directory escaped the generated target root");
+  }
+  if (!fs.existsSync(directory)) {
+    fs.mkdirSync(directory, { recursive: true });
+    return directory;
+  }
+  const metadata = fs.lstatSync(directory);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("MSI output directory is not a real directory");
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isFile()) fs.unlinkSync(target);
+    else if (entry.isDirectory() && !entry.isSymbolicLink()) fs.rmSync(target, { recursive: true, force: true });
+    else throw new Error(`MSI output contains an unsafe entry: ${entry.name}`);
+  }
+  return directory;
+}
+
 export function buildWindowsMsi() {
   if (process.platform !== "win32") throw new Error("Windows MSI build must run on Windows");
   const version = readPackageVersion(REPOSITORY_ROOT);
+  prepareGeneratedMsiOutput();
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const tauriStatus = run(npmCommand, ["run", "tauri:build", "--", "--bundles", "msi"], { shell: true });
   const candidates = tauriMsiCandidates().filter((candidate) => fs.statSync(candidate).size > 0);

@@ -237,9 +237,16 @@ export function visibleArenaTelemetryError(error: string | null | undefined, bli
 }
 
 export function arenaTelemetryLabel(sample: ArenaSampleTelemetry, blind: boolean, locale: AppLocale = "en"): string {
+  const blindOrdinal = blindLabelOrdinal(sample.competitorId);
   return blind
-    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + (sample.competitorOrdinal % 26))}`
+    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + blindOrdinal)}`
     : sample.competitorLabel;
+}
+
+function blindLabelOrdinal(value: string): number {
+  const key = opaqueBlindOrderKey(value);
+  const prefix = Number.parseInt(key.slice(0, 8), 16);
+  return Number.isFinite(prefix) ? prefix % 26 : 0;
 }
 
 export type ArenaMetricSummary = {
@@ -1037,15 +1044,32 @@ export function buildBlindArenaCards(
   executions: ArenaExecution[],
   responses: Map<string, string>,
 ): BlindArenaCard[] {
-  return executions
+  const candidates = executions
     .filter((item) => item.execution?.attempt.status === "completed")
-    .map((item, index) => ({
-      label: `Response ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? `-${index + 1}` : ""}`,
-      token: `blind-${index + 1}`,
-      executionKey: `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`,
-      text: responses.get(`${item.runId}:${item.execution?.attempt.attemptId ?? ""}`) ?? "",
-    }))
+    .map((item) => {
+      const executionKey = `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`;
+      return { executionKey, orderKey: opaqueBlindOrderKey(executionKey), text: responses.get(executionKey) ?? "" };
+    })
     .filter((card) => card.text.length > 0);
+  candidates.sort((left, right) => left.orderKey.localeCompare(right.orderKey) || left.executionKey.localeCompare(right.executionKey));
+  return candidates.map((candidate, index) => ({
+    label: `Response ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? `-${index + 1}` : ""}`,
+    token: `blind-${candidate.orderKey.slice(0, 24)}`,
+    executionKey: candidate.executionKey,
+    text: candidate.text,
+  }));
+}
+
+function opaqueBlindOrderKey(value: string): string {
+  let hash = 2166136261;
+  let second = 2246822519;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+    second ^= character.charCodeAt(0) + 31;
+    second = Math.imul(second, 3266489917);
+  }
+  return `${(hash >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}-${value.length.toString(16).padStart(4, "0")}`;
 }
 
 function average(values: number[]): number | null {

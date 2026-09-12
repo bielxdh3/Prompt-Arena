@@ -38,6 +38,8 @@ export type BuildRunPlanInput = {
   caseId: string;
   profileRevision: ProfileRevision;
   metadata?: Record<string, unknown>;
+  /** Optional bounded prompt used by derived robustness variants. The source case/verifier remains unchanged. */
+  promptOverride?: string;
 };
 
 export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
@@ -120,6 +122,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
 
   const profile = normalizeProfile(input.profileRevision);
   const prompt = combinePrompts([taskPrompt, casePrompt]);
+  const generationPrompt = input.promptOverride === undefined ? prompt : boundedPromptOverride(input.promptOverride);
   const systemPrompt = combineOptionalPrompts([profile.systemPrompt, taskSystemPrompt]);
   const plan: RunPlan = {
     runId,
@@ -128,7 +131,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
     profileRevision: profile,
     generation: {
       model: profile.model,
-      prompt,
+      prompt: generationPrompt,
       messages: [],
       systemPrompt,
       parameters: generationParameters(profile.parameters),
@@ -149,6 +152,15 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
     throw new Error("Run plan exceeds the one-shot request size limit.");
   }
   return plan;
+}
+
+function boundedPromptOverride(value: string): string {
+  if (typeof value !== "string") throw new Error("Prompt override must be text.");
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("\0") || bytes(trimmed) > MAX_RUN_PLAN_BYTES) {
+    throw new Error("Prompt override is outside the local text bounds.");
+  }
+  return trimmed;
 }
 
 function defaultOllamaConfig(): OllamaConfig {

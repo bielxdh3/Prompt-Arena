@@ -312,7 +312,7 @@ Prompt Arena treats local execution and reproducibility as product boundaries, n
 - Prompt Arena has no hosted inference service, user accounts, or telemetry path;
 - application data belongs to the app-owned local storage root;
 - benchmark versions, profile revisions, run evidence, evaluations, and artifacts preserve explicit history rather than silently rewriting old records;
-- the current executable runtime path is Ollama on fixed loopback networking;
+- executable local runtime paths are Ollama, LM Studio, and llama.cpp through explicit loopback endpoints;
 - model discovery and execution do not accept arbitrary remote endpoints or credentials;
 - the one-shot worker receives one bounded request, returns one terminal outcome, and exits;
 - browser preview does not access the desktop database, artifacts, model runtime, or run commands;
@@ -324,10 +324,10 @@ See [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md) 
 
 ## Current limitations
 
-- Ollama is the only executable model runtime today;
-- broader run authoring, cancellation, interruption recovery, and runtime lifecycle controls are not complete;
-- full model search, download, deletion, duplicate management, and empirical performance history are not implemented;
-- cross-run rankings, tournaments, regression mode, calibration, and AI judging remain future work;
+- local runtime adapters, model-library actions, and runtime-specific preflight are implemented; live-service and native acceptance remain gated;
+- broader interruption recovery and runtime lifecycle controls still require native acceptance;
+- model search/download/deletion, duplicate evidence, and empirical performance history are implemented as bounded local paths; native operation review remains pending;
+- the Insights surface now provides single-model evidence, performance metrics, historical regression, persistent Elo-v1 ratings, robustness variants, and Repro Bundles as immutable derived records; native acceptance remains pending;
 - external OpenAI-compatible, OpenAI, Anthropic, and Gemini execution is not wired;
 - secure API credential storage and real provider cost capture are not implemented;
 - GPU and VRAM hardware detection remain explicitly unavailable where no safe feature detection exists;
@@ -343,7 +343,7 @@ Prompt Arena is being developed across a few clear product tracks:
 - [ ] expand Core Arena run authoring and recovery controls;
 - [ ] grow the official benchmark packs and evaluation coverage;
 - [ ] build a fuller local model library and hardware-aware workflow;
-- [ ] add cross-run analysis, rankings, regression, and advanced evaluation;
+- [x] add local cross-run analysis, rankings, regression, and advanced evaluation surfaces (native acceptance pending);
 - [ ] add optional external providers without making them the center of the product;
 - [ ] continue interface polish, accessibility, diagnostics, and storage controls;
 - [ ] complete Windows/Linux packaging, security closeout, and release readiness.

@@ -140,12 +140,24 @@ describe("bounded Arena UI helpers", () => {
       taskId: "task-1",
       caseId: "case-1",
       profileRevisionId: "profile-1@1",
+      runtime: "ollama",
       model: "local-model",
       prompt: "Task prompt\n\nCase prompt",
       systemPrompt: "Profile system\n\nTask system",
       endpoint: "http://127.0.0.1:11434",
       repetitions: 1,
     });
+  });
+
+  it("preserves the selected non-Ollama runtime and endpoint in the preview", () => {
+    const plan = buildRunPlan({
+      runId: "preview-lm",
+      version: version(),
+      taskId: "task-1",
+      caseId: "case-1",
+      profileRevision: { ...profile(), runtime: "lm_studio", endpoint: "http://127.0.0.1:1234" },
+    });
+    expect(arenaPreviewFromPlan(plan, "task-1")).toMatchObject({ runtime: "lm_studio", endpoint: "http://127.0.0.1:1234" });
   });
 
   it("keeps browser preview explicitly no-write", () => {

@@ -156,8 +156,10 @@ describe("i18n", () => {
       error: null,
     };
 
-    expect(arenaTelemetryLabel(sample, true, "en")).toBe("Competitor B");
-    expect(arenaTelemetryLabel(sample, true, "pt-BR")).toBe("Competidor B");
+    const englishLabel = arenaTelemetryLabel(sample, true, "en");
+    expect(englishLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(arenaTelemetryLabel({ ...sample, competitorOrdinal: 0 }, true, "en")).toBe(englishLabel);
+    expect(arenaTelemetryLabel(sample, true, "pt-BR")).toBe(englishLabel.replace("Competitor", "Competidor"));
     expect(arenaTelemetryLabel(sample, false, "pt-BR")).toBe("Local model");
   });
 });

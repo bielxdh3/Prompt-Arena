@@ -231,6 +231,7 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
+import { RoadmapFeaturesView } from "./roadmap-features-view";
 import { AccessibleListbox, type AccessibleListboxOption } from "./accessible-listbox";
 import {
   formatLocaleDate,
@@ -242,7 +243,7 @@ import {
   useI18n,
 } from "./i18n";
 
-type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
+type ViewId = "overview" | "arena" | "advanced-arena" | "insights" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -252,6 +253,7 @@ const NAV_ITEMS: readonly { id: ViewId; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "arena", label: "Arena" },
   { id: "advanced-arena", label: "Advanced Arena" },
+  { id: "insights", label: "Insights" },
   { id: "benchmarks", label: "Benchmarks" },
   { id: "models", label: "Models" },
   { id: "runs", label: "Runs" },
@@ -440,6 +442,7 @@ function AppShell() {
             {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
             {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
             {activeView === "advanced-arena" && <AdvancedArenaView />}
+            {activeView === "insights" && <RoadmapFeaturesView />}
             {activeView === "benchmarks" && <BenchmarksView />}
             {activeView === "models" && <ModelsView />}
             {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
@@ -2580,7 +2583,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                   <pre className="arena-prompt">{preview.prompt}</pre>
                 </div>
                 <div className="arena-boundary">
-                  <BoundaryRow label={translate("Runtime")} value={translate("Ollama (fixed)")} />
+                  <BoundaryRow label={translate("Runtime")} value={translate(preview.runtime)} />
                   <BoundaryRow label="Endpoint" value={preview.endpoint} />
                   <BoundaryRow label={translate("Repetitions")} value={String(preview.repetitions)} />
                   <BoundaryRow label={translate("Worker")} value={translate("One-shot")} />
@@ -2927,7 +2930,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
               <>
                  <div className="arena-preview-facts"><BoundaryRow label={translate("Benchmark")} value={preview.benchmarkVersionId} /><BoundaryRow label={translate("Task / case")} value={`${preview.taskId} / ${preview.caseId}`} /><BoundaryRow label={translate("Competitors")} value={String(selectedProfiles.length)} /><BoundaryRow label={translate("Samples")} value={String(selectedProfiles.length * repetitions)} /></div>
                 <div className="arena-prompt-block"><p className="eyebrow">{translate("Prompt sent to every competitor")}</p><pre className="arena-prompt">{preview.prompt}</pre></div>
-                 <div className="arena-boundary"><BoundaryRow label={translate("Runtime")} value={translate("Ollama · sequential fair mode")} /><BoundaryRow label={translate("Endpoint")} value={preview.endpoint} /><BoundaryRow label={translate("Failure policy")} value={translate("Isolate competitor")} /><BoundaryRow label={translate("Worker")} value={translate("App-owned one-shot")} />{preview.executionBoundary && <BoundaryRow label={translate("Execution boundary")} value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
+                 <div className="arena-boundary"><BoundaryRow label={translate("Runtime")} value={[...new Set(selectedProfiles.map((profile) => profile.runtime))].join(" · ") || translate("Unavailable")} /><BoundaryRow label={translate("Endpoint")} value={[...new Set(selectedProfiles.map((profile) => typeof profile.endpoint === "string" ? profile.endpoint : "default local endpoint"))].join(" · ")} /><BoundaryRow label={translate("Failure policy")} value={translate("Isolate competitor")} /><BoundaryRow label={translate("Worker")} value={translate("App-owned one-shot")} />{preview.executionBoundary && <BoundaryRow label={translate("Execution boundary")} value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
                  {dockerExecutionBlocked && <StateMessage icon="!" title={translate("Docker execution blocked")} description={translate("This case requires Docker, which is unavailable in this build. Host execution is never used.")} error />}
                 <div className="arena-actions">
                   <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}>{translate("Run Arena")} <span aria-hidden="true">→</span></button>

@@ -320,7 +320,8 @@ describe("model library profile boundary", () => {
       managed: true,
       managedPath: "models/model.gguf",
     });
-    expect(deriveModelAvailability(managed)).toMatchObject({ state: "installed", actions: ["use", "remove"] });
+    expect(deriveModelAvailability(managed)).toMatchObject({ state: "unavailable", actions: ["remove"] });
+    expect(modelAvailabilityLabel("unavailable")).toBe("Unavailable");
   });
 
   it("derives immutable profile revision identity and fixed runtime", () => {

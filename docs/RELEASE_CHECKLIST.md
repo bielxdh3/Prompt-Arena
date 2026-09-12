@@ -15,6 +15,15 @@ generation or checksum preparation fails; the previous verified README link is n
 The workflow remains a validation gate: it checks version synchronization and treats MSI as mandatory, but it does not
 push artifacts. Do not publish an installer by copying an unversioned or unverified file into the repository.
 
+If a Windows release reaches the commit step and the push fails, rerun the same command on the same clean named branch.
+The helper detects the latest `release(windows): publish Prompt Arena <version> MSI` commit together with its artifact,
+checksum, and README marker, then retries a normal push without incrementing the version again. It never cleans
+`downloadable-artifacts`; only generated `src-tauri/target/.../bundle/msi` output is removed before a fresh build.
+
+Roadmap-derived evidence uses migration `0009_roadmap_records.sql` and remains append-only. A final MSI/NSIS package
+must be built from the exact final product commit after source validation; browser and unit evidence do not replace
+Windows native, Defender, signing, or owner visual gates.
+
 ## Local validation
 
 - [ ] `npm ci` completes from the committed `package-lock.json`.
