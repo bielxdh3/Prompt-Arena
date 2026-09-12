@@ -197,9 +197,9 @@ Prompt Arena is configured to produce native desktop bundles for both supported 
 <!-- WINDOWS_MSI_DOWNLOAD:START -->
 [Download Prompt Arena 0.1.4 for Windows (MSI)](downloadable-artifacts/Prompt-Arena-0.1.4-windows-x64.msi)
 
-SHA-256: `3205fa00a8c8d1c366473f501d8596f01915c654d138cbec5bf10fb353dfd0a2`
+SHA-256: `2289c6f2a29d62fc35afd1bc9df179e019d55677dbde55cc913bc14cb7e16495`
 
-Built from product commit: `81930d0c8327251ff4e4cda172f8a0ed1fc9781b`
+Built from product commit: `187d8587379280847a9230dcef6af66425c1ef23`
 <!-- WINDOWS_MSI_DOWNLOAD:END -->
 
 > [!WARNING]
