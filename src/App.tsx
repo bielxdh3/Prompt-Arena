@@ -248,14 +248,14 @@ type ConnectionState =
   | { status: "ready"; appStatus: AppStatus }
   | { status: "error"; message: string };
 
-const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] = [
-  { id: "overview", label: "Overview", description: "Workspace status" },
-  { id: "arena", label: "Arena", description: "Compare model revisions" },
-  { id: "advanced-arena", label: "Advanced Arena", description: "Rank saved evidence" },
-  { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
-  { id: "models", label: "Models", description: "Profiles and local models" },
-  { id: "runs", label: "Runs", description: "Execution history" },
-  { id: "settings", label: "Settings", description: "Appearance and boundaries" },
+const NAV_ITEMS: readonly { id: ViewId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "arena", label: "Arena" },
+  { id: "advanced-arena", label: "Advanced Arena" },
+  { id: "benchmarks", label: "Benchmarks" },
+  { id: "models", label: "Models" },
+  { id: "runs", label: "Runs" },
+  { id: "settings", label: "Settings" },
 ];
 
 function loadAppearancePreferences(): AppearancePreferences {
@@ -292,21 +292,33 @@ function AppShell() {
       targets.forEach((target) => target.classList.add("is-visible"));
       return;
     }
-    const observer = new IntersectionObserver((entries) => {
+    let observer: IntersectionObserver | undefined;
+    let frame = 0;
+    const revealVisibleTargets = () => {
+      const scrollRootRect = scrollRoot.getBoundingClientRect();
+      targets.forEach((target) => {
+        const targetRect = target.getBoundingClientRect();
+        if (targetRect.top < scrollRootRect.bottom && targetRect.bottom > scrollRootRect.top) {
+          target.classList.add("is-visible");
+          observer?.unobserve(target);
+        } else {
+          observer?.observe(target);
+        }
+      });
+    };
+    observer = new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
           entry.target.classList.add("is-visible");
-          observer.unobserve(entry.target);
+          observer?.unobserve(entry.target);
         }
       });
     }, { threshold: 0.12, root: scrollRoot, rootMargin: "0px 0px -8% 0px" });
-    targets.forEach((target) => {
-      const targetRect = target.getBoundingClientRect();
-      const scrollRootRect = scrollRoot.getBoundingClientRect();
-      if (targetRect.top < scrollRootRect.bottom && targetRect.bottom > scrollRootRect.top) target.classList.add("is-visible");
-      else observer.observe(target);
-    });
-    return () => observer.disconnect();
+    frame = window.requestAnimationFrame(revealVisibleTargets);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
   }, [activeView]);
 
   useEffect(() => {
@@ -386,7 +398,6 @@ function AppShell() {
               onClick={() => setActiveView(item.id)}
             >
               <span className="nav-item-label">{translate(item.label)}</span>
-              <span className="nav-item-description">{translate(item.description)}</span>
             </button>
           ))}
         </nav>
@@ -536,9 +547,39 @@ function Overview({
           </button>
         </div>
         <div className="hero-orbit" aria-hidden="true">
-          <div className="orbit orbit-outer" />
-          <div className="orbit orbit-middle" />
-          <div className="orbit orbit-inner" />
+          <svg className="orbit orbit-outer" viewBox="0 0 310 164" focusable="false">
+            <defs>
+              <linearGradient id="orbit-outer-gradient" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="var(--color-accent-strong)" stopOpacity="0.28" />
+                <stop offset="0.42" stopColor="var(--color-accent-strong)" stopOpacity="0.96" />
+                <stop offset="0.7" stopColor="var(--color-accent)" stopOpacity="0.48" />
+                <stop offset="1" stopColor="var(--color-accent)" stopOpacity="0.2" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="155" cy="82" rx="149" ry="76" fill="none" stroke="url(#orbit-outer-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <svg className="orbit orbit-middle" viewBox="0 0 244 258" focusable="false">
+            <defs>
+              <linearGradient id="orbit-middle-gradient" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="var(--color-accent)" stopOpacity="0.2" />
+                <stop offset="0.38" stopColor="var(--color-accent-strong)" stopOpacity="0.92" />
+                <stop offset="0.7" stopColor="var(--color-accent)" stopOpacity="0.44" />
+                <stop offset="1" stopColor="var(--color-accent-strong)" stopOpacity="0.26" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="122" cy="129" rx="116" ry="123" fill="none" stroke="url(#orbit-middle-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <svg className="orbit orbit-inner" viewBox="0 0 184 104" focusable="false">
+            <defs>
+              <linearGradient id="orbit-inner-gradient" x1="0" y1="1" x2="1" y2="0">
+                <stop offset="0" stopColor="var(--color-accent-strong)" stopOpacity="0.22" />
+                <stop offset="0.45" stopColor="var(--color-accent-strong)" stopOpacity="0.94" />
+                <stop offset="0.75" stopColor="var(--color-accent)" stopOpacity="0.5" />
+                <stop offset="1" stopColor="var(--color-accent)" stopOpacity="0.2" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="92" cy="52" rx="86" ry="46" fill="none" stroke="url(#orbit-inner-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+          </svg>
           <div className="orbit-core">PA</div>
         </div>
       </section>

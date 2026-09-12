@@ -10,6 +10,26 @@ const i18nSource = fs.readFileSync(path.join(repositoryRoot, "src", "i18n.ts"), 
 const appSource = fs.readFileSync(path.join(repositoryRoot, "src", "App.tsx"), "utf8");
 const shippedUiSources = ["App.tsx", "advanced-arena-view.tsx"].map((fileName) => fs.readFileSync(path.join(repositoryRoot, "src", fileName), "utf8"));
 
+function contrastRatio(foreground, background) {
+  const channel = (value) => {
+    const normalized = value / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (hex) => {
+    const rgb = hex.slice(1).match(/.{2}/g).map((value) => Number.parseInt(value, 16));
+    return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+  };
+  const lighter = Math.max(luminance(foreground), luminance(background));
+  const darker = Math.min(luminance(foreground), luminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function paperToken(block, token) {
+  const value = block.match(new RegExp(`${token}:\\s*(#[0-9a-f]{6})`, "i"))?.[1];
+  if (!value) throw new Error(`Missing Paper token ${token}`);
+  return value;
+}
+
 describe("static UI style contracts", () => {
   it("keeps wide comparison overflow local and restores row flow on narrow screens", () => {
     expect(styles).toMatch(/\.arena-competitor-results\s*\{[^}]*overflow-x:\s*auto/s);
@@ -51,7 +71,8 @@ describe("static UI style contracts", () => {
     }
     expect(styles).toMatch(/\.page-transition\s*\{[^}]*animation:\s*page-enter\s+var\(--motion-page\)/s);
     expect(styles).toMatch(/\.scroll-reveal\s*\{[^}]*transition:[^}]*var\(--motion-reveal\)/s);
-    expect(appSource).toContain("observer.unobserve(entry.target)");
+    expect(appSource).toContain("requestAnimationFrame(revealVisibleTargets)");
+    expect(appSource).toContain("observer?.unobserve(entry.target)");
     expect(styles).toMatch(/details\.motion-disclosure\[open\][\s\S]*transition-delay:\s*var\(--motion-stagger\)/);
     const formerFiniteMotion = {
       "--motion-fast-base": 200,
@@ -82,17 +103,30 @@ describe("static UI style contracts", () => {
     expect(styles).not.toContain("--motion-orbit-period");
     expect(styles).not.toMatch(/orbit-(?:rotate|one-rotate|two-rotate)/);
     expect(styles).toMatch(/@keyframes orbit-ring-(?:outer|middle|inner)/);
-    expect(styles).toMatch(/\.orbit-outer\s*\{[^}]*animation:\s*orbit-ring-outer\s+var\(--orbit-outer-period\)/s);
-    expect(styles).toMatch(/\.orbit-middle\s*\{[^}]*animation:\s*orbit-ring-middle\s+var\(--orbit-middle-period\)[^}]*reverse/s);
-    expect(styles).toMatch(/\.orbit-inner\s*\{[^}]*animation:\s*orbit-ring-inner\s+var\(--orbit-inner-period\)/s);
+    expect(styles).toMatch(/\.orbit-outer\s*\{[^}]*animation:\s*orbit-ring-outer\s+var\(--orbit-outer-duration\)/s);
+    expect(styles).toMatch(/\.orbit-middle\s*\{[^}]*animation:\s*orbit-ring-middle\s+var\(--orbit-middle-duration\)[^}]*reverse/s);
+    expect(styles).toMatch(/\.orbit-inner\s*\{[^}]*animation:\s*orbit-ring-inner\s+var\(--orbit-inner-duration\)/s);
+    expect(styles).toMatch(/--orbit-outer-period:\s*3\.2s/);
+    expect(styles).toMatch(/--orbit-middle-period:\s*2\.4s/);
+    expect(styles).toMatch(/--orbit-inner-period:\s*1\.8s/);
+    expect(styles).toMatch(/\.orbit-(?:outer|middle|inner)\s*\{[^}]*animation:/s);
+    expect(styles).not.toMatch(/\.orbit-(?:outer|middle|inner)\s*\{[^}]*border-(?:top|right|bottom|left)-color/s);
     expect(styles).toMatch(/\.hero-orbit \.orbit\s*\{\s*animation:\s*none !important;/s);
     expect(styles).toMatch(/\.app-shell\[data-reduced-motion="true"\][\s\S]*transition-duration:\s*0\.01ms/s);
     expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*--motion-scale-effective:\s*0/s);
 
     const paperBlock = styles.match(/\.app-shell\[data-surface="paper"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
-    expect(paperBlock).toMatch(/--color-canvas:\s*#dcd5c8/);
-    expect(paperBlock).toMatch(/--color-surface:\s*#e8e1d5/);
-    expect(paperBlock).not.toMatch(/#fff/i);
+    expect(paperBlock).toMatch(/--color-canvas:\s*#c8bfb0/);
+    expect(paperBlock).toMatch(/--color-surface:\s*#d7cdbd/);
+    expect(paperBlock).toMatch(/--color-accent-strong:\s*#6d4512/);
+    expect(paperBlock).toMatch(/--color-focus:\s*#51370e/);
+    expect(paperBlock).not.toMatch(/--color-(?:canvas|surface|surface-raised|surface-soft|surface-muted):\s*#fff/i);
+    const paperSurface = paperToken(paperBlock, "--color-surface");
+    expect(contrastRatio(paperToken(paperBlock, "--color-text"), paperSurface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(paperToken(paperBlock, "--color-text-muted"), paperSurface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(paperToken(paperBlock, "--color-accent-strong"), paperSurface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(paperToken(paperBlock, "--color-focus"), paperSurface)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(paperToken(paperBlock, "--color-border-strong"), paperSurface)).toBeGreaterThanOrEqual(3);
     expect(styles).toMatch(/\.workspace,[\s\S]*\.advanced-textarea\s*\{[^}]*scrollbar-color:/s);
     expect(styles).toMatch(/\.app-shell\[data-contrast="high"\]\s*\{[^}]*--scrollbar-thumb:/s);
     expect(styles).toMatch(/\.app-shell\[data-contrast="high"\]\[data-surface="paper"\]/);
@@ -116,16 +150,19 @@ describe("static UI style contracts", () => {
     expect(reduceMotionIndex).toBeGreaterThan(motionControlIndex);
     expect(firstAppearanceFieldsetIndex).toBeGreaterThan(reduceMotionIndex);
     const orbitMarkup = appSource.match(/<div className="hero-orbit"[\s\S]*?<\/section>/)?.[0] ?? "";
-    expect(orbitMarkup).toContain('className="orbit orbit-outer"');
-    expect(orbitMarkup).toContain('className="orbit orbit-middle"');
-    expect(orbitMarkup).toContain('className="orbit orbit-inner"');
+    expect((orbitMarkup.match(/<svg className="orbit orbit-(?:outer|middle|inner)"/g) ?? []).length).toBe(3);
+    expect((orbitMarkup.match(/<ellipse /g) ?? []).length).toBe(3);
     expect(orbitMarkup).toContain('<div className="orbit-core">PA</div>');
     expect(orbitMarkup).not.toMatch(/dot|ball|bead|particle/i);
     expect(styles).not.toMatch(/\.orbit-core\s*\{[^}]*animation:/s);
+    expect(appSource).not.toContain("nav-item-description");
+    expect(styles).not.toContain(".nav-item-description");
   });
 
   it("keeps listbox menus attached, viewport-safe, and shared across consumers", () => {
     expect(listboxSource).toContain("createPortal");
+    expect(listboxSource).toContain("calculateListboxMenuPosition");
+    expect(listboxSource).toContain('data-placement={menuPosition?.placement}');
     expect(listboxSource).toContain('closest<HTMLElement>(".app-shell")');
     expect(listboxSource).toContain('window.addEventListener("scroll", updateMenuPosition, true)');
     expect(listboxSource).toContain("menuRef.current?.contains");
