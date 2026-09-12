@@ -141,11 +141,12 @@ target-specific worker sidecar hook remains deterministic. `package:artifacts` n
 runner has the required platform tooling. The workflow records an explicit MSI outcome while keeping NSIS mandatory,
 uploads unsigned artifacts, and creates no GitHub Release.
 
-Workflow run [33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890) passed frontend/Rust
-validation, the mandatory Windows NSIS build, Windows checksum normalization and clean-install/start/restart/
-silent-uninstall smoke, and Linux DEB/AppImage builds, checksum normalization, and package/app smoke. MSI was
-attempted but unavailable, with zero MSI artifacts. This CI evidence does not replace final native/manual desktop
-acceptance, so P7 remains IN PROGRESS while MSI remains unavailable if technically viable and that acceptance remains
+Historical workflow run [33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890) passed the
+earlier revision's frontend/Rust validation, Windows NSIS and Linux package smoke; MSI was unavailable in that run.
+Current workflow run [34722264293](https://github.com/bielxdh3/Prompt-Arena/actions/runs/34722264293) passed Windows and
+Linux validation, produced Windows NSIS/MSI and Linux DEB/AppImage artifacts, normalized checksums, and passed clean-
+install/start/restart/silent-uninstall and Linux package/app smoke. This CI evidence does not replace final
+native/manual desktop acceptance, so P7 remains IN PROGRESS while signing/Defender and owner acceptance remain
 separate.
 
 The BL4 native diagnostic for this revision proved only Vite/Tauri startup; its harness did not exercise native UI,
