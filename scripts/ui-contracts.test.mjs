@@ -53,16 +53,38 @@ describe("static UI style contracts", () => {
     expect(styles).toMatch(/\.scroll-reveal\s*\{[^}]*transition:[^}]*var\(--motion-reveal\)/s);
     expect(appSource).toContain("observer.unobserve(entry.target)");
     expect(styles).toMatch(/details\.motion-disclosure\[open\][\s\S]*transition-delay:\s*var\(--motion-stagger\)/);
-    expect(styles).toMatch(/@keyframes orbit-(?:rotate|one-rotate|two-rotate)/);
-    expect(styles).toMatch(/\.orbit-one\s*\{[^}]*animation-duration:/s);
-    expect(styles).toContain("--motion-orbit-period: 18s");
-    expect(styles).toMatch(/--motion-page-base:\s*360ms/);
-    expect(styles).toMatch(/--motion-disclosure-base:\s*320ms/);
+    const formerFiniteMotion = {
+      "--motion-fast-base": 200,
+      "--motion-base-base": 314,
+      "--motion-page-base": 360,
+      "--motion-surface-base": 286,
+      "--motion-reveal-base": 160,
+      "--motion-disclosure-base": 320,
+      "--motion-stagger-base": 48,
+    };
+    const currentFiniteMotion = {
+      "--motion-fast-base": 1000,
+      "--motion-base-base": 1570,
+      "--motion-page-base": 1800,
+      "--motion-surface-base": 1430,
+      "--motion-reveal-base": 800,
+      "--motion-disclosure-base": 1600,
+      "--motion-stagger-base": 240,
+    };
+    for (const [token, formerValue] of Object.entries(formerFiniteMotion)) {
+      const currentValue = currentFiniteMotion[token];
+      expect(styles).toMatch(new RegExp(`${token}:\\s*${currentValue}ms`));
+      expect(currentValue / formerValue).toBe(5);
+    }
     expect(styles).toMatch(/--motion-page:\s*calc\(\s*var\(--motion-page-base\)\s*\*\s*var\(--motion-scale-effective\)\s*\)/);
     expect(styles).toContain("transition-behavior: allow-discrete");
     expect(styles).toContain("content-visibility: hidden");
-    expect(styles).not.toMatch(/\.orbit::(?:before|after)\s*\{/);
-    expect(styles).toMatch(/\.orbit\s*\{[^}]*border-style:\s*solid dashed solid dotted;/s);
+    expect(styles).not.toContain("--motion-orbit-period");
+    expect(styles).not.toMatch(/orbit-(?:rotate|one-rotate|two-rotate)/);
+    expect(styles).toMatch(/@keyframes orbit-ring-(?:outer|middle|inner)/);
+    expect(styles).toMatch(/\.orbit-outer\s*\{[^}]*animation:\s*orbit-ring-outer\s+var\(--orbit-outer-period\)/s);
+    expect(styles).toMatch(/\.orbit-middle\s*\{[^}]*animation:\s*orbit-ring-middle\s+var\(--orbit-middle-period\)[^}]*reverse/s);
+    expect(styles).toMatch(/\.orbit-inner\s*\{[^}]*animation:\s*orbit-ring-inner\s+var\(--orbit-inner-period\)/s);
     expect(styles).toMatch(/\.hero-orbit \.orbit\s*\{\s*animation:\s*none !important;/s);
     expect(styles).toMatch(/\.app-shell\[data-reduced-motion="true"\][\s\S]*transition-duration:\s*0\.01ms/s);
     expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*--motion-scale-effective:\s*0/s);
@@ -87,6 +109,19 @@ describe("static UI style contracts", () => {
     expect(i18nSource).toMatch(/"Adjust the duration of discretionary interface motion\."\s*:/);
     expect((appSource.match(/type="range"/g) ?? []).length).toBe(1);
     expect(appSource).not.toContain('id="font-scale"');
+    const motionControlIndex = appSource.indexOf('id="motion-scale"');
+    const reduceMotionIndex = appSource.indexOf('className="appearance-toggle motion-toggle"');
+    const firstAppearanceFieldsetIndex = appSource.indexOf('<fieldset className="appearance-fieldset">');
+    expect(motionControlIndex).toBeGreaterThan(-1);
+    expect(reduceMotionIndex).toBeGreaterThan(motionControlIndex);
+    expect(firstAppearanceFieldsetIndex).toBeGreaterThan(reduceMotionIndex);
+    const orbitMarkup = appSource.match(/<div className="hero-orbit"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(orbitMarkup).toContain('className="orbit orbit-outer"');
+    expect(orbitMarkup).toContain('className="orbit orbit-middle"');
+    expect(orbitMarkup).toContain('className="orbit orbit-inner"');
+    expect(orbitMarkup).toContain('<div className="orbit-core">PA</div>');
+    expect(orbitMarkup).not.toMatch(/dot|ball|bead|particle/i);
+    expect(styles).not.toMatch(/\.orbit-core\s*\{[^}]*animation:/s);
   });
 
   it("keeps listbox menus attached, viewport-safe, and shared across consumers", () => {

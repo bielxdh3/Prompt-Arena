@@ -29,13 +29,14 @@
   --shadow-panel: 0 18px 50px rgb(0 0 0 / 0.18);
   --motion-scale: 1;
   --motion-scale-effective: var(--motion-scale);
-  --motion-fast-base: 200ms;
-  --motion-base-base: 314ms;
-  --motion-page-base: 360ms;
-  --motion-surface-base: 286ms;
-  --motion-reveal-base: 160ms;
-  --motion-disclosure-base: 320ms;
-  --motion-stagger-base: 48ms;
+  /* 100% is exactly 5x the former shipped finite-motion baseline. */
+  --motion-fast-base: 1000ms;
+  --motion-base-base: 1570ms;
+  --motion-page-base: 1800ms;
+  --motion-surface-base: 1430ms;
+  --motion-reveal-base: 800ms;
+  --motion-disclosure-base: 1600ms;
+  --motion-stagger-base: 240ms;
   --motion-fast: calc(var(--motion-fast-base) * var(--motion-scale-effective));
   --motion-base: calc(var(--motion-base-base) * var(--motion-scale-effective));
   --motion-page: calc(var(--motion-page-base) * var(--motion-scale-effective));
@@ -44,7 +45,9 @@
   --motion-disclosure: calc(var(--motion-disclosure-base) * var(--motion-scale-effective));
   --motion-expand: var(--motion-disclosure);
   --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
-  --motion-orbit-period: 18s;
+  --orbit-outer-period: 4.8s;
+  --orbit-middle-period: 3.6s;
+  --orbit-inner-period: 2.8s;
   --z-popover: 20;
   --motion-ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
   --motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
@@ -839,53 +842,57 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
 
 .orbit {
   position: absolute;
-  width: 260px;
-  height: 140px;
-  border: 1px solid rgb(214 184 138 / 0.38);
-  border-style: solid dashed solid dotted;
+  display: block;
+  border: 2px solid transparent;
   border-radius: 50%;
-  transform: rotate(-25deg);
   transform-origin: center;
   will-change: transform;
-  animation: orbit-rotate var(--motion-orbit-period) linear infinite;
 }
 
-.orbit-one {
+.orbit-outer {
   width: 310px;
-  height: 170px;
-  transform: rotate(32deg);
-  border-style: dashed solid dotted solid;
-  animation-duration: calc(var(--motion-orbit-period) * 1.32);
-  animation-direction: reverse;
+  height: 164px;
+  border-top-color: var(--color-accent-strong);
+  border-right-color: rgb(214 184 138 / 0.2);
+  border-bottom-color: transparent;
+  border-left-color: var(--color-accent);
+  animation: orbit-ring-outer var(--orbit-outer-period) linear infinite;
 }
 
-.orbit-two {
-  width: 190px;
-  height: 300px;
-  border-color: rgb(214 184 138 / 0.22);
-  border-style: dotted solid dashed solid;
-  transform: rotate(44deg);
-  animation-duration: calc(var(--motion-orbit-period) * 0.84);
+.orbit-middle {
+  width: 244px;
+  height: 258px;
+  border-top-color: transparent;
+  border-right-color: var(--color-accent);
+  border-bottom-color: var(--color-accent-strong);
+  border-left-color: rgb(214 184 138 / 0.16);
+  animation: orbit-ring-middle var(--orbit-middle-period) linear infinite reverse;
 }
 
-@keyframes orbit-rotate {
-  from { transform: rotate(-25deg); }
-  to { transform: rotate(335deg); }
+.orbit-inner {
+  width: 184px;
+  height: 104px;
+  border-top-color: rgb(214 184 138 / 0.18);
+  border-right-color: var(--color-accent-strong);
+  border-bottom-color: transparent;
+  border-left-color: transparent;
+  animation: orbit-ring-inner var(--orbit-inner-period) linear infinite;
 }
 
-@keyframes orbit-one-rotate {
-  from { transform: rotate(32deg); }
-  to { transform: rotate(392deg); }
+@keyframes orbit-ring-outer {
+  from { transform: rotate(-22deg); }
+  to { transform: rotate(338deg); }
 }
 
-.orbit-one { animation-name: orbit-one-rotate; }
-
-@keyframes orbit-two-rotate {
-  from { transform: rotate(44deg); }
-  to { transform: rotate(404deg); }
+@keyframes orbit-ring-middle {
+  from { transform: rotate(34deg); }
+  to { transform: rotate(-326deg); }
 }
 
-.orbit-two { animation-name: orbit-two-rotate; }
+@keyframes orbit-ring-inner {
+  from { transform: rotate(66deg); }
+  to { transform: rotate(426deg); }
+}
 
 .orbit-core {
   display: grid;
