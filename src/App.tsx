@@ -547,7 +547,7 @@ function Overview({
           </button>
         </div>
         <div className="hero-orbit" aria-hidden="true">
-          <svg className="orbit orbit-outer" viewBox="0 0 310 164" focusable="false">
+          <svg className="orbit orbit-outer" viewBox="0 0 286 216" focusable="false">
             <defs>
               <linearGradient id="orbit-outer-gradient" x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0" stopColor="var(--color-accent-strong)" stopOpacity="0.28" />
@@ -556,9 +556,9 @@ function Overview({
                 <stop offset="1" stopColor="var(--color-accent)" stopOpacity="0.2" />
               </linearGradient>
             </defs>
-            <ellipse cx="155" cy="82" rx="149" ry="76" fill="none" stroke="url(#orbit-outer-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+            <ellipse cx="143" cy="108" rx="137" ry="101" fill="none" stroke="url(#orbit-outer-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
           </svg>
-          <svg className="orbit orbit-middle" viewBox="0 0 244 258" focusable="false">
+          <svg className="orbit orbit-middle" viewBox="0 0 232 250" focusable="false">
             <defs>
               <linearGradient id="orbit-middle-gradient" x1="1" y1="0" x2="0" y2="1">
                 <stop offset="0" stopColor="var(--color-accent)" stopOpacity="0.2" />
@@ -567,18 +567,7 @@ function Overview({
                 <stop offset="1" stopColor="var(--color-accent-strong)" stopOpacity="0.26" />
               </linearGradient>
             </defs>
-            <ellipse cx="122" cy="129" rx="116" ry="123" fill="none" stroke="url(#orbit-middle-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
-          </svg>
-          <svg className="orbit orbit-inner" viewBox="0 0 184 104" focusable="false">
-            <defs>
-              <linearGradient id="orbit-inner-gradient" x1="0" y1="1" x2="1" y2="0">
-                <stop offset="0" stopColor="var(--color-accent-strong)" stopOpacity="0.22" />
-                <stop offset="0.45" stopColor="var(--color-accent-strong)" stopOpacity="0.94" />
-                <stop offset="0.75" stopColor="var(--color-accent)" stopOpacity="0.5" />
-                <stop offset="1" stopColor="var(--color-accent)" stopOpacity="0.2" />
-              </linearGradient>
-            </defs>
-            <ellipse cx="92" cy="52" rx="86" ry="46" fill="none" stroke="url(#orbit-inner-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+            <ellipse cx="116" cy="125" rx="104" ry="113" fill="none" stroke="url(#orbit-middle-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
           </svg>
           <div className="orbit-core">PA</div>
         </div>
