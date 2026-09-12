@@ -7,7 +7,21 @@ patch version, builds exactly one MSI from the current checkout, writes the vers
 `downloadable-artifacts/`, updates the marked README link, and commits/pushes the complete release together. MSI is a
 mandatory workflow artifact; failed generation leaves the prior verified README link unchanged.
 
-Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
+## Current closeout snapshot (2026-09-12)
+
+Current source implementation HEAD is `13e3cd1b3247e1acf11b678cd1c2f24fbf359608`;
+current documentation/package-evidence HEAD is
+`492841dd9bdc1afbecd9c851cf7d44be8945bfb3`. CI run
+`34723433871` and desktop package run `34723433869` passed on the latter
+checkout. The package workflow produced and verified Windows MSI/NSIS and
+Linux DEB/AppImage artifacts, including clean-install/start/restart/uninstall
+smoke. These results do not close installed/native or human QA. PR #35 is
+OPEN/DRAFT and unmerged; the separate native/release follow-up is PR #42.
+
+The remaining references below to older implementation heads and package
+artifacts are explicitly historical evidence, not current-head claims.
+
+Historical reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
 `8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). It includes the
 stability, model-action, telemetry-safety, desktop UI, and accessible Arena
 listbox/test-contract batches after
@@ -80,10 +94,16 @@ Arena live-runtime, and human review remain `PENDING_HUMAN_QA`.
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
 | Windows NSIS at exact checkout HEAD | Tauri bundle/workflow | Fresh incremental package built from exact checkout source tree HEAD `fe5c28644b7aea01f7077bbb0e73ef73605255f2`, containing baseline reviewed production implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` plus focused corrections `4e471224d51bddef7f9d511f4dcce6df62f6a2ee` and `fe5c28644b7aea01f7077bbb0e73ef73605255f2`; artifact, bundle, bundled-worker, source sidecar, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
-| Windows MSI | Tauri target/workflow | Configuration remains present | Existing local WiX `light.exe` failure | BLOCKED LOCALLY |
-| Linux deb/AppImage | Tauri target/workflow | Workflow definition | Linux runner required | CI PENDING |
+| Windows MSI | Tauri target/workflow | Desktop package run `34723433869` produced exactly one verified MSI; local WiX fallback remains unavailable | Native install/review remains pending | COMPLETE (CI artifact) |
+| Linux deb/AppImage | Tauri target/workflow | Desktop package run `34723433869` produced and verified Linux DEB/AppImage artifacts | Native Linux review remains pending | COMPLETE (CI artifact) |
 
-## Automated validation recorded for source implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` and current docs checkout
+## Historical automated validation recorded for source implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657`
+
+Current closeout validation is recorded by source commit `13e3cd1b3247e1acf11b678cd1c2f24fbf359608`, documentation
+commit `492841dd9bdc1afbecd9c851cf7d44be8945bfb3`, CI run `34723433871`, and desktop package run `34723433869`.
+The current local gate included the frontend suite (22 files/141 tests), typecheck, build, boundary/version checks,
+dependency audit, Rust format/check/test (114 tests), package verification, and targeted Defender scan. No installed
+visual or human acceptance is claimed.
 
 - On the source implementation checkout, `npm test` — passed:
   19 files, 113 tests, including stable legacy blind lock continuity, model action precedence, listbox navigation, UI style contracts, and centralized PT-BR live-monitor/finite-label coverage.
@@ -112,7 +132,7 @@ production source implementation HEAD
 '{"bundle":{"useLocalToolsDir":true}}'`. The fresh package evidence below is
 not visual or human QA evidence.
 
-These checks do not prove an installed Windows visual session, native control
+These historical checks do not prove an installed Windows visual session, native control
 behavior, full Tauri Arena responsiveness/persistence/blind continuity, Docker
 execution, or human accessibility acceptance. The worker smoke is runtime
 protocol evidence only.
@@ -128,7 +148,8 @@ The supplied Windows QA brief retains these explicit inspection markers:
 Canonical BL4 provenance for this isolated worktree is control-plane metadata:
 account `biel4`, role Executor, App Server/headless transport,
 `workspace-write`, Windows elevated readiness `ready`, and approval policy
-`never`. Remote CI is unconfirmed. No visual audit or human QA is claimed.
+`never`. Remote CI is confirmed by runs `34723433871` and `34723433869`. No
+visual audit or human QA is claimed.
 
 ## Security and publication review
 
@@ -141,7 +162,8 @@ account `biel4`, role Executor, App Server/headless transport,
 - Publication verdict: `Create a sanitized public copy`. Reachable internal
   evidence/history includes local usernames, absolute paths, and operational
   provenance. This internal evidence remains unsanitized here; any public copy
-  must redact those details. No publication, push, tag, release, or deploy
+  must redact those details. The branches and draft PRs are published for
+  review; no merge, release, tag, deploy, force-push, or history rewrite
   occurred.
 
 ## Packaging and historical provenance
@@ -176,12 +198,14 @@ records the artifact checksum. `E:\Prompt Arena-live-telemetry-i18n-commit2\pack
 is 282 bytes with SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
 and records passed
 checksum verification, clean install, executable start, restart, and silent
-uninstall; the optional MSI artifact was unavailable. This package smoke is not
-visual or human QA. MSI remains unavailable (`BLOCKED LOCALLY`); Docker remains
+uninstall; the optional MSI artifact was unavailable in this historical local
+package attempt. This package smoke is not visual or human QA. Current CI
+produced a verified MSI/NSIS pair; local WiX fallback remains unavailable.
+Docker remains
 `BLOCKED_EXTERNAL_RUNTIME`. Local Ollama worker-protocol evidence is
 `COMPLETE`; Tauri discovery and full Arena native runtime review remain
-`PENDING_HUMAN_QA`. Linux/remote CI and visual/native/full Tauri Arena human QA
-remain pending.
+`PENDING_HUMAN_QA`. Visual/native/full Tauri Arena human QA remains pending;
+remote CI is confirmed by runs `34723433871` and `34723433869`.
 
 The following NSIS evidence is historical and is not an artifact for the new
 reviewed HEAD. At `57f02b3`, the installer
