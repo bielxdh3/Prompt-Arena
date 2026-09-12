@@ -11,6 +11,17 @@ product phase. A phase becomes `COMPLETE` only after its user-facing acceptance 
 - Benchmark versions, profile revisions, run evidence, evaluations, and exports remain immutable and auditable.
 - Imported prompts and model output are untrusted content; Docker-required tasks never fall back to host execution.
 
+## Current closeout snapshot (2026-09-12)
+
+The local roadmap implementation is complete through source commit
+`13e3cd1b3247e1acf11b678cd1c2f24fbf359608`; the current package/documentation
+evidence checkout is `492841dd9bdc1afbecd9c851cf7d44be8945bfb3`. CI run
+`34723433871` and desktop package run `34723433869` both passed on that
+checkout, including Windows MSI/NSIS and Linux package smoke. PR #35 remains
+OPEN/DRAFT and unmerged. Native Tauri/runtime, live external-runtime, Docker,
+signing/Defender, independent security/publication, and owner merge gates are
+tracked separately in PR #42 and remain open.
+
 ## Phase status
 
 ### P0 — Foundation and trust boundary — COMPLETE
@@ -141,12 +152,13 @@ target-specific worker sidecar hook remains deterministic. `package:artifacts` n
 runner has the required platform tooling. The workflow records an explicit MSI outcome while keeping NSIS mandatory,
 uploads unsigned artifacts, and creates no GitHub Release.
 
-Historical workflow run [33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890) passed the
-earlier revision's frontend/Rust validation, Windows NSIS and Linux package smoke; MSI was unavailable in that run.
-Current workflow run [34722264293](https://github.com/bielxdh3/Prompt-Arena/actions/runs/34722264293) passed Windows and
-Linux validation, produced Windows NSIS/MSI and Linux DEB/AppImage artifacts, normalized checksums, and passed clean-
-install/start/restart/silent-uninstall and Linux package/app smoke. This CI evidence does not replace final
-native/manual desktop acceptance, so P7 remains IN PROGRESS while signing/Defender and owner acceptance remain
+Historical workflow run [33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890) and the
+intermediate run [34722264293](https://github.com/bielxdh3/Prompt-Arena/actions/runs/34722264293) remain historical
+evidence. Current workflow run [34723433871](https://github.com/bielxdh3/Prompt-Arena/actions/runs/34723433871) and
+desktop package run [34723433869](https://github.com/bielxdh3/Prompt-Arena/actions/runs/34723433869) passed Windows and
+Linux validation, produced Windows NSIS/MSI and Linux DEB/AppImage artifacts, normalized checksums, and passed
+clean-install/start/restart/silent-uninstall and Linux package/app smoke. This CI/package evidence does not replace
+final native/manual desktop acceptance, so P7 remains IN PROGRESS while signing/Defender and owner acceptance remain
 separate.
 
 The BL4 native diagnostic for this revision proved only Vite/Tauri startup; its harness did not exercise native UI,

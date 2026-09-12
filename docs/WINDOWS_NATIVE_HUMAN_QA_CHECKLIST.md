@@ -1,6 +1,16 @@
 # Windows native/human QA checklist
 
-Reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
+## Current closeout snapshot (2026-09-12)
+
+The current implementation source is `13e3cd1b3247e1acf11b678cd1c2f24fbf359608`;
+documentation/package evidence is `492841dd9bdc1afbecd9c851cf7d44be8945bfb3`.
+CI run `34723433871` and desktop package run `34723433869` passed, including
+Windows MSI/NSIS and Linux package smoke. Those runs do not substitute for
+installed/native or human acceptance; this checklist therefore remains
+`PENDING_HUMAN_QA`. The older heads and artifacts referenced in the rows below
+are historical evidence.
+
+Historical reviewed source implementation HEAD on `completion/windows-qa-live-telemetry-i18n`:
 `8588a2dd66e386082e153c933b1b55891ac42657` (`8588a2d`). It includes the
 stability, model-action, telemetry-safety, desktop UI, and accessible Arena
 listbox/test-contract batches after
