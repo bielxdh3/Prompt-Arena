@@ -47,10 +47,8 @@
   --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
   --orbit-outer-period: 3.2s;
   --orbit-middle-period: 2.4s;
-  --orbit-inner-period: 1.8s;
   --orbit-outer-duration: max(0.01s, calc(var(--orbit-outer-period) * max(0.01, var(--motion-scale-effective))));
   --orbit-middle-duration: max(0.01s, calc(var(--orbit-middle-period) * max(0.01, var(--motion-scale-effective))));
-  --orbit-inner-duration: max(0.01s, calc(var(--orbit-inner-period) * max(0.01, var(--motion-scale-effective))));
   --z-popover: 20;
   --motion-ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
   --motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
@@ -867,21 +865,15 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
 }
 
 .orbit-outer {
-  width: 310px;
-  height: 164px;
+  width: 286px;
+  height: 216px;
   animation: orbit-ring-outer var(--orbit-outer-duration) linear infinite;
 }
 
 .orbit-middle {
-  width: 244px;
-  height: 258px;
+  width: 232px;
+  height: 250px;
   animation: orbit-ring-middle var(--orbit-middle-duration) linear infinite reverse;
-}
-
-.orbit-inner {
-  width: 184px;
-  height: 104px;
-  animation: orbit-ring-inner var(--orbit-inner-duration) linear infinite;
 }
 
 @keyframes orbit-ring-outer {
@@ -892,11 +884,6 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
 @keyframes orbit-ring-middle {
   from { transform: rotate(30deg); }
   to { transform: rotate(-330deg); }
-}
-
-@keyframes orbit-ring-inner {
-  from { transform: rotate(62deg); }
-  to { transform: rotate(422deg); }
 }
 
 .orbit-core {
@@ -2494,6 +2481,7 @@ button.official-pack-row:hover,
 }
 
 .arena-listbox-menu {
+  --listbox-shift: -6px;
   position: fixed;
   z-index: var(--z-popover);
   box-sizing: border-box;
@@ -2506,6 +2494,23 @@ button.official-pack-row:hover,
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   box-shadow: 0 12px 26px rgb(0 0 0 / 0.2);
+  opacity: 0;
+  transform: translateY(var(--listbox-shift)) scale(0.98);
+  transform-origin: top center;
+  pointer-events: none;
+  transition: opacity var(--motion-expand) var(--motion-ease-emphasized),
+    transform var(--motion-expand) var(--motion-ease-emphasized);
+}
+
+.arena-listbox-menu[data-placement="above"] {
+  --listbox-shift: 6px;
+  transform-origin: bottom center;
+}
+
+.arena-listbox-menu[data-state="open"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
 }
 
 .arena-listbox-option {

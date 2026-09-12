@@ -18,6 +18,8 @@ export type ListboxMenuPosition = {
   placement: "above" | "below";
 };
 
+type ListboxMenuPhase = "closed" | "opening" | "open" | "closing";
+
 export function calculateListboxMenuPosition(
   rect: ListboxTriggerRect,
   viewport: { width: number; height: number },
@@ -65,8 +67,9 @@ export function AccessibleListbox({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const optionRefs = useRef<Array<HTMLLIElement | null>>([]);
-  const [open, setOpen] = useState(false);
+  const [menuPhase, setMenuPhase] = useState<ListboxMenuPhase>("closed");
   const [menuPosition, setMenuPosition] = useState<ListboxMenuPosition | null>(null);
   const selectedIndex = options.findIndex((option) => option.value === value);
   const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
@@ -74,6 +77,8 @@ export function AccessibleListbox({
   const labelId = `${id}-label`;
   const valueId = `${id}-value`;
   const listboxId = `${id}-options`;
+  const open = menuPhase === "opening" || menuPhase === "open";
+  const menuMounted = menuPhase !== "closed";
 
   useEffect(() => {
     setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
@@ -84,11 +89,11 @@ export function AccessibleListbox({
   }, [activeIndex, open]);
 
   useEffect(() => {
-    if (isDisabled) setOpen(false);
+    if (isDisabled) closeMenu({ focusTrigger: false });
   }, [isDisabled]);
 
   useLayoutEffect(() => {
-    if (!open) {
+    if (!menuMounted) {
       setMenuPosition(null);
       return;
     }
@@ -107,20 +112,65 @@ export function AccessibleListbox({
       window.removeEventListener("resize", updateMenuPosition);
       window.removeEventListener("scroll", updateMenuPosition, true);
     };
-  }, [open, options.length]);
+  }, [menuMounted, options.length]);
 
   useEffect(() => {
     if (!open) return;
     const handleOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) closeMenu({ focusTrigger: false });
     };
     document.addEventListener("pointerdown", handleOutsidePointer);
     return () => document.removeEventListener("pointerdown", handleOutsidePointer);
   }, [open]);
 
+  useEffect(() => {
+    if (menuPhase !== "opening") return;
+    const frame = window.requestAnimationFrame(() => setMenuPhase("open"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [menuPhase]);
+
+  useEffect(() => {
+    if (menuPhase !== "closing") return;
+    const menu = menuRef.current;
+    if (!menu) {
+      finishClosing();
+      return;
+    }
+    const computed = window.getComputedStyle(menu);
+    const durations = computed.transitionDuration.split(",").map((value) => Number.parseFloat(value) || 0);
+    const delays = computed.transitionDelay.split(",").map((value) => Number.parseFloat(value) || 0);
+    const transitionMs = Math.max(...durations.map((duration, index) => (duration + (delays[index] ?? delays[0] ?? 0)) * 1000), 0);
+    closeTimerRef.current = window.setTimeout(finishClosing, transitionMs + 50);
+    return clearCloseTimer;
+  }, [menuPhase]);
+
+  useEffect(() => clearCloseTimer, []);
+
   function closeAndFocusTrigger() {
-    setOpen(false);
-    triggerRef.current?.focus();
+    closeMenu();
+  }
+
+  function clearCloseTimer() {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }
+
+  function openMenu() {
+    clearCloseTimer();
+    setMenuPhase("opening");
+  }
+
+  function finishClosing() {
+    clearCloseTimer();
+    setMenuPhase("closed");
+  }
+
+  function closeMenu({ focusTrigger = true }: { focusTrigger?: boolean } = {}) {
+    if (!menuMounted) return;
+    setMenuPhase("closing");
+    if (focusTrigger) triggerRef.current?.focus();
   }
 
   function selectOption(index: number) {
@@ -132,12 +182,12 @@ export function AccessibleListbox({
 
   function handleRootBlur(event: FocusEvent<HTMLDivElement>) {
     if (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) || menuRef.current?.contains(event.relatedTarget))) return;
-    setOpen(false);
+    closeMenu({ focusTrigger: false });
   }
 
   function handleMenuBlur(event: FocusEvent<HTMLUListElement>) {
     if (event.relatedTarget instanceof Node && (rootRef.current?.contains(event.relatedTarget) || menuRef.current?.contains(event.relatedTarget))) return;
-    setOpen(false);
+    closeMenu({ focusTrigger: false });
   }
 
   function handleTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
@@ -145,7 +195,7 @@ export function AccessibleListbox({
     if (transition.action === "none") return;
     event.preventDefault();
     setActiveIndex(transition.index);
-    setOpen(true);
+    openMenu();
   }
 
   function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLLIElement>) {
@@ -160,13 +210,14 @@ export function AccessibleListbox({
 
   const selectedOption = selectedIndex >= 0 ? options[selectedIndex] : undefined;
   const menuPortalTarget = rootRef.current?.closest<HTMLElement>(".app-shell") ?? (typeof document === "undefined" ? null : document.body);
-  const menu = open && menuPortalTarget ? createPortal(
+  const menu = menuMounted && menuPortalTarget ? createPortal(
     <ul
       className="arena-listbox-menu"
       id={listboxId}
       ref={menuRef}
       role="listbox"
       aria-labelledby={labelId}
+      data-state={menuPhase}
       data-placement={menuPosition?.placement}
       onBlur={handleMenuBlur}
       style={menuPosition ? { top: menuPosition.top, left: menuPosition.left, width: menuPosition.width, maxHeight: menuPosition.maxHeight } : { visibility: "hidden" }}
@@ -210,7 +261,7 @@ export function AccessibleListbox({
           if (open) closeAndFocusTrigger();
           else {
             setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
-            setOpen(true);
+            openMenu();
           }
         }}
         onKeyDown={handleTriggerKeyDown}
