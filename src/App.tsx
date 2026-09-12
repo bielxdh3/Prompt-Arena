@@ -536,8 +536,9 @@ function Overview({
           </button>
         </div>
         <div className="hero-orbit" aria-hidden="true">
-          <div className="orbit orbit-one" />
-          <div className="orbit orbit-two" />
+          <div className="orbit orbit-outer" />
+          <div className="orbit orbit-middle" />
+          <div className="orbit orbit-inner" />
           <div className="orbit-core">PA</div>
         </div>
       </section>
@@ -4419,6 +4420,15 @@ function Settings({
             <div className="range-labels" aria-hidden="true"><span>0%</span><span>100%</span><span>200%</span></div>
           </div>
 
+          <label className="appearance-toggle motion-toggle">
+            <input
+              type="checkbox"
+              checked={appearance.reducedMotion}
+              onChange={(event) => updateAppearance("reducedMotion", event.target.checked)}
+            />
+            <span><strong>{translate("Reduce motion")}</strong><small>{translate("Keep transitions and animations minimal.")}</small></span>
+          </label>
+
           <fieldset className="appearance-fieldset">
             <legend className="field-label">{translate("Accent color")}</legend>
             <div className="appearance-choice-grid">
@@ -4488,15 +4498,6 @@ function Settings({
               ))}
             </div>
           </fieldset>
-
-          <label className="appearance-toggle">
-            <input
-              type="checkbox"
-              checked={appearance.reducedMotion}
-              onChange={(event) => updateAppearance("reducedMotion", event.target.checked)}
-            />
-            <span><strong>{translate("Reduce motion")}</strong><small>{translate("Keep transitions and animations minimal.")}</small></span>
-          </label>
 
           <button className="secondary-button restore-button" type="button" onClick={onRestoreDefaults}>
             {translate("Restore defaults")}
