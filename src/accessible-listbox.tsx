@@ -8,6 +8,41 @@ export type AccessibleListboxOption = {
   detail?: string;
 };
 
+export type ListboxTriggerRect = Pick<DOMRect, "top" | "bottom" | "left" | "width">;
+
+export type ListboxMenuPosition = {
+  top: number;
+  left: number;
+  width: number;
+  maxHeight: number;
+  placement: "above" | "below";
+};
+
+export function calculateListboxMenuPosition(
+  rect: ListboxTriggerRect,
+  viewport: { width: number; height: number },
+  optionCount = 0,
+): ListboxMenuPosition {
+  const viewportPadding = 12;
+  const gap = 8;
+  const maxMenuHeight = 280;
+  const availableBelow = Math.max(0, viewport.height - rect.bottom - gap - viewportPadding);
+  const availableAbove = Math.max(0, rect.top - gap - viewportPadding);
+  const estimatedMenuHeight = Math.min(maxMenuHeight, Math.max(44, optionCount * 40 + 8));
+  const minimumPreferredSpace = Math.min(maxMenuHeight, estimatedMenuHeight);
+  const placement = availableBelow >= minimumPreferredSpace || availableBelow >= availableAbove ? "below" : "above";
+  const availableSpace = placement === "below" ? availableBelow : availableAbove;
+  const viewportSpace = Math.max(1, viewport.height - viewportPadding * 2);
+  const maxHeight = Math.max(1, Math.min(maxMenuHeight, viewportSpace, availableSpace));
+  const width = Math.min(Math.max(rect.width, 160), Math.max(1, viewport.width - viewportPadding * 2));
+  const maxLeft = Math.max(viewportPadding, viewport.width - viewportPadding - width);
+  const left = Math.min(Math.max(viewportPadding, rect.left), maxLeft);
+  const rawTop = placement === "below" ? rect.bottom + gap : rect.top - gap - maxHeight;
+  const maxTop = Math.max(viewportPadding, viewport.height - viewportPadding - maxHeight);
+  const top = Math.min(Math.max(viewportPadding, rawTop), maxTop);
+  return { top, left, width, maxHeight, placement };
+}
+
 export function AccessibleListbox({
   id,
   label,
@@ -32,7 +67,7 @@ export function AccessibleListbox({
   const menuRef = useRef<HTMLUListElement>(null);
   const optionRefs = useRef<Array<HTMLLIElement | null>>([]);
   const [open, setOpen] = useState(false);
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  const [menuPosition, setMenuPosition] = useState<ListboxMenuPosition | null>(null);
   const selectedIndex = options.findIndex((option) => option.value === value);
   const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
   const isDisabled = disabled || options.length === 0;
@@ -62,23 +97,7 @@ export function AccessibleListbox({
       const trigger = triggerRef.current;
       if (!trigger) return;
       const rect = trigger.getBoundingClientRect();
-      const viewportPadding = 12;
-      const gap = 6;
-      const maxMenuHeight = 260;
-      const belowSpace = window.innerHeight - rect.bottom - viewportPadding - gap;
-      const aboveSpace = rect.top - viewportPadding - gap;
-      const openBelow = belowSpace >= Math.min(maxMenuHeight, 180) || belowSpace >= aboveSpace;
-      const availableSpace = openBelow ? belowSpace : aboveSpace;
-      const maxHeight = Math.max(44, Math.min(maxMenuHeight, availableSpace));
-      const width = Math.min(rect.width, Math.max(0, window.innerWidth - viewportPadding * 2));
-      const left = Math.min(Math.max(viewportPadding, rect.left), Math.max(viewportPadding, window.innerWidth - viewportPadding - width));
-      const top = openBelow ? rect.bottom + gap : rect.top - gap - maxHeight;
-      setMenuPosition({
-        top: Math.max(viewportPadding, Math.min(top, window.innerHeight - viewportPadding - maxHeight)),
-        left,
-        width,
-        maxHeight,
-      });
+      setMenuPosition(calculateListboxMenuPosition(rect, { width: window.innerWidth, height: window.innerHeight }, options.length));
     };
 
     updateMenuPosition();
@@ -148,6 +167,7 @@ export function AccessibleListbox({
       ref={menuRef}
       role="listbox"
       aria-labelledby={labelId}
+      data-placement={menuPosition?.placement}
       onBlur={handleMenuBlur}
       style={menuPosition ? { top: menuPosition.top, left: menuPosition.left, width: menuPosition.width, maxHeight: menuPosition.maxHeight } : { visibility: "hidden" }}
     >
