@@ -87,6 +87,21 @@ describe("desktop packaging helpers", () => {
     );
   });
 
+  it("fails closed instead of selecting a stale bundle when the current version is absent", () => {
+    const repositoryRoot = temporaryRoot();
+    const bundleRoot = path.join(repositoryRoot, "bundle");
+    const nsisDirectory = path.join(bundleRoot, "nsis");
+    const msiDirectory = path.join(bundleRoot, "msi");
+    fs.mkdirSync(nsisDirectory, { recursive: true });
+    fs.mkdirSync(msiDirectory, { recursive: true });
+    fs.writeFileSync(path.join(nsisDirectory, "Prompt Arena_0.1.0_x64-setup.exe"), "stale");
+    fs.writeFileSync(path.join(msiDirectory, "Prompt Arena_0.1.0_x64_en-US.msi"), "stale");
+
+    expect(() => preparePackageArtifacts({ repositoryRoot, platform: "windows", version: "0.1.4", bundleRoot })).toThrow(
+      "required current nsis bundle artifact was not produced",
+    );
+  });
+
   it("renders deterministic checksums and rejects changed artifact bytes", () => {
     const root = temporaryRoot();
     const first = path.join(root, "first.bin");

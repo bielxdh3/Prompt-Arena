@@ -29,7 +29,7 @@ use crate::runtime::GenerationResponse;
 
 pub use crate::domain::ArtifactRef;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 8;
+pub const STORAGE_SCHEMA_VERSION: u32 = 9;
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const FOUNDATION_MIGRATION: &str = include_str!("storage/migrations/0001_foundation.sql");
 pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_core_arena.sql");
@@ -43,7 +43,9 @@ pub const ADVANCED_ARENA_MIGRATION: &str =
     include_str!("storage/migrations/0007_advanced_arena.sql");
 pub const EXTERNAL_GENERATION_EVIDENCE_MIGRATION: &str =
     include_str!("storage/migrations/0008_external_generation_evidence.sql");
-const MAX_METADATA_BYTES: usize = 1_048_576;
+pub const ROADMAP_RECORDS_MIGRATION: &str =
+    include_str!("storage/migrations/0009_roadmap_records.sql");
+pub const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = MAX_BENCHMARK_DOCUMENT_BYTES;
 pub const MAX_DRAFT_REQUEST_BYTES: usize = 512 * 1024;
@@ -427,6 +429,24 @@ pub struct ExternalGenerationEvidenceRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadmapRecordRequest {
+    pub record_id: String,
+    pub kind: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadmapRecord {
+    pub record_id: String,
+    pub kind: String,
+    pub payload: Value,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BenchmarkVersionSummary {
@@ -657,6 +677,7 @@ impl StorageService {
         apply_migration(&mut connection, 6, MODEL_LIBRARY_MIGRATION)?;
         apply_migration(&mut connection, 7, ADVANCED_ARENA_MIGRATION)?;
         apply_migration(&mut connection, 8, EXTERNAL_GENERATION_EVIDENCE_MIGRATION)?;
+        apply_migration(&mut connection, 9, ROADMAP_RECORDS_MIGRATION)?;
         Ok(())
     }
 
@@ -1658,6 +1679,123 @@ impl StorageService {
                 content_hash,
                 created_at,
             })
+        })
+        .collect()
+    }
+
+    pub fn save_roadmap_record(
+        &self,
+        request: &RoadmapRecordRequest,
+        created_at: &str,
+    ) -> Result<(RoadmapRecord, SaveOutcome), StorageError> {
+        validate_roadmap_record(request)?;
+        validate_timestamp(created_at)?;
+        let connection = self.connection()?;
+        let json = request.payload.clone();
+        let (document_json, content_hash) = canonical_json_and_hash(&json)?;
+        ensure_metadata_size(&document_json)?;
+        let existing: Option<(String, String)> = connection
+            .query_row(
+                "SELECT kind, content_hash FROM roadmap_records WHERE record_id = ?1",
+                params![request.record_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let outcome = if let Some((kind, existing_hash)) = existing {
+            if kind == request.kind && existing_hash == content_hash {
+                SaveOutcome::AlreadyPresent
+            } else {
+                return Err(StorageError::ImmutableConflict);
+            }
+        } else {
+            connection
+                .execute(
+                    "INSERT INTO roadmap_records (record_id, kind, content_hash, document_json, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![request.record_id, request.kind, content_hash, document_json, created_at],
+                )
+                .map_err(|_| StorageError::DatabaseFailure)?;
+            SaveOutcome::Saved
+        };
+        let record = self
+            .get_roadmap_record(&request.record_id)?
+            .ok_or(StorageError::DatabaseFailure)?;
+        Ok((record, outcome))
+    }
+
+    pub fn get_roadmap_record(
+        &self,
+        record_id: &str,
+    ) -> Result<Option<RoadmapRecord>, StorageError> {
+        validate_record_id(record_id)?;
+        let connection = self.connection()?;
+        let row: Option<(String, String, String, String, String)> = connection
+            .query_row(
+                "SELECT record_id, kind, content_hash, document_json, created_at FROM roadmap_records WHERE record_id = ?1",
+                params![record_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .optional()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        row.map(
+            |(record_id, kind, content_hash, document_json, created_at)| {
+                let payload: Value = serde_json::from_str(&document_json)
+                    .map_err(|_| StorageError::DatabaseFailure)?;
+                let request = RoadmapRecordRequest {
+                    record_id: record_id.clone(),
+                    kind: kind.clone(),
+                    payload: payload.clone(),
+                };
+                validate_roadmap_record(&request)?;
+                let (_, computed_hash) = canonical_json_and_hash(&payload)?;
+                if computed_hash != content_hash {
+                    return Err(StorageError::DatabaseFailure);
+                }
+                Ok(RoadmapRecord {
+                    record_id,
+                    kind,
+                    payload,
+                    content_hash,
+                    created_at,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    pub fn list_roadmap_records(
+        &self,
+        kind: Option<&str>,
+    ) -> Result<Vec<RoadmapRecord>, StorageError> {
+        if let Some(kind) = kind {
+            validate_roadmap_kind(kind)?;
+        }
+        let connection = self.connection()?;
+        let mut statement = if kind.is_some() {
+            connection.prepare("SELECT record_id, kind, content_hash, document_json, created_at FROM roadmap_records WHERE kind = ?1 ORDER BY created_at, record_id")
+        } else {
+            connection.prepare("SELECT record_id, kind, content_hash, document_json, created_at FROM roadmap_records ORDER BY created_at, record_id")
+        }.map_err(|_| StorageError::DatabaseFailure)?;
+        let rows = if let Some(kind) = kind {
+            statement.query_map(params![kind], roadmap_row)
+        } else {
+            statement.query_map([], roadmap_row)
+        }
+        .map_err(|_| StorageError::DatabaseFailure)?;
+        rows.map(|row| {
+            let record = row.map_err(|_| StorageError::DatabaseFailure)?;
+            let request = RoadmapRecordRequest {
+                record_id: record.record_id.clone(),
+                kind: record.kind.clone(),
+                payload: record.payload.clone(),
+            };
+            validate_roadmap_record(&request)?;
+            let (_, computed_hash) = canonical_json_and_hash(&record.payload)?;
+            if computed_hash != record.content_hash {
+                return Err(StorageError::DatabaseFailure);
+            }
+            Ok(record)
         })
         .collect()
     }
@@ -2936,6 +3074,45 @@ fn validate_record_id(record_id: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
+fn validate_roadmap_kind(kind: &str) -> Result<(), StorageError> {
+    if matches!(
+        kind,
+        "single_model_benchmark"
+            | "performance_lab"
+            | "historical_regression"
+            | "model_ratings"
+            | "robustness_arena"
+            | "repro_bundle"
+    ) {
+        Ok(())
+    } else {
+        Err(StorageError::AdvancedArtifactInvalid)
+    }
+}
+
+fn validate_roadmap_record(request: &RoadmapRecordRequest) -> Result<(), StorageError> {
+    validate_record_id(&request.record_id)?;
+    validate_roadmap_kind(&request.kind)?;
+    if !request.payload.is_object() {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    validate_bounded_json(&request.payload, 0)?;
+    Ok(())
+}
+
+fn roadmap_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoadmapRecord> {
+    let document_json: String = row.get(3)?;
+    let payload =
+        serde_json::from_str(&document_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(RoadmapRecord {
+        record_id: row.get(0)?,
+        kind: row.get(1)?,
+        content_hash: row.get(2)?,
+        payload,
+        created_at: row.get(4)?,
+    })
+}
+
 fn validate_benchmark_version_id(version_id: &str) -> Result<(), StorageError> {
     if version_id.is_empty() || version_id.len() > MAX_BENCHMARK_VERSION_ID_BYTES {
         return Err(StorageError::InvalidRecordId);
@@ -3507,13 +3684,13 @@ mod tests {
     use super::{
         AiJudgePanel, ArenaExecutionEvidence, ArenaSummaryPayload, ArtifactRef, ArtifactStore,
         BenchmarkDraftInput, CalibrationBenchmarkPayload, CalibrationMetricsRecord,
-        CalibrationResultPayload, CalibrationScore, FrozenAiJudge, SaveOutcome, StorageError,
-        StorageLayout, StorageRetentionRequest, StorageService, TournamentMatchResult,
-        TournamentResultPayload, TournamentStanding, ADVANCED_ARENA_MIGRATION,
-        ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION, BLIND_EVALUATIONS_MIGRATION,
-        EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION, MAX_ARTIFACT_BYTES,
-        MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES, MAX_PROFILE_MODEL_BYTES,
-        MAX_PROFILE_REQUEST_BYTES,
+        CalibrationResultPayload, CalibrationScore, FrozenAiJudge, RoadmapRecordRequest,
+        SaveOutcome, StorageError, StorageLayout, StorageRetentionRequest, StorageService,
+        TournamentMatchResult, TournamentResultPayload, TournamentStanding,
+        ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
+        BLIND_EVALUATIONS_MIGRATION, EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION,
+        MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
+        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3667,12 +3844,12 @@ mod tests {
         let service = StorageService::open(&root).expect("storage opens");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
         service.initialize().expect("second migration pass");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
         assert!(FOUNDATION_MIGRATION.contains("CREATE TABLE"));
         assert!(!FOUNDATION_MIGRATION
@@ -4688,6 +4865,46 @@ mod tests {
         );
         assert!(directory.is_dir());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn roadmap_records_are_versioned_immutable_and_kind_filtered() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let request = RoadmapRecordRequest {
+            record_id: "single-run-1".to_owned(),
+            kind: "single_model_benchmark".to_owned(),
+            payload: json!({"schemaVersion": 1, "runId": "run-1", "secrets": null}),
+        };
+        assert_eq!(
+            service.save_roadmap_record(&request, "100").unwrap().1,
+            SaveOutcome::Saved
+        );
+        assert_eq!(
+            service.save_roadmap_record(&request, "200").unwrap().1,
+            SaveOutcome::AlreadyPresent
+        );
+        let mut changed = request.clone();
+        changed.payload = json!({"schemaVersion": 1, "runId": "run-2"});
+        assert_eq!(
+            service.save_roadmap_record(&changed, "300"),
+            Err(StorageError::ImmutableConflict)
+        );
+        assert_eq!(
+            service
+                .list_roadmap_records(Some("single_model_benchmark"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .list_roadmap_records(Some("performance_lab"))
+                .unwrap()
+                .len(),
+            0
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -43,7 +43,7 @@ export type ModelRecommendation = {
   explanation: string;
 };
 
-export type ModelAvailabilityState = "not_installed" | "downloading" | "installed" | "failed";
+export type ModelAvailabilityState = "not_installed" | "downloading" | "installed" | "failed" | "unavailable";
 export type ModelActionKind = "download" | "cancel" | "use" | "remove" | "retry";
 
 export type ModelAvailabilityView = {
@@ -181,7 +181,8 @@ export function modelAvailabilityLabel(state: ModelAvailabilityState): string {
   if (state === "not_installed") return "Not installed";
   if (state === "downloading") return "Downloading";
   if (state === "installed") return "Installed";
-  return "Failed";
+  if (state === "failed") return "Failed";
+  return "Unavailable";
 }
 
 export function modelActionLabel(action: ModelActionKind): string {
@@ -310,6 +311,9 @@ export function deriveModelAvailability(
     return { state: "downloading", operation, actions: ["cancel"] };
   }
   if (model.availability === "available") {
+    if (model.backend === "llama_cpp" && model.endpoint === null) {
+      return { state: "unavailable", operation, actions: model.managed && model.managedPath !== null ? ["remove"] : [] };
+    }
     const actions: ModelActionKind[] = ["use"];
     if (model.backend === "llama_cpp" && model.managed && model.managedPath !== null) actions.push("remove");
     return { state: "installed", operation, actions };

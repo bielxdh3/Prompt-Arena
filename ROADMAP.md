@@ -96,6 +96,14 @@ Planned extension — **single-model benchmark mode**:
 
 P4 remains IN PROGRESS: real native Tauri acceptance and the remaining publication/security gates are still pending.
 
+The completion stack also includes the local-first Insights surface for roadmap issues #36–#41. It now provides
+single-model runs and full-suite execution over available text-generation cases, provenance-rich Performance Lab
+metrics (including explicit unavailable values), immutable historical comparisons with condition warnings, deterministic
+Elo-v1 ratings from persisted Arena summaries, versioned robustness perturbation records, and bounded secret-free Repro
+Bundles with SHA-256 manifests. These are derived records in migration `0009_roadmap_records.sql`; source Runs and
+Arena summaries remain immutable. Docker-required cases are skipped and clearly reported when Docker is unavailable.
+The live variant execution, installed-Tauri acceptance, and final human/security/publication gates remain open.
+
 Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence. A user can
 also benchmark one model by itself, inspect and persist its metrics/evidence, and later compare compatible historical
 results without rerunning them together.

@@ -144,14 +144,21 @@ function bundleCandidates(bundleRoot, spec) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function selectBundleArtifact(bundleRoot, spec) {
+function selectBundleArtifact(bundleRoot, spec, version) {
   const candidates = bundleCandidates(bundleRoot, spec);
-  if (candidates.length > 1) throw new Error(`multiple ${spec.kind} bundle artifacts found: ${candidates.join(", ")}`);
+  const versionMarker = `_${version}_`;
+  const currentCandidates = candidates.filter((candidate) => path.basename(candidate).includes(versionMarker));
+  if (currentCandidates.length > 1) throw new Error(`multiple current ${spec.kind} bundle artifacts found: ${currentCandidates.join(", ")}`);
+  if (currentCandidates.length === 1) return currentCandidates[0];
+  if (candidates.length > 0) {
+    if (!spec.required) return null;
+    throw new Error(`required current ${spec.kind} bundle artifact was not produced for ${version}; stale candidates remain: ${candidates.join(", ")}`);
+  }
   if (candidates.length === 0) {
     if (spec.required) throw new Error(`required ${spec.kind} bundle artifact was not produced`);
     return null;
   }
-  return candidates[0];
+  return null;
 }
 
 function removeExpectedOutput(target) {
@@ -170,7 +177,7 @@ export function preparePackageArtifacts(options = {}) {
   const manifestPath = path.resolve(options.manifestPath ?? path.join(repositoryRoot, CHECKSUM_MANIFEST_NAME));
   const selections = PACKAGE_ARTIFACT_SPECS[platform].map((spec) => ({
     spec,
-    source: selectBundleArtifact(bundleRoot, spec),
+    source: selectBundleArtifact(bundleRoot, spec, version),
     name: packageArtifactName(platform, version, spec.kind),
   }));
 

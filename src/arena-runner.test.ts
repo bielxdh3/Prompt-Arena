@@ -129,6 +129,8 @@ describe("arena runner", () => {
     const responses = new Map([["arena-1-1:arena-1-1-attempt", "one response"], ["arena-2-1:arena-2-1-attempt", "two response"]]);
     const cards = buildBlindArenaCards(results, responses);
     expect(cards.map((card) => card.label)).toEqual(["Response A", "Response B"]);
+    const reversed = buildBlindArenaCards([...results].reverse(), responses);
+    expect(reversed.map((card) => [card.token, card.executionKey])).toEqual(cards.map((card) => [card.token, card.executionKey]));
     expect(cards[0]).not.toHaveProperty("competitorLabel");
     expect(arenaExportJson(request, results)).not.toContain("runs/");
     expect(arenaExportJson(request, results)).not.toContain("must-not-export");
@@ -176,8 +178,13 @@ describe("arena runner", () => {
   it("keeps blind telemetry neutral and hides identity-sensitive metrics", () => {
     const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 };
     const telemetry = createArenaTelemetry(request, 10);
-    expect(arenaTelemetryLabel(telemetry.samples[0], true)).toBe("Competitor A");
-    expect(arenaTelemetryLabel(telemetry.samples[1], true)).toBe("Competitor B");
+    const firstBlindLabel = arenaTelemetryLabel(telemetry.samples[0], true);
+    const secondBlindLabel = arenaTelemetryLabel(telemetry.samples[1], true);
+    expect(firstBlindLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(secondBlindLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(arenaTelemetryLabel({ ...telemetry.samples[0], competitorOrdinal: 999 }, true)).toBe(firstBlindLabel);
+    expect(arenaTelemetryLabel({ ...telemetry.samples[1], competitorOrdinal: 0 }, true)).toBe(secondBlindLabel);
+    expect(firstBlindLabel).not.toBe(secondBlindLabel);
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
   });
 

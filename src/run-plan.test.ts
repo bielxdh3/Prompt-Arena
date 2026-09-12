@@ -100,6 +100,13 @@ describe("bounded run-plan contract", () => {
     expect(JSON.stringify(plan.generation)).not.toContain("expected answer");
   });
 
+  it("allows bounded robustness prompt variants without changing case identity or verifier", () => {
+    const plan = buildRunPlan({ ...input(), promptOverride: "Variant wording\n\nTask prompt" });
+    expect(plan.caseId).toBe("case-1");
+    expect(plan.generation.prompt).toBe("Variant wording\n\nTask prompt");
+    expect(() => buildRunPlan({ ...input(), promptOverride: "  " })).toThrow("Prompt override");
+  });
+
   it("treats unsupported expectations as absent and rejects invalid or oversized text", () => {
     expect(buildRunPlan({
       ...input(),

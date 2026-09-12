@@ -41,6 +41,23 @@ function msiSource() {
   return candidates[0];
 }
 
+function resumeCommittedRelease(branch) {
+  const subject = git(["log", "-1", "--format=%s"]);
+  const match = /^release\(windows\): publish Prompt Arena (.+) MSI$/u.exec(subject);
+  if (!match) return false;
+  const version = match[1];
+  const filename = `Prompt-Arena-${version}-windows-x64.msi`;
+  const artifactPath = path.join(DOWNLOAD_DIRECTORY, filename);
+  const checksumPath = `${artifactPath}.sha256`;
+  const readme = fs.existsSync(README_PATH) ? fs.readFileSync(README_PATH, "utf8") : "";
+  if (!fs.existsSync(artifactPath) || !fs.existsSync(checksumPath) || !readme.includes(`downloadable-artifacts/${filename}`)) return false;
+  // A commit created before a push is a resumable release transaction. A
+  // normal push is idempotent when the remote already contains this commit.
+  run("git", ["push", "origin", branch]);
+  console.log(`Resumed Windows MSI release ${filename} from ${git(["rev-parse", "HEAD"])}.`);
+  return true;
+}
+
 function updateReadme(version, filename, sha256, sourceCommit) {
   const contents = fs.readFileSync(README_PATH, "utf8");
   const start = contents.indexOf(README_START);
@@ -79,6 +96,10 @@ if (isMainModule()) {
     if (git(["status", "--porcelain"])) throw new Error("working tree must be clean before a release");
     const branch = git(["symbolic-ref", "--short", "HEAD"]);
     if (!branch) throw new Error("release requires a named branch");
+    if (resumeCommittedRelease(branch)) {
+      process.exitCode = 0;
+      process.exit();
+    }
     const sourceCommit = git(["rev-parse", "HEAD"]);
     const currentVersion = assertSynchronizedVersion();
     const version = incrementPatchVersion(currentVersion);
