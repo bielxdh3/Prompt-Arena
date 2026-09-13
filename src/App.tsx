@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -102,6 +102,8 @@ import {
   formatByteCount,
   formatCount,
   formatDurationNs,
+  buildLegacyBlindEvaluationLockRequest,
+  reconcileLegacyBlindEvaluationRetry,
   objectiveVerificationEvidence,
 } from "./results-ui";
 import { assessRunComparability } from "./comparability";
@@ -129,11 +131,19 @@ import {
   arenaSummaryExportMarkdown,
   buildArenaSummaryPayload,
   buildBlindArenaCards,
+  arenaMonitorDisplay,
+  applyArenaProgress,
+  createArenaTelemetry,
   executeArena,
   groupArenaExecutions,
   rankArenaCompetitors,
+  refreshArenaTelemetry,
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
+  visibleArenaTelemetryError,
+  visibleArenaTelemetryMetrics,
+  arenaTelemetryLabel,
+  type ArenaTelemetry,
   type ArenaExecution,
   type ArenaProgress,
 } from "./arena-runner";
@@ -163,8 +173,11 @@ import {
 import {
   ACCENT_OPTIONS,
   APPEARANCE_STORAGE_KEY,
+  CONTRAST_OPTIONS,
   DEFAULT_APPEARANCE,
   MAX_APPEARANCE_PAYLOAD_BYTES,
+  MOTION_SCALE_MAX,
+  MOTION_SCALE_MIN,
   RADIUS_OPTIONS,
   SURFACE_OPTIONS,
   normalizeAppearance,
@@ -212,8 +225,11 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
+import { RoadmapFeaturesView } from "./roadmap-features-view";
+import { AccessibleListbox } from "./accessible-listbox";
+import { I18nProvider, useI18n } from "./i18n";
 
-type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
+type ViewId = "overview" | "arena" | "advanced-arena" | "insights" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -223,6 +239,7 @@ const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] =
   { id: "overview", label: "Overview", description: "Workspace status" },
   { id: "arena", label: "Arena", description: "Compare model revisions" },
   { id: "advanced-arena", label: "Advanced Arena", description: "Rank saved evidence" },
+  { id: "insights", label: "Insights", description: "Single-model evidence" },
   { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
   { id: "models", label: "Models", description: "Profiles and local models" },
   { id: "runs", label: "Runs", description: "Execution history" },
@@ -239,6 +256,10 @@ function loadAppearancePreferences(): AppearancePreferences {
 }
 
 function App() {
+  return <I18nProvider><AppShell /></I18nProvider>;
+}
+
+function AppShell() {
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
@@ -291,7 +312,9 @@ function App() {
       data-accent={appearance.accentId}
       data-radius={appearance.radiusId}
       data-surface={appearance.surfaceId}
+      data-contrast={appearance.contrastId}
       data-reduced-motion={appearance.reducedMotion ? "true" : "false"}
+      style={{ "--motion-scale": appearance.motionScale / 100 } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">
         Skip to content
@@ -360,6 +383,7 @@ function App() {
           {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
           {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
           {activeView === "advanced-arena" && <AdvancedArenaView />}
+          {activeView === "insights" && <RoadmapFeaturesView />}
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
@@ -1861,25 +1885,18 @@ function ModelsView() {
           <div className="profile-form form-section">
             <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
-            <label className="advanced-field" htmlFor="profile-discovered-model">
-              <span className="field-label">Discovered local model (optional)</span>
-              <select
-                className="font-select"
-                id="profile-discovered-model"
-                value={selectedProfileModelId}
-                onChange={(event) => {
-                  const modelId = event.currentTarget.value;
-                  setSelectedProfileModelId(modelId);
-                  const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
-                  if (model) updateField("model", model.name);
-                }}
-              >
-                <option value="">Manual Ollama model</option>
-                {modelState.status === "ready" && modelState.catalog.models.map((model) => (
-                  <option key={model.modelId} value={model.modelId}>{model.name} · {modelBackendLabel(model.backend)} · {modelRecordQuantizationLabel(model)}</option>
-                ))}
-              </select>
-            </label>
+            <AccessibleListbox
+              id="profile-discovered-model"
+              label="Discovered local model (optional)"
+              value={selectedProfileModelId}
+              placeholder="Manual Ollama model"
+              options={modelState.status === "ready" ? modelState.catalog.models.map((model) => ({ value: model.modelId, label: model.name, detail: `${modelBackendLabel(model.backend)} · ${modelRecordQuantizationLabel(model)}` })) : []}
+              onChange={(modelId) => {
+                setSelectedProfileModelId(modelId);
+                const model = modelState.status === "ready" ? modelState.catalog.models.find((item) => item.modelId === modelId) : undefined;
+                if (model) updateField("model", model.name);
+              }}
+            />
             <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
             <p className="field-help">
               {selectedProfileModel
@@ -2429,7 +2446,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
 type ArenaSessionState =
   | { status: "idle" }
-  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress }
+  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress; telemetry: ArenaTelemetry }
   | { status: "error"; message: string }
   | { status: "terminal"; request: ArenaExecutionRequest; results: ArenaExecution[] };
 
@@ -2459,6 +2476,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [repetitions, setRepetitions] = useState<number>(1);
+  const [blindExecution, setBlindExecution] = useState(false);
   const [session, setSession] = useState<ArenaSessionState>({ status: "idle" });
   const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
   const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
@@ -2557,7 +2575,17 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     setSummaryPersistence({ status: "idle" });
     setResponseState({ status: "idle" });
     cancelRequestedRef.current = false;
-  }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions]);
+  }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions, blindExecution]);
+
+  useEffect(() => {
+    if (session.status !== "busy") return;
+    const timer = window.setInterval(() => {
+      setSession((current) => current.status === "busy"
+        ? { ...current, telemetry: refreshArenaTelemetry(current.telemetry) }
+        : current);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [session.status]);
 
   const selectedProfiles = records.status === "ready"
     ? records.profiles.filter((profile) => selectedProfileRevisionIds.includes(profile.profileRevisionId))
@@ -2628,13 +2656,46 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       caseId: selectedCaseId,
       profiles: selectedProfiles,
       repetitions,
+      startedAtMs: Date.now(),
+      blind: blindExecution,
     };
     cancelRequestedRef.current = false;
     setResponseState({ status: "idle" });
-    setSession({ status: "busy", request, progress: { completed: 0, total: selectedProfiles.length * repetitions, currentCompetitor: "Queued", repetition: 1 } });
+    const initialTelemetry = createArenaTelemetry(request, request.startedAtMs);
+    setSession({
+      status: "busy",
+      request,
+      progress: {
+        completed: 0,
+        total: selectedProfiles.length * repetitions,
+        currentCompetitor: "Queued",
+        repetition: 1,
+        competitorOrdinal: 0,
+        sampleIndex: 0,
+        status: "queued",
+        timestampMs: request.startedAtMs,
+        sampleStartedAtMs: null,
+        sampleElapsedMs: null,
+        sampleDurationMs: null,
+        metrics: initialTelemetry.samples[0]?.metrics ?? {
+          loadDurationMs: null,
+          ttftMs: null,
+          generationDurationMs: null,
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          tokensPerSecond: null,
+          authoritative: false,
+        },
+        error: null,
+      },
+      telemetry: initialTelemetry,
+    });
     try {
       const results = await executeArena(request, executeRunOnce, (progress) => {
-        setSession((current) => current.status === "busy" ? { ...current, progress } : current);
+        setSession((current) => current.status === "busy"
+          ? { ...current, progress, telemetry: applyArenaProgress(current.telemetry, progress) }
+          : current);
       }, () => !cancelRequestedRef.current);
       setSummaryPersistence({ status: "saving" });
       try {
@@ -2686,11 +2747,18 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
               <ArenaSelect id="arena-version" label="Published benchmark version" value={selectedVersionId} options={versionOptions(records.versions)} placeholder="Select an existing version" disabled={busy} onChange={setSelectedVersionId} />
               <ArenaSelect id="arena-task" label="Task" value={selectedTaskId} options={taskSelectionOptions} placeholder="Select a task" disabled={busy || !activeDocument} onChange={setSelectedTaskId} />
               <ArenaSelect id="arena-case" label="Case" value={selectedCaseId} options={caseSelectionOptions} placeholder="Select a case" disabled={busy || !activeDocument || !selectedTaskId} onChange={setSelectedCaseId} />
-              <label className="arena-select-control" htmlFor="arena-repetitions">
-                <span className="field-label">Repetitions</span>
-                <select className="font-select" id="arena-repetitions" value={repetitions} disabled={busy} onChange={(event) => setRepetitions(Number(event.currentTarget.value))}>
-                  {ARENA_REPETITION_OPTIONS.map((value) => <option key={value} value={value}>{value} {value === 1 ? "sample" : "samples per competitor"}</option>)}
-                </select>
+              <ArenaSelect
+                id="arena-repetitions"
+                label="Repetitions"
+                value={String(repetitions)}
+                options={ARENA_REPETITION_OPTIONS.map((value) => ({ value: String(value), label: String(value), detail: value === 1 ? "sample" : "samples per competitor" }))}
+                placeholder="Select repetitions"
+                disabled={busy}
+                onChange={(value) => setRepetitions(Number(value))}
+              />
+              <label className="arena-select-control arena-blind-toggle">
+                <span className="field-label">Evaluation visibility</span>
+                <span className="field-help"><input type="checkbox" checked={blindExecution} disabled={busy} onChange={(event) => setBlindExecution(event.currentTarget.checked)} /> Blind execution labels and metrics</span>
               </label>
             </div>
             <fieldset className="arena-competitor-picker">
@@ -2730,7 +2798,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                 </div>
               </>
             )}
-            {busy && <div className="arena-execution-status"><StateMessage icon="…" title={summaryPersistence.status === "saving" ? "Saving Arena summary" : `Running ${session.progress.completed}/${session.progress.total}`} description={summaryPersistence.status === "saving" ? "Writing the repetition statistics and per-sample evidence to immutable local storage." : `${session.progress.currentCompetitor} · repetition ${session.progress.repetition}. Results are persisted per competitor; queued work can be cancelled.`} /></div>}
+            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} onCancel={() => { cancelRequestedRef.current = true; }} />}
             {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title="Arena could not start" description={session.message} error /></div>}
           </section>
         </div>
@@ -2739,6 +2807,82 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       {session.status === "terminal" && <ArenaResultsSurface request={session.request} results={session.results} responseState={responseState} summaryPersistence={summaryPersistence} onOpenRuns={onOpenRuns} />}
     </div>
   );
+}
+
+function ArenaExecutionMonitor({
+  telemetry,
+  blind,
+  saving,
+  onCancel,
+}: {
+  telemetry: ArenaTelemetry;
+  blind: boolean;
+  saving: boolean;
+  onCancel: () => void;
+}) {
+  const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
+    ?? [...telemetry.samples].reverse().find((sample) => sample.status !== "queued");
+  const competitors = [...new Map(telemetry.samples.map((sample) => [sample.competitorId, telemetry.samples.filter((candidate) => candidate.competitorId === sample.competitorId)])).values()];
+  const activeDisplay = arenaMonitorDisplay(telemetry, active?.sampleIndex ?? null, blind);
+  const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
+  return (
+    <div className="arena-execution-monitor" role="status" aria-live="polite">
+      <div className="section-heading compact-heading">
+        <div><p className="eyebrow">Live execution monitor</p><h4>{saving ? "Saving measured evidence" : "Arena is running"}</h4></div>
+        <span className="run-status run-status-neutral">{telemetry.completed}/{telemetry.total}</span>
+      </div>
+      <div className="arena-live-facts">
+        <BoundaryRow label="Arena state" value={saving ? "saving" : telemetry.state} />
+        <BoundaryRow label="Progress" value={`${telemetry.completed} / ${telemetry.total} samples`} />
+        <BoundaryRow label="Arena wall time" value={blind ? "Hidden during blind execution" : formatArenaMs(telemetry.wallElapsedMs)} />
+        <BoundaryRow label="ETA" value={blind ? "Hidden during blind execution" : telemetry.etaMs === null ? "Unavailable · needs 2 measured samples" : `~${formatArenaMs(telemetry.etaMs)}`} />
+      </div>
+      {active && (
+        <div className="arena-live-current">
+          <p className="eyebrow">Current sample</p>
+          <strong>{blind ? "" : `${arenaTelemetryLabel(active, false)} · `}Sample {activeDisplay.currentSampleNumber ?? active.sampleIndex + 1}/{activeDisplay.totalSamples}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · Repetition ${activeDisplay.repetitionNumber}/${activeDisplay.repetitionsPerCompetitor}` : ""}</strong>
+          <span>{active.status} · {blind ? "Elapsed hidden during blind execution" : formatArenaMs(active.elapsedMs)}</span>
+          {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
+        </div>
+      )}
+      <div className="arena-live-table" role="table" aria-label="Arena competitor execution status">
+        <div className="arena-live-header" role="row"><span role="columnheader">{blind ? "Competitor" : "Model"}</span><span role="columnheader">Status</span><span role="columnheader">Competitor progress</span><span role="columnheader">Arena wall time</span><span role="columnheader">Metrics</span></div>
+        {competitors.map((samples) => {
+          const first = samples[0];
+          const latest = [...samples].reverse().find((sample) => sample.status !== "queued") ?? first;
+          const rowDisplay = arenaMonitorDisplay(telemetry, first.sampleIndex, blind);
+          const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
+          const latestError = visibleArenaTelemetryError(latest.error, blind);
+          return <div className="arena-live-row" role="row" key={first.competitorId}>
+            <strong role="cell">{arenaTelemetryLabel(first, blind)}</strong>
+            <span role="cell">{latest.status}</span>
+            <span role="cell">Completed {samples.filter((sample) => sample.status === "completed").length}/{samples.length} samples</span>
+            <span role="cell">{blind ? "Timing hidden" : `Competitor total ${formatArenaMs(rowDisplay.competitorElapsedMs)} · Arena total ${formatArenaMs(rowDisplay.arenaElapsedMs)}`}</span>
+            <span role="cell">{blind ? "Metrics hidden" : formatArenaMetrics(metrics)}</span>
+            {latestError && <em role="cell">{latestError}</em>}
+          </div>;
+        })}
+      </div>
+      {lastError && <p className="field-help" role="alert">Failure recorded: {lastError}</p>}
+      {telemetry.state === "cancelled" && <p className="field-help" role="status">Cancellation recorded. Queued samples were skipped; completed evidence was retained.</p>}
+      {telemetry.state === "failed" && <p className="field-help" role="alert">One or more samples failed. Other sequential competitors continued where possible.</p>}
+      <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total}>Cancel queued work</button></div>
+      <p className="field-help">Sample time is measured from Arena dispatch to terminal result. Generation metrics use authoritative runtime values; unsupported values show unavailable. Local execution remains sequential.</p>
+    </div>
+  );
+}
+
+function formatArenaMs(value: number | null): string {
+  return value === null || !Number.isFinite(value) ? "Unavailable" : formatDurationNs(value * 1_000_000);
+}
+
+function formatArenaMetrics(metrics: ReturnType<typeof visibleArenaTelemetryMetrics>): string {
+  const values = [
+    metrics.tokensPerSecond === null ? "tokens/s unavailable" : `${metrics.tokensPerSecond.toFixed(1)} tok/s`,
+    metrics.completionTokens === null ? "output unavailable" : `${metrics.completionTokens} output tokens`,
+    metrics.ttftMs === null ? "TTFT unavailable" : `TTFT ${formatArenaMs(metrics.ttftMs)}`,
+  ];
+  return values.join(" · ");
 }
 
 function ArenaResultsSurface({
@@ -2754,7 +2898,7 @@ function ArenaResultsSurface({
   summaryPersistence: ArenaSummaryPersistenceState;
   onOpenRuns: () => void;
 }) {
-  const [blind, setBlind] = useState(false);
+  const [blind, setBlind] = useState(request.blind === true);
   const [revealed, setRevealed] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>({});
   const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
@@ -2767,8 +2911,11 @@ function ArenaResultsSurface({
   const cards = buildBlindArenaCards(results, responseMap);
   const grouped = groupArenaExecutions(results);
   const competitorSummaries = summarizeArenaCompetitors(results);
+  const blindExecutionLocked = request.blind === true && !revealed;
+  const showBlindEvaluation = !revealed && (blind || request.blind === true);
+  const showMeasuredResults = !blindExecutionLocked;
   const ranking = lockState === "locked"
-    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.token] ?? 3] as const)))
+    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.executionKey] ?? 3] as const)))
     : [];
 
   async function lockEvaluation() {
@@ -2777,16 +2924,15 @@ function ArenaResultsSurface({
     setLockMessage(null);
     try {
       for (const card of cards) {
-        const [runId] = card.executionKey.split(":");
+        const separator = card.executionKey.indexOf(":");
+        const runId = separator > 0 ? card.executionKey.slice(0, separator) : "";
         const preparation = await prepareBlindEvaluation(runId);
-        const prepared = preparation.responses.find((response) => response.text === card.text) ?? preparation.responses[0];
-        if (!prepared) continue;
-        await lockBlindEvaluation({
-          evaluationId: preparation.evaluationId,
-          runId,
-          scores: [{ token: prepared.token, overallScore: scores[card.token] ?? 3, criterionScores: {} }],
-          ranking: [[prepared.token]],
-        });
+        const selectedScore = scores[card.executionKey] ?? 3;
+        if (preparation.status === "locked") {
+          reconcileLegacyBlindEvaluationRetry(runId, card.executionKey, preparation.evaluationId, selectedScore, await readBlindEvaluation(runId));
+          continue;
+        }
+        await lockBlindEvaluation(buildLegacyBlindEvaluationLockRequest(runId, card.executionKey, preparation, selectedScore));
       }
       setLockState("locked");
       setRevealed(true);
@@ -2808,10 +2954,10 @@ function ArenaResultsSurface({
 
   return (
     <section className="panel arena-results-panel" aria-live="polite">
-      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{summary.completed}/{summary.total} samples completed</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
-      <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>
+      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{showMeasuredResults ? `${summary.completed}/${summary.total} samples completed` : "Blind results locked until reveal"}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
+      {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>}
       {summaryPersistence.status === "error" && <StateMessage icon="!" title="Aggregate summary unavailable" description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
-      {summaryPersistence.status === "saved" && (
+      {showMeasuredResults && summaryPersistence.status === "saved" && (
         <div className="results-section">
           <p className="eyebrow">Immutable Arena summary</p>
           <div className="results-facts">
@@ -2827,12 +2973,12 @@ function ArenaResultsSurface({
       )}
       {responseState.status === "loading" && <StateMessage icon="…" title="Reading verified response artifacts" description="Response text is loaded only from app-owned, hash-verified artifacts." />}
       {responseState.status === "error" && <StateMessage icon="!" title="Some responses are unavailable" description={responseState.message} error />}
-      {blind && !revealed ? (
+      {showBlindEvaluation ? (
         <div className="blind-arena-surface">
           <div className="section-heading compact-heading"><div><p className="eyebrow">Blind evaluation</p><h4>Score anonymous responses before reveal</h4></div><span className="run-status run-status-neutral">Locked until submit</span></div>
           <p className="field-help">Model, provider, runtime, timing, tokens, objective status, and rank are hidden until the evaluation lock is saved.</p>
-          {cards.length === 0 ? <EmptyState title="No completed responses" description="Only completed, verified responses can enter blind review." /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><label className="field-label" htmlFor={`score-${card.token}`}>Overall score (1–5)<select className="font-select" id={`score-${card.token}`} value={scores[card.token] ?? 3} onChange={(event) => setScores((current) => ({ ...current, [card.token]: Number(event.currentTarget.value) }))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></article>)}</div>}
-          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? "Saving evaluation…" : "Lock scores and reveal"}</button><button className="text-button" type="button" onClick={() => setBlind(false)}>Back to comparison</button></div>
+          {cards.length === 0 ? <EmptyState title="No completed responses" description="Only completed, verified responses can enter blind review." /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><AccessibleListbox id={`score-${card.token}`} label="Overall score (1–5)" value={String(scores[card.executionKey] ?? 3)} options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: String(value) }))} placeholder="Choose score" onChange={(value) => setScores((current) => ({ ...current, [card.executionKey]: Number(value) }))} /></article>)}</div>}
+          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? "Saving evaluation…" : "Lock scores and reveal"}</button>{request.blind !== true && <button className="text-button" type="button" onClick={() => setBlind(false)}>Back to comparison</button>}</div>
           {lockMessage && <p className="field-help" role="alert">{lockMessage}</p>}
         </div>
       ) : (
@@ -2861,24 +3007,12 @@ function ArenaSelect({
   id: string;
   label: string;
   value: string;
-  options: readonly { value: string; label: string; detail: string }[];
+  options: readonly { value: string; label: string; detail?: string }[];
   placeholder: string;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  return (
-    <label className="arena-select-control" htmlFor={id}>
-      <span className="field-label">{label}</span>
-      <select className="font-select" id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.currentTarget.value)}>
-        <option value="">{placeholder}</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label} — {option.detail}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
+  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder={placeholder} disabled={disabled} onChange={onChange} />;
 }
 
 function ArenaExecutionResult({
@@ -3631,13 +3765,15 @@ function BlindEvaluationPanel({
               <article className="blind-response-card" key={response.token}>
                 <p className="eyebrow">{response.label}</p>
                 <div className="blind-response-text">{response.text}</div>
-                <label className="blind-score-control">
-                  <span>Overall score</span>
-                  <select value={state.scores[response.token] ?? ""} onChange={(event) => setScore(response.token, event.target.value)}>
-                    <option value="">Choose 1–5</option>
-                    {[1, 2, 3, 4, 5].map((score) => <option key={score} value={score}>{score}/5</option>)}
-                  </select>
-                </label>
+                <AccessibleListbox
+                  id={`evaluation-score-${response.token}`}
+                  label="Overall score"
+                  value={String(state.scores[response.token] ?? "")}
+                  placeholder="Choose 1–5"
+                  className="blind-score-control"
+                  options={[1, 2, 3, 4, 5].map((score) => ({ value: String(score), label: `${score}/5` }))}
+                  onChange={(value) => setScore(response.token, value)}
+                />
               </article>
             ))}
           </div>
@@ -3654,18 +3790,19 @@ function BlindEvaluationPanel({
               )}
             </div>
             {state.rankingTokens && state.rankingTokens.map((token, index) => {
-              const current = state.preparation.responses.find((response) => response.token === token);
               const usedElsewhere = new Set(state.rankingTokens?.filter((_, position) => position !== index));
               return (
-                <label className="blind-score-control" key={`${token}-${index}`}>
-                  <span>Rank {index + 1}</span>
-                  <select value={token} onChange={(event) => setRankingToken(index, event.target.value)}>
-                    {state.preparation.responses
-                      .filter((response) => response.token === token || !usedElsewhere.has(response.token))
-                      .map((response) => <option key={response.token} value={response.token}>{response.label}</option>)}
-                  </select>
-                  <span className="sr-only">{current?.label}</span>
-                </label>
+                <AccessibleListbox
+                  id={`evaluation-rank-${index}`}
+                  label={`Rank ${index + 1}`}
+                  value={token}
+                  placeholder="Choose response"
+                  className="blind-score-control"
+                  options={state.preparation.responses
+                    .filter((response) => response.token === token || !usedElsewhere.has(response.token))
+                    .map((response) => ({ value: response.token, label: response.label }))}
+                  onChange={(value) => setRankingToken(index, value)}
+                />
               );
             })}
           </div>
@@ -3973,6 +4110,7 @@ function Settings({
   onAppearanceChange: (next: AppearancePreferences) => void;
   onRestoreDefaults: () => void;
 }) {
+  const { locale, setLocale } = useI18n();
   const appearanceFileInput = useRef<HTMLInputElement>(null);
   const [appearanceTransferMessage, setAppearanceTransferMessage] = useState("");
 
@@ -4013,6 +4151,25 @@ function Settings({
         </p>
       </section>
 
+      <section className="panel settings-card language-settings" aria-labelledby="language-heading">
+        <div className="section-heading compact-heading">
+          <div>
+            <p className="eyebrow">Interface language</p>
+            <h3 id="language-heading">Choose your language</h3>
+          </div>
+          <span className="section-index">L</span>
+        </div>
+        <AccessibleListbox
+          id="interface-language"
+          label="Interface language"
+          value={locale}
+          placeholder="Choose your language"
+          options={[{ value: "en", label: "English" }, { value: "pt-BR", label: "Português (Brasil)" }]}
+          onChange={(value) => setLocale(value as typeof locale)}
+        />
+        <p className="field-help">The language is saved locally in this desktop webview and does not change stored evidence or credentials.</p>
+      </section>
+
       <section className="appearance-grid">
         <div className="panel settings-card appearance-controls">
           <div className="section-heading compact-heading">
@@ -4023,15 +4180,14 @@ function Settings({
             <span className="section-index">A</span>
           </div>
 
-          <label className="field-label" htmlFor="font-choice">Interface font</label>
-          <select
-            className="font-select"
+          <AccessibleListbox
             id="font-choice"
+            label="Interface font"
             value={appearance.fontId}
-            onChange={(event) => updateAppearance("fontId", event.target.value)}
-          >
-            {FONT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
+            placeholder="Choose an interface font"
+            options={FONT_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+            onChange={(value) => updateAppearance("fontId", value)}
+          />
           <p className="field-help">
             Seven local system stacks are available. Times New Roman remains the default intent, with honest Linux
             fallbacks when a font is not installed.
@@ -4055,6 +4211,26 @@ function Settings({
             <div className="range-labels" aria-hidden="true"><span>Compact</span><span>Standard</span><span>Large</span></div>
           </div>
 
+          <div className="appearance-field">
+            <div className="field-label-row">
+              <label className="field-label" htmlFor="motion-scale">Motion scale</label>
+              <output className="control-value" htmlFor="motion-scale" aria-live="polite">{appearance.motionScale}%</output>
+            </div>
+            <input
+              className="motion-scale-control"
+              id="motion-scale"
+              type="range"
+              min={MOTION_SCALE_MIN}
+              max={MOTION_SCALE_MAX}
+              step="1"
+              value={appearance.motionScale}
+              aria-valuetext={`${appearance.motionScale}%`}
+              onChange={(event) => updateAppearance("motionScale", Number(event.target.value))}
+            />
+            <p className="field-help">Adjust the duration of discretionary interface motion.</p>
+            <div className="range-labels" aria-hidden="true"><span>0%</span><span>100%</span><span>200%</span></div>
+          </div>
+
           <fieldset className="appearance-fieldset">
             <legend className="field-label">Accent color</legend>
             <div className="appearance-choice-grid">
@@ -4069,6 +4245,23 @@ function Settings({
                 >
                   <span className="appearance-swatch" data-accent={option.id} aria-hidden="true" />
                   <span>{option.label}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="appearance-fieldset">
+            <legend className="field-label">Contrast</legend>
+            <div className="appearance-choice-grid appearance-choice-grid-two">
+              {CONTRAST_OPTIONS.map((option) => (
+                <button
+                  className={`appearance-choice appearance-choice-wide ${appearance.contrastId === option.id ? "is-selected" : ""}`}
+                  key={option.id}
+                  type="button"
+                  aria-pressed={appearance.contrastId === option.id}
+                  onClick={() => updateAppearance("contrastId", option.id)}
+                >
+                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
                 </button>
               ))}
             </div>
