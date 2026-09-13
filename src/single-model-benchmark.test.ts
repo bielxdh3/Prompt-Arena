@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildSingleModelBenchmarkPayload, singleModelRecord } from "./single-model-benchmark";
-import type { PerformanceEvidence } from "./performance-lab";
+import { performanceEvidenceFromExecution } from "./performance-lab";
 
-const performance: PerformanceEvidence = { schemaVersion: 1, temperature: "unknown", metrics: {} };
+const performance = performanceEvidenceFromExecution(null);
 
 describe("single-model benchmark evidence", () => {
   it("persists one immutable model result without requiring a competitor", () => {
