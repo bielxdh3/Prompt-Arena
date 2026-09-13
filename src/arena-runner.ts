@@ -9,7 +9,7 @@ import type {
   RunPlan,
 } from "./bridge";
 import { buildRunPlan } from "./run-plan";
-import type { AppLocale } from "./i18n";
+type AppLocale = "en" | "pt-BR";
 
 export const ARENA_REPETITION_OPTIONS = [1, 3, 5, 10] as const;
 export const MAX_ARENA_COMPETITORS = 8;
