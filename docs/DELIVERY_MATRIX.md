@@ -11,9 +11,9 @@ mandatory workflow artifact; failed generation leaves the prior verified README 
 
 Current source implementation HEAD is `13e3cd1b3247e1acf11b678cd1c2f24fbf359608`;
 current documentation/package-evidence HEAD is
-`492841dd9bdc1afbecd9c851cf7d44be8945bfb3`. CI run
-`34723433871` and desktop package run `34723433869` passed on the latter
-checkout. The package workflow produced and verified Windows MSI/NSIS and
+`0ec46f87d2e353a06198358a9dfff88c8ece5f29`. CI runs `34723433871` and
+follow-up `34729737763`, plus desktop package run `34723433869`, passed on the
+applicable checkouts. The package workflow produced and verified Windows MSI/NSIS and
 Linux DEB/AppImage artifacts, including clean-install/start/restart/uninstall
 smoke. These results do not close installed/native or human QA. PR #35 is
 OPEN/DRAFT and unmerged; the separate native/release follow-up is PR #42.
