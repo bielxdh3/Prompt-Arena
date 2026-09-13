@@ -18,9 +18,7 @@ import type {
   CredentialSource,
   PriceSnapshot,
 } from "./bridge";
-const translate = (value: string): string => value;
-const formatLocaleNumber = (value: number, _locale?: unknown, options?: Intl.NumberFormatOptions): string => new Intl.NumberFormat("en-US", options).format(value);
-const formatLocaleCurrency = (value: number, _locale?: unknown, currency = "USD", options?: Intl.NumberFormatOptions): string => new Intl.NumberFormat("en-US", { style: "currency", currency, ...options }).format(value);
+import { formatLocaleCurrency, formatLocaleNumber, translate } from "./i18n";
 
 export const MAX_BYOK_PROMPT_BYTES = 64 * 1024;
 export const MAX_BYOK_ENDPOINT_LENGTH = 2 * 1024;
@@ -363,4 +361,3 @@ export function byokErrorMessage(error: unknown): string {
 export function providerIds(): readonly ProviderId[] {
   return PROVIDER_CATALOG.map((provider) => provider.id);
 }
-
