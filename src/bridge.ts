@@ -458,6 +458,30 @@ export type SavedCalibrationBenchmark = { record: CalibrationBenchmarkRecord; sa
 export type SavedCalibrationResult = { record: CalibrationResultRecord; saveOutcome: SaveOutcome };
 export type SavedTournamentResult = { record: TournamentResultRecord; saveOutcome: SaveOutcome };
 
+export type RoadmapFeatureKind =
+  | "single_model_benchmark"
+  | "performance_lab"
+  | "historical_regression"
+  | "model_ratings"
+  | "robustness_arena"
+  | "repro_bundle";
+
+export type RoadmapRecordRequest = {
+  recordId: string;
+  kind: RoadmapFeatureKind;
+  payload: Record<string, unknown>;
+};
+
+export type RoadmapRecord = RoadmapRecordRequest & {
+  contentHash: string;
+  createdAt: string;
+};
+
+export type SavedRoadmapRecord = {
+  record: RoadmapRecord;
+  saveOutcome: SaveOutcome;
+};
+
 export type BenchmarkDraftSummary = {
   draftId: string;
   benchmarkId: string;
@@ -1020,6 +1044,30 @@ export async function readTournamentResult(tournamentId: string): Promise<Tourna
     "get_tournament_result",
     "The selected tournament result could not be reached.",
     { tournamentId },
+  );
+}
+
+export async function saveRoadmapRecord(request: RoadmapRecordRequest): Promise<SavedRoadmapRecord> {
+  return invokeDesktop<SavedRoadmapRecord>(
+    "save_roadmap_record",
+    "The roadmap evidence could not be saved.",
+    { request },
+  );
+}
+
+export async function readRoadmapRecords(kind?: RoadmapFeatureKind): Promise<RoadmapRecord[]> {
+  return invokeDesktop<RoadmapRecord[]>(
+    "list_roadmap_records",
+    "The roadmap evidence could not be reached.",
+    kind ? { kind } : undefined,
+  );
+}
+
+export async function readRoadmapRecord(recordId: string): Promise<RoadmapRecord | null> {
+  return invokeDesktop<RoadmapRecord | null>(
+    "get_roadmap_record",
+    "The selected roadmap evidence could not be reached.",
+    { recordId },
   );
 }
 
