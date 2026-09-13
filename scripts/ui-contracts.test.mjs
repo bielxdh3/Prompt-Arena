@@ -9,6 +9,8 @@ const styles = read("src/styles.css");
 const listboxSource = read("src/accessible-listbox.tsx");
 const i18nSource = read("src/i18n.ts");
 const appSource = read("src/App.tsx");
+const advancedSource = read("src/advanced-arena-view.tsx");
+const roadmapSource = read("src/roadmap-features-view.tsx");
 
 describe("static UI parity contracts", () => {
   it("keeps the shared motion system and reduced-motion precedence explicit", () => {
@@ -60,6 +62,14 @@ describe("static UI parity contracts", () => {
     expect(appSource).toContain("requestAnimationFrame(revealVisibleTargets)");
     expect(appSource).toContain("observer?.unobserve(entry.target)");
     expect(appSource).toContain('className="page-transition"');
+    const orbitMarkup = appSource.match(/<div className="hero-orbit"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect((orbitMarkup.match(/<svg className="orbit orbit-(?:outer|middle)"/g) ?? []).length).toBe(2);
+    expect((orbitMarkup.match(/<ellipse /g) ?? []).length).toBe(2);
+    expect(orbitMarkup).toContain('<div className="orbit-core">PA</div>');
+    expect(advancedSource).toContain('translate("Advanced Arena")');
+    expect(advancedSource).toContain('translate("Quality, latency, throughput, and human signal")');
+    expect(roadmapSource).toContain('translate("Single-model benchmark")');
+    expect(roadmapSource).toContain('translate("Performance Lab")');
 
     const resourceKeys = new Set(
       [...i18nSource.matchAll(/^(?:\s*)(?:"((?:[^"\\]|\\.)+)"|([A-Za-z][A-Za-z0-9_]*))\s*:/gm)]
