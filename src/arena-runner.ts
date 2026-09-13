@@ -123,6 +123,15 @@ export type ArenaTelemetry = {
   lastError: string | null;
 };
 
+export type ArenaMonitorDisplay = {
+  currentSampleNumber: number | null;
+  totalSamples: number;
+  repetitionNumber: number | null;
+  repetitionsPerCompetitor: number | null;
+  competitorElapsedMs: number | null;
+  arenaElapsedMs: number | null;
+};
+
 const unavailableTelemetryMetrics = (): ArenaTelemetryMetrics => ({
   loadDurationMs: null,
   ttftMs: null,
@@ -183,6 +192,22 @@ export function refreshArenaTelemetry(telemetry: ArenaTelemetry, timestampMs = D
   return { ...telemetry, wallElapsedMs: Math.max(0, timestampMs - telemetry.startedAtMs), samples, etaMs: telemetry.etaMs === null ? null : telemetry.etaMs, activeSampleIndex: active?.sampleIndex ?? telemetry.activeSampleIndex };
 }
 
+export function arenaMonitorDisplay(telemetry: ArenaTelemetry, activeSampleIndex: number | null, blind: boolean): ArenaMonitorDisplay {
+  const active = telemetry.samples.find((sample) => sample.sampleIndex === activeSampleIndex);
+  const competitorSamples = active ? telemetry.samples.filter((sample) => sample.competitorId === active.competitorId) : [];
+  const measuredDurations = competitorSamples
+    .map((sample) => sample.durationMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
+  return {
+    currentSampleNumber: active ? active.sampleIndex + 1 : null,
+    totalSamples: telemetry.total,
+    repetitionNumber: active?.repetition ?? null,
+    repetitionsPerCompetitor: active ? competitorSamples.length : null,
+    competitorElapsedMs: blind || measuredDurations.length === 0 ? null : measuredDurations.reduce((total, value) => total + value, 0),
+    arenaElapsedMs: blind || !Number.isFinite(telemetry.wallElapsedMs) || telemetry.wallElapsedMs < 0 ? null : telemetry.wallElapsedMs,
+  };
+}
+
 export function telemetryMetricsFromExecution(execution: PersistedExecution | null): ArenaTelemetryMetrics {
   const summary = execution?.attempt.responseSummary;
   const timing = summary?.timing;
@@ -215,9 +240,16 @@ export function visibleArenaTelemetryError(error: string | null | undefined, bli
 }
 
 export function arenaTelemetryLabel(sample: ArenaSampleTelemetry, blind: boolean, locale: AppLocale = "en"): string {
+  const blindOrdinal = blindLabelOrdinal(sample.competitorId);
   return blind
-    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + (sample.competitorOrdinal % 26))}`
+    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + blindOrdinal)}`
     : sample.competitorLabel;
+}
+
+function blindLabelOrdinal(value: string): number {
+  const key = opaqueBlindOrderKey(value);
+  const prefix = Number.parseInt(key.slice(0, 8), 16);
+  return Number.isFinite(prefix) ? prefix % 26 : 0;
 }
 
 export type ArenaMetricSummary = {
@@ -1015,15 +1047,32 @@ export function buildBlindArenaCards(
   executions: ArenaExecution[],
   responses: Map<string, string>,
 ): BlindArenaCard[] {
-  return executions
+  const candidates = executions
     .filter((item) => item.execution?.attempt.status === "completed")
-    .map((item, index) => ({
-      label: `Response ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? `-${index + 1}` : ""}`,
-      token: `blind-${index + 1}`,
-      executionKey: `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`,
-      text: responses.get(`${item.runId}:${item.execution?.attempt.attemptId ?? ""}`) ?? "",
-    }))
+    .map((item) => {
+      const executionKey = `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`;
+      return { executionKey, orderKey: opaqueBlindOrderKey(executionKey), text: responses.get(executionKey) ?? "" };
+    })
     .filter((card) => card.text.length > 0);
+  candidates.sort((left, right) => left.orderKey.localeCompare(right.orderKey) || left.executionKey.localeCompare(right.executionKey));
+  return candidates.map((candidate, index) => ({
+    label: `Response ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? `-${index + 1}` : ""}`,
+    token: `blind-${candidate.orderKey.slice(0, 24)}`,
+    executionKey: candidate.executionKey,
+    text: candidate.text,
+  }));
+}
+
+function opaqueBlindOrderKey(value: string): string {
+  let hash = 2166136261;
+  let second = 2246822519;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+    second ^= character.charCodeAt(0) + 31;
+    second = Math.imul(second, 3266489917);
+  }
+  return `${(hash >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}-${value.length.toString(16).padStart(4, "0")}`;
 }
 
 function average(values: number[]): number | null {

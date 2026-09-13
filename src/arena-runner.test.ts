@@ -175,8 +175,9 @@ describe("arena runner", () => {
   it("keeps blind telemetry neutral and hides identity-sensitive metrics", () => {
     const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 };
     const telemetry = createArenaTelemetry(request, 10);
-    expect(arenaTelemetryLabel(telemetry.samples[0], true)).toBe("Competitor A");
-    expect(arenaTelemetryLabel(telemetry.samples[1], true)).toBe("Competitor B");
+    expect(arenaTelemetryLabel(telemetry.samples[0], true)).toMatch(/^Competitor [A-Z]$/);
+    expect(arenaTelemetryLabel(telemetry.samples[1], true)).toMatch(/^Competitor [A-Z]$/);
+    expect(arenaTelemetryLabel(telemetry.samples[0], true)).not.toBe(arenaTelemetryLabel(telemetry.samples[1], true));
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
   });
 
