@@ -23,6 +23,7 @@ import {
   type SingleModelBenchmarkPayload,
 } from "./single-model-benchmark";
 import { buildPerformanceRecord, performanceEvidenceFromExecution } from "./performance-lab";
+import { compareHistoricalRuns, type HistoricalRegression } from "./historical-regression";
 
 type SurfaceState =
   | { status: "loading" }
@@ -53,6 +54,9 @@ export function RoadmapFeaturesView() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [single, setSingle] = useState<SingleModelBenchmarkPayload | null>(null);
+  const [baselineId, setBaselineId] = useState("");
+  const [candidateId, setCandidateId] = useState("");
+  const [regression, setRegression] = useState<HistoricalRegression | null>(null);
 
   async function refresh() {
     if (!isDesktopEnvironment()) {
@@ -121,6 +125,23 @@ export function RoadmapFeaturesView() {
   const singlePayloads = useMemo(() => state.status === "ready"
     ? state.records.filter((record) => record.kind === "single_model_benchmark").map((record) => record.payload as unknown as SingleModelBenchmarkPayload)
     : [], [state]);
+
+  async function calculateRegression() {
+    const baseline = singlePayloads.find((payload) => payload.runId === baselineId);
+    const candidate = singlePayloads.find((payload) => payload.runId === candidateId);
+    if (!baseline || !candidate || baseline.runId === candidate.runId) {
+      setNotice("Select two different immutable runs.");
+      return;
+    }
+    const result = compareHistoricalRuns(baseline, candidate);
+    setRegression(result);
+    try {
+      await saveRoadmapRecord({ recordId: `regression-${baseline.runId}-${candidate.runId}`, kind: "historical_regression", payload: result as unknown as Record<string, unknown> });
+      setNotice("Historical comparison saved immutably.");
+    } catch (error: unknown) {
+      setNotice(error instanceof Error ? error.message : "The comparison was calculated but could not be saved.");
+    }
+  }
 
   async function saveSingle(execution: PersistedExecution, profile: ProfileRevision, selectedTaskId: string, selectedCaseId: string) {
     if (!version) throw new Error("Select an immutable benchmark version first.");
@@ -252,6 +273,14 @@ export function RoadmapFeaturesView() {
         <p className="field-help">Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.</p>
         {single ? <MetricTable payload={single} /> : <StateMessage title="No performance evidence yet" description="Run a single-model benchmark to populate this local table." />}
       </section>
+
+      <section className="panel" aria-labelledby="historical-regression-heading">
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #38</p><h3 id="historical-regression-heading">Historical regression</h3></div><span className="section-index">38</span></div>
+        <p className="field-help">Compare immutable source runs while surfacing changed model, runtime, benchmark, seed, hardware, or prompt conditions.</p>
+        <div className="arena-selection-grid"><FieldSelect id="insights-baseline" label="Baseline run" value={baselineId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setBaselineId} /><FieldSelect id="insights-candidate" label="Candidate run" value={candidateId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setCandidateId} /></div>
+        <button className="secondary-button" type="button" onClick={() => void calculateRegression()} disabled={singlePayloads.length < 2}>Compare immutable runs</button>
+        {regression && <RegressionTable comparison={regression} />}
+      </section>
     </div>
   );
 }
@@ -266,6 +295,10 @@ function EvidenceSummary({ payload }: { payload: SingleModelBenchmarkPayload }) 
 
 function MetricTable({ payload }: { payload: SingleModelBenchmarkPayload }) {
   return <div className="roadmap-table"><table><thead><tr><th>Metric</th><th>Value</th><th>Evidence</th></tr></thead><tbody>{Object.entries(payload.performance.metrics).map(([name, metric]) => <tr key={name}><td>{name}</td><td>{metric.value === null ? "Unavailable" : String(metric.value)}</td><td>{metric.unit} · {metric.source} · {metric.confidence} · {metric.temperature}</td></tr>)}</tbody></table></div>;
+}
+
+function RegressionTable({ comparison }: { comparison: HistoricalRegression }) {
+  return <div className="roadmap-table"><p className="field-help">{comparison.compatibility.compatible ? "Conditions are compatible." : `Changed conditions: ${comparison.compatibility.changedDimensions.join(", ")}`}</p><table><thead><tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Delta</th></tr></thead><tbody>{comparison.metrics.map((metric) => <tr key={metric.metric}><td>{metric.metric}</td><td>{metric.baseline === null ? "—" : String(metric.baseline)}</td><td>{metric.candidate === null ? "—" : String(metric.candidate)}</td><td>{metric.absoluteDelta === null ? "Insufficient data" : `${metric.absoluteDelta > 0 ? "+" : ""}${metric.absoluteDelta} · ${metric.status}`}</td></tr>)}</tbody></table></div>;
 }
 
 function RoadmapMetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
