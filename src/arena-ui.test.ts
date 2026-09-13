@@ -153,4 +153,3 @@ describe("bounded Arena UI helpers", () => {
     expect(arenaPreviewCopy()).toContain("does not create run state");
   });
 });
-
