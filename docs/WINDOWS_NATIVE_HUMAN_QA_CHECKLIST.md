@@ -48,7 +48,7 @@ check.
 | Primary UI | PASS — shell sizing, active sidebar, control affordances, horizontal blind comparison/card density, semantic live-telemetry headers, accessible Task/Case listboxes, and progressive disclosure are implemented. | PENDING — desktop and narrow visual review. | `WINDOWS_QA_FINDING_HORIZONTAL_OVERFLOW_TO_EMPTY_SPACE`, `WINDOWS_QA_FINDING_UNSTYLED_NATIVE_SCROLLBARS` |
 | Accessibility | PASS — semantic buttons, accessible Task/Case listboxes, remaining native selects, native details disclosure, visible focus, bounded text panes, and reduced-motion hooks are present. | PENDING — keyboard, screen reader, focus order, contrast, disabled/loading, and native control review. | `src/App.tsx`, `src/styles.css`, `src/listbox-navigation.ts` |
 | i18n | PASS — PT-BR/English critical P2 strings and formatting tests pass. | PENDING — switch, restart, and full-surface review with identifiers/user content unchanged. | `src/i18n.ts`, `src/i18n.test.ts` |
-| Packaging | PASS — historical 57f02b3 evidence remains separate; fresh incremental NSIS/package evidence was built from checkout HEAD `fe5c28644b7aea01f7077bbb0e73ef73605255f2`, containing baseline reviewed production implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` plus focused corrections `4e471224d51bddef7f9d511f4dcce6df62f6a2ee` and `fe5c28644b7aea01f7077bbb0e73ef73605255f2`. | PENDING_HUMAN_QA — checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA, and MSI remains unavailable. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
+| Packaging | PASS — historical 57f02b3 evidence remains separate; current CI produced verified MSI/NSIS and Linux artifacts, and tracked QA revision `0.1.4.3` is available at `downloadable-artifacts/Prompt-Arena-0.1.4.3-windows-x64.msi` (6,111,232 bytes, SHA-256 `3b0e7487d988222384d23552e0bd66b126cfface450954a4f34f73e776bb7b4f`). Local verification of the normalized MSI/NSIS checksum manifest and NSIS clean install/start/restart/uninstall passed. | PENDING_HUMAN_QA — package smoke is not visual or human QA; fresh local WiX reproducibility and installed native review remain unproven. | `COMPLETE`; `PENDING_HUMAN_QA` for visual/native/full Arena review |
 
 ## Application review
 
@@ -133,7 +133,8 @@ artifact was unavailable. This is not visual or human QA.
 
 These checks do not prove visual, native control, full Tauri Arena live-runtime,
 or human accessibility acceptance. The worker smoke is runtime protocol
-evidence only. Remote CI is unconfirmed.
+evidence only. That historical local run did not have remote CI provenance;
+current remote CI is confirmed by runs `34723433871` and `34723433869`.
 
 ## External runtime and packaging gates
 
@@ -153,10 +154,13 @@ evidence only. Remote CI is unconfirmed.
   not close `PENDING_HUMAN_QA` for visual/accessibility/live Arena review;
   packaging smoke is not visual or human QA, and the historical 57f02b3
   artifact is not current-head output.
-- `BLOCKED LOCALLY`: Windows MSI remains unavailable because of the existing
-  WiX `light.exe` failure.
-- `CI PENDING`: Linux deb/AppImage still requires the Linux runner.
-- Remote CI is unconfirmed.
+- `BLOCKED LOCALLY`: fresh local WiX `light.exe` reproducibility is not proven;
+  the tracked QA MSI is available and checksum-valid, but that artifact does not
+  close the installed/native gate.
+- `CI COMPLETE`: the current package workflow produced and verified Linux
+  DEB/AppImage artifacts in run `34723433869`; native Linux review remains a
+  separate gate.
+- Remote CI is confirmed by runs `34723433871` and `34723433869`.
 
 ## Historical package evidence
 

@@ -94,7 +94,7 @@ Arena live-runtime, and human review remain `PENDING_HUMAN_QA`.
 | External BYOK/cost controls | `src/provider-foundation.ts`, `src/byok-ui.ts`, `src/App.tsx` | Provider helper tests | Explicit-consent Tauri review | PENDING_HUMAN_QA |
 | Appearance, accessibility, and reduced motion | `src/appearance.ts`, `src/styles.css`, `src/App.tsx` | Appearance/font tests plus typecheck/build | Native accessibility, focus, contrast, resize, and motion review | PENDING_HUMAN_QA |
 | Windows NSIS at exact checkout HEAD | Tauri bundle/workflow | Fresh incremental package built from exact checkout source tree HEAD `fe5c28644b7aea01f7077bbb0e73ef73605255f2`, containing baseline reviewed production implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657` plus focused corrections `4e471224d51bddef7f9d511f4dcce6df62f6a2ee` and `fe5c28644b7aea01f7077bbb0e73ef73605255f2`; artifact, bundle, bundled-worker, source sidecar, and checksum evidence are recorded below. | Checksum verification, clean install, executable start, restart, and silent uninstall passed; packaging smoke is not visual or human QA | COMPLETE |
-| Windows MSI | Tauri target/workflow | Desktop package run `34723433869` produced exactly one verified MSI; local WiX fallback remains unavailable | Native install/review remains pending | COMPLETE (CI artifact) |
+| Windows MSI | Tauri target/workflow | Desktop package run `34723433869` produced exactly one verified MSI; tracked QA revision `0.1.4.3` is available at `downloadable-artifacts/Prompt-Arena-0.1.4.3-windows-x64.msi` (6,111,232 bytes, SHA-256 `3b0e7487d988222384d23552e0bd66b126cfface450954a4f34f73e776bb7b4f`); fresh local WiX reproducibility is not separately claimed | Native install/review remains pending | COMPLETE (CI/tracked artifact) |
 | Linux deb/AppImage | Tauri target/workflow | Desktop package run `34723433869` produced and verified Linux DEB/AppImage artifacts | Native Linux review remains pending | COMPLETE (CI artifact) |
 
 ## Historical automated validation recorded for source implementation HEAD `8588a2dd66e386082e153c933b1b55891ac42657`
@@ -198,9 +198,10 @@ records the artifact checksum. `E:\Prompt Arena-live-telemetry-i18n-commit2\pack
 is 282 bytes with SHA-256 `9F410C6F8B1E8F1225C30FBD16F8A7BE7F0AD1B6E0091F1203E7016FEE7693C1`
 and records passed
 checksum verification, clean install, executable start, restart, and silent
-uninstall; the optional MSI artifact was unavailable in this historical local
+uninstall; the optional MSI artifact was unavailable in that historical local
 package attempt. This package smoke is not visual or human QA. Current CI
-produced a verified MSI/NSIS pair; local WiX fallback remains unavailable.
+produced a verified MSI/NSIS pair, and the tracked QA MSI above is checksum-valid;
+fresh local WiX reproducibility remains unproven.
 Docker remains
 `BLOCKED_EXTERNAL_RUNTIME`. Local Ollama worker-protocol evidence is
 `COMPLETE`; Tauri discovery and full Arena native runtime review remain
