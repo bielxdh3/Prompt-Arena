@@ -544,8 +544,28 @@ function Overview({
           </button>
         </div>
         <div className="hero-orbit" aria-hidden="true">
-          <div className="orbit orbit-one" />
-          <div className="orbit orbit-two" />
+          <svg className="orbit orbit-outer" viewBox="0 0 286 216" focusable="false">
+            <defs>
+              <linearGradient id="orbit-outer-gradient" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="var(--color-accent-strong)" stopOpacity="0.28" />
+                <stop offset="0.42" stopColor="var(--color-accent-strong)" stopOpacity="0.96" />
+                <stop offset="0.7" stopColor="var(--color-accent)" stopOpacity="0.48" />
+                <stop offset="1" stopColor="var(--color-accent)" stopOpacity="0.2" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="143" cy="108" rx="137" ry="101" fill="none" stroke="url(#orbit-outer-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <svg className="orbit orbit-middle" viewBox="0 0 232 250" focusable="false">
+            <defs>
+              <linearGradient id="orbit-middle-gradient" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="var(--color-accent)" stopOpacity="0.2" />
+                <stop offset="0.38" stopColor="var(--color-accent-strong)" stopOpacity="0.92" />
+                <stop offset="0.7" stopColor="var(--color-accent)" stopOpacity="0.44" />
+                <stop offset="1" stopColor="var(--color-accent-strong)" stopOpacity="0.26" />
+              </linearGradient>
+            </defs>
+            <ellipse cx="116" cy="125" rx="104" ry="113" fill="none" stroke="url(#orbit-middle-gradient)" strokeWidth="3.5" vectorEffect="non-scaling-stroke" />
+          </svg>
           <div className="orbit-core">PA</div>
         </div>
       </section>
