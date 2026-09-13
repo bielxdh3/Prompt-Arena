@@ -241,8 +241,18 @@ pub struct ArenaExecutionEvidence {
     pub status: String,
     pub duration_ms: Option<f64>,
     #[serde(default)]
+    pub load_duration_ms: Option<f64>,
+    #[serde(default)]
+    pub generation_duration_ms: Option<f64>,
+    #[serde(default)]
+    pub ttft_ms: Option<f64>,
+    #[serde(default)]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default)]
     pub tokens_per_second: Option<f64>,
     pub completion_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
     pub objective_passed: Option<bool>,
 }
 
@@ -256,6 +266,8 @@ pub struct ArenaSummaryPayload {
     pub repetitions: u32,
     pub pack_id: Option<String>,
     pub materialization_seed: Option<u64>,
+    #[serde(default)]
+    pub arena_wall_time_ms: Option<f64>,
     pub summary: Value,
     pub competitors: Vec<Value>,
     pub evidence: Vec<ArenaExecutionEvidence>,
@@ -2617,6 +2629,12 @@ fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageEr
     {
         return Err(StorageError::InvalidRecordId);
     }
+    if summary
+        .arena_wall_time_ms
+        .is_some_and(|duration| !duration.is_finite() || duration < 0.0)
+    {
+        return Err(StorageError::InvalidRecordId);
+    }
     if let Some(pack_id) = &summary.pack_id {
         validate_record_id(pack_id)?;
     }
@@ -2640,6 +2658,15 @@ fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageEr
             .is_some_and(|duration| !duration.is_finite() || duration < 0.0)
         {
             return Err(StorageError::InvalidRecordId);
+        }
+        for duration in [
+            evidence.load_duration_ms,
+            evidence.generation_duration_ms,
+            evidence.ttft_ms,
+        ] {
+            if duration.is_some_and(|value| !value.is_finite() || value < 0.0) {
+                return Err(StorageError::InvalidRecordId);
+            }
         }
         if evidence
             .tokens_per_second
@@ -4060,6 +4087,7 @@ mod tests {
             repetitions: 1,
             pack_id: None,
             materialization_seed: Some(42),
+            arena_wall_time_ms: Some(12.5),
             summary: json!({"total": 1, "uncertainty": 0.1, "tieMargin": 0.2}),
             competitors: vec![json!({"competitorId": "profile-1@1", "uncertainty": 0.1})],
             evidence: vec![ArenaExecutionEvidence {
@@ -4070,8 +4098,13 @@ mod tests {
                 attempt_id: Some("attempt-1".to_owned()),
                 status: "completed".to_owned(),
                 duration_ms: Some(12.5),
+                load_duration_ms: Some(1.0),
+                generation_duration_ms: Some(10.0),
+                ttft_ms: Some(2.0),
+                prompt_tokens: Some(3),
                 tokens_per_second: Some(4.0),
                 completion_tokens: Some(4),
+                total_tokens: Some(7),
                 objective_passed: Some(true),
             }],
         };
@@ -4113,6 +4146,7 @@ mod tests {
             repetitions: 1,
             pack_id: None,
             materialization_seed: None,
+            arena_wall_time_ms: Some(20.0),
             summary: json!({"objectivePassRate": 1.0}),
             competitors: vec![
                 json!({"competitorId": "alpha@1", "competitorLabel": "Alpha"}),
@@ -4127,8 +4161,13 @@ mod tests {
                     attempt_id: Some("attempt-1".to_owned()),
                     status: "completed".to_owned(),
                     duration_ms: Some(10.0),
+                    load_duration_ms: Some(1.0),
+                    generation_duration_ms: Some(8.0),
+                    ttft_ms: Some(2.0),
+                    prompt_tokens: Some(4),
                     tokens_per_second: Some(10.0),
                     completion_tokens: Some(10),
+                    total_tokens: Some(14),
                     objective_passed: Some(true),
                 },
                 ArenaExecutionEvidence {
@@ -4139,8 +4178,13 @@ mod tests {
                     attempt_id: Some("attempt-1".to_owned()),
                     status: "completed".to_owned(),
                     duration_ms: Some(20.0),
+                    load_duration_ms: Some(2.0),
+                    generation_duration_ms: Some(16.0),
+                    ttft_ms: Some(3.0),
+                    prompt_tokens: Some(5),
                     tokens_per_second: Some(5.0),
                     completion_tokens: Some(10),
+                    total_tokens: Some(15),
                     objective_passed: Some(false),
                 },
             ],
