@@ -1,4 +1,5 @@
--- Versioned immutable records for owner-approved roadmap evidence.
+-- Versioned immutable records for the owner-approved roadmap features.
+-- Payloads are sanitized at the UI boundary and hashed by StorageService.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS roadmap_records (
