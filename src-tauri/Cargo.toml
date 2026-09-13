@@ -1,6 +1,6 @@
 [package]
 name = "prompt-arena"
-version = "0.1.0"
+version = "0.1.4"
 description = "Local-first desktop workspace for Prompt Arena"
 authors = ["Prompt Arena contributors"]
 edition = "2021"
@@ -32,3 +32,4 @@ tauri = { version = "2.0.0", features = [] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = ["Win32_Graphics_Dxgi", "Win32_Networking_WinHttp", "Win32_Security_Credentials"] }
+
