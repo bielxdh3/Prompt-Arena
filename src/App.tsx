@@ -363,7 +363,7 @@ function AppShell() {
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
-            <span className="version-chip">v0.1.0</span>
+            <span className="version-chip">v0.1.4</span>
           </div>
         </header>
 
