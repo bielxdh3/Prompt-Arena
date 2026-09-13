@@ -220,6 +220,11 @@ import {
   type ProfileFormState,
   type RecommendationThresholds,
 } from "./model-library";
+import {
+  deriveModelAvailability,
+  findModelOperation,
+  modelOperationMessage,
+} from "./model-library-roadmap";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
 
@@ -1444,6 +1449,27 @@ function ModelsView() {
     }
   }
 
+  function handleUseModel(model: ModelRecord) {
+    setSelectedProfileModelId(model.modelId);
+    setForm((current) => ({ ...current, model: model.name }));
+    setFeedback({ kind: "info", message: `${model.name}: selected for profile.` });
+  }
+
+  function handleRetry(model: ModelRecord, operation: ModelOperation) {
+    try {
+      const operationId = nextOperationId(operation.kind === "import" ? "import" : "download");
+      const request = operation.kind === "import" && operation.managedPath
+        ? buildImportModelOperationRequest(operationId, operation.managedPath)
+        : operation.kind === "download"
+          ? buildDownloadModelOperationRequest(operationId, model)
+          : null;
+      if (!request) throw new Error("This model operation cannot be retried from the available local evidence.");
+      void launchOperation(request);
+    } catch (error: unknown) {
+      showModelActionError(error);
+    }
+  }
+
   function handleImport() {
     try {
       const request = buildImportModelOperationRequest(nextOperationId("import"), managedGgufPath);
@@ -1732,18 +1758,14 @@ function ModelsView() {
           {modelState.status === "ready" && visibleModels.length > 0 && (
             <div className="model-list">
               {visibleModels.map((model) => {
-                const rowOperation = [...modelState.operations].reverse().find((operation) => (
-                  operation.modelId === model.modelId
-                  || (operation.kind === "download" && operation.sourceId === model.sourceId && operation.modelName === model.name)
-                ));
+                const rowOperation = findModelOperation(model, modelState.operations);
+                const availability = deriveModelAvailability(model, rowOperation);
+                const operationMessage = modelOperationMessage(rowOperation);
                 const recommendation = classifyModelRecommendation(
                   model,
                   hardwareState.status === "ready" ? hardwareState.snapshot : null,
                   thresholds,
                 );
-                const canDownload = model.backend === "ollama";
-                const canRemove = model.backend === "llama_cpp" && model.managed && model.managedPath !== null;
-                const modelOperationActive = rowOperation ? isActiveModelOperation(rowOperation) : false;
                 return (
                 <article className="model-row" key={model.modelId}>
                   <div>
@@ -1768,13 +1790,18 @@ function ModelsView() {
                     {rowOperation && (
                       <p className="model-meta">
                         Operation {modelOperationStatusLabel(rowOperation.status).toLowerCase()} · {modelOperationProgressLabel(rowOperation)}
-                        {rowOperation.message ? ` · ${rowOperation.message}` : ""}
+                        {operationMessage ? ` · ${operationMessage}` : ""}
                       </p>
                     )}
                   </div>
                   <div className="model-actions">
                     <span className="model-size">{formatModelSize(model.sizeBytes)}</span>
-                    {canDownload && (
+                    {availability.actions.includes("use") && (
+                      <button className="text-button" type="button" onClick={() => handleUseModel(model)} disabled={!desktop || busy || operationStarting}>
+                        Use in profile
+                      </button>
+                    )}
+                    {availability.actions.includes("download") && (
                       <button
                         className="text-button"
                         type="button"
@@ -1784,14 +1811,24 @@ function ModelsView() {
                         {operationAction === rowOperation?.operationId ? "Starting…" : "Download"}
                       </button>
                     )}
-                    {canRemove && (
+                    {availability.actions.includes("cancel") && rowOperation && (
+                      <button className="text-button" type="button" onClick={() => void handleCancel(rowOperation.operationId)} disabled={!desktop || busy || cancellingOperation === rowOperation.operationId}>
+                        {cancellingOperation === rowOperation.operationId ? "Cancelling…" : "Cancel"}
+                      </button>
+                    )}
+                    {availability.actions.includes("retry") && rowOperation && (
+                      <button className="text-button" type="button" onClick={() => handleRetry(model, rowOperation)} disabled={!desktop || busy || operationStarting}>
+                        Retry
+                      </button>
+                    )}
+                    {availability.actions.includes("remove") && (
                       <button
                         className="text-button"
                         type="button"
                         onClick={() => handleRemove(model)}
-                        disabled={!desktop || busy || operationStarting || modelOperationActive}
+                        disabled={!desktop || busy || operationStarting || availability.state === "downloading"}
                       >
-                        {modelOperationActive ? "Removal blocked" : operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
+                        {availability.state === "downloading" ? "Removal blocked" : operationAction === rowOperation?.operationId ? "Working…" : "Remove"}
                       </button>
                     )}
                     <span className="field-help">{modelDownloadCapabilityLabel(model)}</span>
