@@ -74,4 +74,3 @@ pub fn run() -> tauri::Result<()> {
         ])
         .run(tauri::generate_context!())
 }
-
