@@ -31,7 +31,7 @@ const MAX_HTTP_CHUNK_TRAILER_BYTES: usize = 64 * 1024;
 const MAX_HTTP_CHUNK_TRAILER_COUNT: usize = 128;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum total NDJSON payload bytes consumed and accumulated for one stream.
-const MAX_STREAMED_RESPONSE_BYTES: usize = MAX_RESPONSE_BYTES;
+pub(crate) const MAX_STREAMED_RESPONSE_BYTES: usize = MAX_RESPONSE_BYTES;
 
 fn default_read_deadline_ms() -> u64 {
     DEFAULT_READ_DEADLINE_MS
@@ -176,7 +176,7 @@ impl OllamaProvider {
         &self.config
     }
 
-    fn request(
+    pub(crate) fn request(
         &self,
         method: &str,
         suffix: &str,
@@ -957,7 +957,7 @@ fn context_length(model_info: &Map<String, Value>) -> Option<u64> {
     })
 }
 
-fn normalize_remote_error(status: u16, body: &str, model: Option<&str>) -> RuntimeError {
+pub(crate) fn normalize_remote_error(status: u16, body: &str, model: Option<&str>) -> RuntimeError {
     let message = remote_message(body);
     if status == 404 && model.is_some() && message.to_ascii_lowercase().contains("model") {
         return RuntimeError::ModelNotFound {
@@ -984,10 +984,10 @@ fn remote_message(body: &str) -> String {
     }
 }
 
-struct HttpResponse {
-    status: u16,
-    body: HttpBody,
-    read_deadline: Instant,
+pub(crate) struct HttpResponse {
+    pub(crate) status: u16,
+    pub(crate) body: HttpBody,
+    pub(crate) read_deadline: Instant,
 }
 
 fn read_http_response(
@@ -1088,7 +1088,7 @@ fn read_http_response(
     })
 }
 
-fn read_body_string(
+pub(crate) fn read_body_string(
     body: HttpBody,
     cancellation: &CancellationToken,
     read_deadline: Instant,
@@ -1132,7 +1132,7 @@ fn read_body_string_with_limit<R: Read>(
     })
 }
 
-fn read_line_with_cancel<R: Read>(
+pub(crate) fn read_line_with_cancel<R: Read>(
     reader: &mut R,
     cancellation: &CancellationToken,
     read_deadline: Instant,
@@ -1207,7 +1207,7 @@ enum BodyMode {
     UntilEof,
 }
 
-struct HttpBody {
+pub(crate) struct HttpBody {
     reader: BufReader<TcpStream>,
     mode: BodyMode,
     cancellation: CancellationToken,
