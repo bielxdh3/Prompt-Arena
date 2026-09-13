@@ -62,10 +62,10 @@ use crate::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
         BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
         CalibrationBenchmarkPayload, CalibrationBenchmarkRecord, CalibrationResultPayload,
-        CalibrationResultRecord, ExternalGenerationEvidenceRecord, StorageError,
-        StorageRetentionPreview, StorageRetentionRequest, StorageRetentionResult, StorageService,
-        TournamentResultPayload, TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES,
-        MAX_PROFILE_REQUEST_BYTES,
+        CalibrationResultRecord, ExternalGenerationEvidenceRecord, RoadmapRecord,
+        RoadmapRecordRequest, StorageError, StorageRetentionPreview, StorageRetentionRequest,
+        StorageRetentionResult, StorageService, TournamentResultPayload, TournamentResultRecord,
+        MAX_DRAFT_REQUEST_BYTES, MAX_METADATA_BYTES, MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -97,6 +97,13 @@ pub struct SavedBenchmarkVersion {
 #[serde(rename_all = "camelCase")]
 pub struct SavedArenaSummary {
     pub record: ArenaSummaryRecord,
+    pub save_outcome: crate::storage::SaveOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedRoadmapRecord {
+    pub record: RoadmapRecord,
     pub save_outcome: crate::storage::SaveOutcome,
 }
 
@@ -439,6 +446,48 @@ pub fn get_arena_summary(
 ) -> Result<Option<ArenaSummaryRecord>, CommandError> {
     storage_for(&app)?
         .get_arena_summary(&arena_id)
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn save_roadmap_record(
+    app: AppHandle,
+    request: RoadmapRecordRequest,
+) -> Result<SavedRoadmapRecord, CommandError> {
+    let request_bytes = serde_json::to_vec(&request).map_err(|_| CommandError {
+        code: "advanced_artifact_invalid",
+        message: "the roadmap evidence request could not be encoded".to_owned(),
+    })?;
+    if request_bytes.len() > MAX_METADATA_BYTES {
+        return Err(CommandError {
+            code: "advanced_artifact_invalid",
+            message: "the roadmap evidence request exceeds the size limit".to_owned(),
+        });
+    }
+    let (record, save_outcome) = storage_for(&app)?.save_roadmap_record(&request, &now_marker())?;
+    Ok(SavedRoadmapRecord {
+        record,
+        save_outcome,
+    })
+}
+
+#[tauri::command]
+pub fn list_roadmap_records(
+    app: AppHandle,
+    kind: Option<String>,
+) -> Result<Vec<RoadmapRecord>, CommandError> {
+    storage_for(&app)?
+        .list_roadmap_records(kind.as_deref())
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn get_roadmap_record(
+    app: AppHandle,
+    record_id: String,
+) -> Result<Option<RoadmapRecord>, CommandError> {
+    storage_for(&app)?
+        .get_roadmap_record(&record_id)
         .map_err(Into::into)
 }
 
