@@ -73,15 +73,15 @@ export type ArenaProgress = {
   total: number;
   currentCompetitor: string;
   repetition: number;
-  competitorOrdinal: number;
-  sampleIndex: number;
-  status: ArenaSampleStatus;
-  timestampMs: number;
-  sampleStartedAtMs: number | null;
-  sampleElapsedMs: number | null;
-  sampleDurationMs: number | null;
-  metrics: ArenaTelemetryMetrics;
-  error: string | null;
+  competitorOrdinal?: number;
+  sampleIndex?: number;
+  status?: ArenaSampleStatus;
+  timestampMs?: number;
+  sampleStartedAtMs?: number | null;
+  sampleElapsedMs?: number | null;
+  sampleDurationMs?: number | null;
+  metrics?: ArenaTelemetryMetrics;
+  error?: string | null;
 };
 
 export type ArenaSampleStatus = "queued" | "preparing" | "generating" | "verifying" | "completed" | "failed" | "cancelled";
@@ -152,8 +152,11 @@ export function createArenaTelemetry(request: ArenaExecutionRequest, startedAtMs
 }
 
 export function applyArenaProgress(telemetry: ArenaTelemetry, progress: ArenaProgress): ArenaTelemetry {
+  if (progress.sampleIndex === undefined || progress.status === undefined || progress.timestampMs === undefined || progress.metrics === undefined) {
+    return { ...telemetry, completed: progress.completed, total: progress.total };
+  }
   const samples = telemetry.samples.map((sample) => sample.sampleIndex === progress.sampleIndex
-    ? { ...sample, status: progress.status, startedAtMs: progress.sampleStartedAtMs, elapsedMs: progress.sampleElapsedMs ?? sample.elapsedMs, durationMs: progress.sampleDurationMs ?? sample.durationMs, metrics: progress.metrics, error: progress.error }
+      ? { ...sample, status: progress.status ?? sample.status, startedAtMs: progress.sampleStartedAtMs ?? null, elapsedMs: progress.sampleElapsedMs ?? sample.elapsedMs, durationMs: progress.sampleDurationMs ?? sample.durationMs, metrics: progress.metrics ?? sample.metrics, error: progress.error ?? null }
     : sample);
   const completedDurations = samples.filter((sample) => sample.status === "completed").map((sample) => sample.durationMs).filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
   const remaining = Math.max(0, telemetry.total - progress.completed);
