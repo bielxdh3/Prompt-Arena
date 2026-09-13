@@ -35,6 +35,8 @@ export type BuildRunPlanInput = {
   taskId: string;
   caseId: string;
   profileRevision: ProfileRevision;
+  /** Optional deterministic prompt variant used by the Robustness Arena. */
+  promptOverride?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -117,7 +119,9 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   const executionBoundary = executionBoundaryValue(documentRecord, task, benchmarkCase);
 
   const profile = normalizeProfile(input.profileRevision);
-  const prompt = combinePrompts([taskPrompt, casePrompt]);
+  const prompt = input.promptOverride === undefined
+    ? combinePrompts([taskPrompt, casePrompt])
+    : requiredPrompt(input.promptOverride, "Prompt override");
   const systemPrompt = combineOptionalPrompts([profile.systemPrompt, taskSystemPrompt]);
   const plan: RunPlan = {
     runId,
