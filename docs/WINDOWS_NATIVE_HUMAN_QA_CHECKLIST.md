@@ -3,9 +3,10 @@
 ## Current closeout snapshot (2026-09-12)
 
 The current implementation source is `13e3cd1b3247e1acf11b678cd1c2f24fbf359608`;
-documentation/package evidence is `492841dd9bdc1afbecd9c851cf7d44be8945bfb3`.
-CI run `34723433871` and desktop package run `34723433869` passed, including
-Windows MSI/NSIS and Linux package smoke. Those runs do not substitute for
+documentation/package evidence is `0ec46f87d2e353a06198358a9dfff88c8ece5f29`.
+CI runs `34723433871` and follow-up `34729737763`, plus desktop package run
+`34723433869`, passed, including Windows MSI/NSIS and Linux package smoke.
+Those runs do not substitute for
 installed/native or human acceptance; this checklist therefore remains
 `PENDING_HUMAN_QA`. The older heads and artifacts referenced in the rows below
 are historical evidence.

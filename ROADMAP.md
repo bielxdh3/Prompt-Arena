@@ -15,9 +15,10 @@ product phase. A phase becomes `COMPLETE` only after its user-facing acceptance 
 
 The local roadmap implementation is complete through source commit
 `13e3cd1b3247e1acf11b678cd1c2f24fbf359608`; the current package/documentation
-evidence checkout is `492841dd9bdc1afbecd9c851cf7d44be8945bfb3`. CI run
-`34723433871` and desktop package run `34723433869` both passed on that
-checkout, including Windows MSI/NSIS and Linux package smoke. PR #35 remains
+evidence checkout is `0ec46f87d2e353a06198358a9dfff88c8ece5f29`. CI runs
+`34723433871` and follow-up `34729737763`, plus desktop package run
+`34723433869`, passed on the applicable checkouts, including Windows MSI/NSIS
+and Linux package smoke. PR #35 remains
 OPEN/DRAFT and unmerged. Native Tauri/runtime, live external-runtime, Docker,
 signing/Defender, independent security/publication, and owner merge gates are
 tracked separately in PR #42 and remain open. The tracked QA MSI revision
