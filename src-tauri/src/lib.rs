@@ -6,6 +6,7 @@ pub mod hardware;
 pub mod model_library;
 pub mod official_packs;
 pub mod ollama;
+pub mod openai_compatible;
 pub mod orchestration;
 pub mod protocol;
 pub mod runtime;
@@ -34,6 +35,9 @@ pub fn run() -> tauri::Result<()> {
             commands::save_arena_summary,
             commands::list_arena_summaries,
             commands::get_arena_summary,
+            commands::save_roadmap_record,
+            commands::list_roadmap_records,
+            commands::get_roadmap_record,
             commands::save_calibration_benchmark,
             commands::list_calibration_benchmarks,
             commands::get_calibration_benchmark,
