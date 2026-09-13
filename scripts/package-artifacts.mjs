@@ -10,7 +10,7 @@ export const CHECKSUM_MANIFEST_NAME = "checksums-sha256.txt";
 export const PACKAGE_ARTIFACT_SPECS = Object.freeze({
   windows: Object.freeze([
     Object.freeze({ kind: "nsis", bundleDirectory: "nsis", extension: "exe", required: true, suffix: "-setup.exe" }),
-    Object.freeze({ kind: "msi", bundleDirectory: "msi", extension: "msi", required: false, suffix: ".msi" }),
+    Object.freeze({ kind: "msi", bundleDirectory: "msi", extension: "msi", required: true, suffix: ".msi" }),
   ]),
   linux: Object.freeze([
     Object.freeze({ kind: "deb", bundleDirectory: "deb", extension: "deb", required: true, suffix: ".deb" }),
@@ -40,6 +40,7 @@ export function packageArtifactName(platform, version, kind) {
   const normalizedVersion = normalizePackageVersion(version);
   const spec = PACKAGE_ARTIFACT_SPECS[normalizedPlatform].find((candidate) => candidate.kind === kind);
   if (!spec) throw new Error(`unsupported ${normalizedPlatform} package kind: ${String(kind)}`);
+  if (normalizedPlatform === "windows" && kind === "msi") return `Prompt-Arena-${normalizedVersion}-windows-x64.msi`;
   return `prompt-arena-${normalizedVersion}-${normalizedPlatform}-${spec.kind}.${spec.extension}`;
 }
 
@@ -143,14 +144,21 @@ function bundleCandidates(bundleRoot, spec) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function selectBundleArtifact(bundleRoot, spec) {
+function selectBundleArtifact(bundleRoot, spec, version) {
   const candidates = bundleCandidates(bundleRoot, spec);
-  if (candidates.length > 1) throw new Error(`multiple ${spec.kind} bundle artifacts found: ${candidates.join(", ")}`);
+  const versionMarker = `_${version}_`;
+  const currentCandidates = candidates.filter((candidate) => path.basename(candidate).includes(versionMarker));
+  if (currentCandidates.length > 1) throw new Error(`multiple current ${spec.kind} bundle artifacts found: ${currentCandidates.join(", ")}`);
+  if (currentCandidates.length === 1) return currentCandidates[0];
+  if (candidates.length > 0) {
+    if (!spec.required) return null;
+    throw new Error(`required current ${spec.kind} bundle artifact was not produced for ${version}; stale candidates remain: ${candidates.join(", ")}`);
+  }
   if (candidates.length === 0) {
     if (spec.required) throw new Error(`required ${spec.kind} bundle artifact was not produced`);
     return null;
   }
-  return candidates[0];
+  return null;
 }
 
 function removeExpectedOutput(target) {
@@ -169,7 +177,7 @@ export function preparePackageArtifacts(options = {}) {
   const manifestPath = path.resolve(options.manifestPath ?? path.join(repositoryRoot, CHECKSUM_MANIFEST_NAME));
   const selections = PACKAGE_ARTIFACT_SPECS[platform].map((spec) => ({
     spec,
-    source: selectBundleArtifact(bundleRoot, spec),
+    source: selectBundleArtifact(bundleRoot, spec, version),
     name: packageArtifactName(platform, version, spec.kind),
   }));
 
@@ -237,3 +245,4 @@ if (isMainModule()) {
     process.exitCode = 1;
   }
 }
+
