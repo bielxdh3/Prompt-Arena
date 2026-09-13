@@ -227,7 +227,14 @@ import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
 import { RoadmapFeaturesView } from "./roadmap-features-view";
 import { AccessibleListbox } from "./accessible-listbox";
-import { I18nProvider, translate, useI18n } from "./i18n";
+import {
+  formatLocaleDate,
+  formatLocaleNumber,
+  formatLocalePercent,
+  I18nProvider,
+  translate,
+  useI18n,
+} from "./i18n";
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "insights" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -517,7 +524,7 @@ function Overview({
   const count = (items: readonly unknown[] | undefined) => {
     if (state.status === "preview") return translate("Preview");
     if (state.status !== "ready" || !items) return state.status === "loading" ? "…" : "—";
-    return items.length.toLocaleString();
+    return formatLocaleNumber(items.length);
   };
   const data = state.status === "ready" ? state.data : null;
   const recentSummaries = data ? [...data.summaries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 3) : [];
@@ -601,7 +608,7 @@ function Overview({
               <div className="dashboard-activity-row" key={summary.arenaId}>
                 <div>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} {translate("samples")} · {translate("saved")} {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)} {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
                 </div>
                 <span>{summary.summary.completed === undefined ? translate("Completed not recorded") : `${String(summary.summary.completed)} ${translate("completed")}`}</span>
               </div>
@@ -1024,7 +1031,7 @@ function BenchmarksView() {
                 <article className="benchmark-record-row version-row" key={version.versionId}>
                   <span>
                     <strong>{version.versionId}</strong>
-                    <small>{version.contentHash.slice(0, 12)}… · saved {version.createdAt}</small>
+                    <small>{version.contentHash.slice(0, 12)}… · {translate("saved")} {formatDisplayTimestamp(version.createdAt)}</small>
                   </span>
                   <span className="run-status">immutable</span>
                 </article>
@@ -2048,20 +2055,28 @@ function HardwareMetricRow<T>({
   format,
   value,
   detail,
+  showDetail = true,
 }: {
   label: string;
   metric?: HardwareMetric<T>;
   format?: (value: T) => string;
   value?: string;
   detail?: string;
+  showDetail?: boolean;
 }) {
   const metricValue = metric && metric.status === "available" && metric.value !== null && format
     ? format(metric.value)
-    : value ?? "Unavailable";
-  const metricDetail = detail ?? (metric ? `${metric.source} · confidence ${metric.confidence}` : "Not detected");
+    : value ?? translate("Unavailable");
+  const metricDetail = !showDetail
+    ? translate(metricValue === translate("Unavailable") ? "Not detected" : "Local measurement")
+    : detail
+      ? translate(detail)
+      : metric
+        ? `${translate(hardwareSourceLabel(metric.source))} · ${translate("confidence")} ${translate(hardwareConfidenceLabel(metric.confidence))}`
+        : translate("Not detected");
   return (
     <div className="hardware-metric">
-      <span>{label}</span>
+      <span>{translate(label)}</span>
       <strong>{metricValue}</strong>
       <small>{metricDetail}</small>
     </div>
@@ -2069,7 +2084,7 @@ function HardwareMetricRow<T>({
 }
 
 function formatHardwareCount(value: number): string {
-  return `${value} logical processor${value === 1 ? "" : "s"}`;
+  return `${formatLocaleNumber(value)} ${translate(value === 1 ? "logical processor" : "logical processors")}`;
 }
 
 function formatHardwareBytes(value: number): string {
@@ -2077,28 +2092,51 @@ function formatHardwareBytes(value: number): string {
 }
 
 function formatArenaMetric(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? "Not recorded" : value.toFixed(2);
+  return value === null || !Number.isFinite(value)
+    ? translate("Not recorded")
+    : formatLocaleNumber(value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function summaryNumberText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? formatLocaleNumber(value) : translate("Not recorded");
 }
 
 function summaryPercentText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? formatLocalePercent(value) : translate("Not recorded");
 }
 
 function summaryMetricText(summary: Record<string, unknown>, key: string): string {
   const value = summary[key];
-  return typeof value === "number" && Number.isFinite(value) ? formatArenaMetric(value) : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? formatArenaMetric(value) : translate("Not recorded");
 }
 
 function formatModelSize(sizeBytes: number | null): string {
-  if (sizeBytes === null) return "size unavailable";
-  if (sizeBytes < 1024 ** 3) return `${Math.round(sizeBytes / 1024 ** 2)} MB`;
-  return `${(sizeBytes / 1024 ** 3).toFixed(1)} GB`;
+  if (sizeBytes === null) return translate("size unavailable");
+  if (sizeBytes < 1024 ** 3) return `${formatLocaleNumber(Math.round(sizeBytes / 1024 ** 2))} MB`;
+  return `${formatLocaleNumber(sizeBytes / 1024 ** 3, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GB`;
+}
+
+function hardwareSourceLabel(source: HardwareSnapshot["logicalCpuCount"]["source"]): string {
+  if (source === "windows_kernel32") return "Windows system API";
+  if (source === "windows_dxgi") return "Windows graphics API";
+  if (source === "linux_procfs") return "Linux system files";
+  if (source === "not_detected") return "Not detected";
+  return "Standard library";
+}
+
+function hardwareConfidenceLabel(confidence: HardwareSnapshot["logicalCpuCount"]["confidence"]): string {
+  if (confidence === "high") return "High";
+  if (confidence === "medium") return "Medium";
+  if (confidence === "low") return "Low";
+  return "Unavailable";
+}
+
+function formatDisplayTimestamp(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T/iu.test(value)) return value;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? formatLocaleDate(timestamp) : value;
 }
 
 type ArenaRecordsState =
@@ -3427,12 +3465,12 @@ function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] })
                 key={summary.arenaId}
                 type="button"
                 aria-pressed={selectedArenaId === summary.arenaId}
-                aria-label={`${summary.arenaId}, ${summary.evidence.length} persisted samples, saved ${summary.createdAt}`}
+                aria-label={`${summary.arenaId}, ${formatLocaleNumber(summary.evidence.length)} ${translate("persisted samples")}, ${translate("saved")} ${formatDisplayTimestamp(summary.createdAt)}`}
                 onClick={() => void selectSummary(summary.arenaId)}
               >
                 <span>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)} {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
                 </span>
                 <span aria-hidden="true">→</span>
               </button>
@@ -3512,7 +3550,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       <div className="results-facts">
         <BoundaryRow label="Arena" value={record.arenaId} />
         <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
-        <BoundaryRow label="Saved" value={record.createdAt} />
+        <BoundaryRow label="Saved" value={formatDisplayTimestamp(record.createdAt)} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
         <BoundaryRow label="Samples" value={String(record.evidence.length)} />
         <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
