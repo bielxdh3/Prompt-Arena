@@ -29,6 +29,7 @@ import { compareHistoricalRuns, type HistoricalRegression } from "./historical-r
 import { computeEloRatings, ratingOutcomesFromArenaSummaries, type RatingSet } from "./model-ratings";
 import { generatePerturbations, scoreRobustness, type PerturbationType } from "./robustness-arena";
 import { exportReproBundle, importReproBundle } from "./repro-bundle";
+import { AccessibleListbox } from "./accessible-listbox";
 
 type SurfaceState =
   | { status: "loading" }
@@ -416,7 +417,7 @@ export function RoadmapFeaturesView() {
 }
 
 function FieldSelect({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
-  return <label className="arena-select-control" htmlFor={id}><span className="field-label">{label}</span><select className="font-select" id={id} value={value} onChange={(event) => onChange(event.currentTarget.value)}><option value="">Select…</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder="Select…" onChange={onChange} />;
 }
 
 function EvidenceSummary({ payload }: { payload: SingleModelBenchmarkPayload }) {
