@@ -26,10 +26,14 @@ label correction is commit `4e471224d51bddef7f9d511f4dcce6df62f6a2ee`
 baseline. Documentation and checksum commits after this corrected target may
 advance the checkout HEAD; they do not change the corrected implementation.
 Overall native status:
-`PENDING_HUMAN_QA`. No installed visual session, browser/component harness, or
-full Tauri Arena session was available for this review. A loopback Ollama
-endpoint was available for bounded worker-only smoke; automated tests and
-worker/runtime evidence are not human UI evidence.
+`PENDING_HUMAN_QA`. A browser-preview render review was completed at the
+follow-up checkout: all primary navigation headings rendered, Settings exposed
+the accessibility/motion controls, English ↔ `Português (Brasil)` switched
+cleanly, the 768 px viewport had no document horizontal overflow, and no
+console errors were reported. This is browser-preview evidence only; no
+installed visual session or full Tauri Arena session was available. A loopback
+Ollama endpoint was available for bounded worker-only smoke; automated tests
+and worker/runtime evidence are not human UI evidence.
 
 Status rules: `PASS` is limited to implementation/automated evidence;
 `PENDING` means the native or human gate remains; `BLOCKED` means the required
