@@ -6,6 +6,7 @@ pub mod hardware;
 pub mod model_library;
 pub mod official_packs;
 pub mod ollama;
+pub mod openai_compatible;
 pub mod orchestration;
 pub mod protocol;
 pub mod runtime;
@@ -73,3 +74,4 @@ pub fn run() -> tauri::Result<()> {
         ])
         .run(tauri::generate_context!())
 }
+
