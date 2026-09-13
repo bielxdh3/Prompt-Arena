@@ -38,7 +38,6 @@ export type ArenaPreview = {
   taskId: string;
   caseId: string;
   profileRevisionId: string;
-  runtime: ProfileRevision["runtime"];
   model: string;
   prompt: string;
   systemPrompt: string | null;
@@ -170,7 +169,6 @@ export function arenaPreviewFromPlan(plan: RunPlan, taskId: string): ArenaPrevie
     taskId,
     caseId: plan.caseId,
     profileRevisionId: plan.profileRevision.profileRevisionId,
-    runtime: plan.profileRevision.runtime,
     model: plan.generation.model,
     prompt: plan.generation.prompt,
     systemPrompt: plan.generation.systemPrompt,
