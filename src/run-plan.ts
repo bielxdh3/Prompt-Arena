@@ -7,8 +7,10 @@ import type {
   RunPlan,
 } from "./bridge";
 import { normalizeObjectivePolicy, type ObjectiveVerifierPolicy } from "./objective-verifiers";
+import { validateLoopbackEndpoint } from "./model-library";
 
 const DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434";
+const LOCAL_PROFILE_RUNTIMES = new Set(["ollama", "lm_studio", "llama_cpp"]);
 const MAX_RUN_PLAN_BYTES = 256 * 1024;
 const MAX_PUBLISHED_DOCUMENT_BYTES = 1_048_576;
 const MAX_PROFILE_REQUEST_BYTES = 256 * 1024;
@@ -35,6 +37,8 @@ export type BuildRunPlanInput = {
   taskId: string;
   caseId: string;
   profileRevision: ProfileRevision;
+  /** Optional deterministic prompt variant used by the Robustness Arena. */
+  promptOverride?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -117,7 +121,9 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   const executionBoundary = executionBoundaryValue(documentRecord, task, benchmarkCase);
 
   const profile = normalizeProfile(input.profileRevision);
-  const prompt = combinePrompts([taskPrompt, casePrompt]);
+  const prompt = input.promptOverride === undefined
+    ? combinePrompts([taskPrompt, casePrompt])
+    : requiredPrompt(input.promptOverride, "Prompt override");
   const systemPrompt = combineOptionalPrompts([profile.systemPrompt, taskSystemPrompt]);
   const plan: RunPlan = {
     runId,
@@ -137,7 +143,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
       responseFormat: "Text",
       metadata: {},
     },
-    runtimeConfig: defaultOllamaConfig(),
+    runtimeConfig: runtimeConfig(profile),
     objectiveExpectation,
     verifierPolicy,
     executionBoundary,
@@ -158,6 +164,23 @@ function defaultOllamaConfig(): OllamaConfig {
   };
 }
 
+function runtimeConfig(profile: ProfileRevision): OllamaConfig {
+  const configuredEndpoint = profile.endpoint;
+  if (configuredEndpoint !== undefined && configuredEndpoint !== null) {
+    if (typeof configuredEndpoint !== "string") {
+      throw new Error("Profile endpoint must be a loopback URL.");
+    }
+    return {
+      ...defaultOllamaConfig(),
+      endpoint: validateLoopbackEndpoint(configuredEndpoint),
+    };
+  }
+  if (profile.runtime !== "ollama") {
+    throw new Error("The selected local runtime requires a loopback profile endpoint.");
+  }
+  return defaultOllamaConfig();
+}
+
 function normalizeProfile(value: unknown): ProfileRevision {
   const profile = record(value, "Profile revision");
   const profileId = identifier(profile.profileId, "Profile ID", MAX_PROFILE_ID_BYTES);
@@ -167,7 +190,7 @@ function normalizeProfile(value: unknown): ProfileRevision {
     throw new Error("Profile revision identity is invalid.");
   }
   const model = text(profile.model, "Profile model", MAX_MODEL_BYTES);
-  if (profile.runtime !== "ollama") {
+  if (typeof profile.runtime !== "string" || !LOCAL_PROFILE_RUNTIMES.has(profile.runtime)) {
     throw new Error("Profile runtime is unsupported by the local execution boundary.");
   }
   const parameters = boundedJsonRecord(profile.parameters, "Profile parameters", MAX_PROFILE_REQUEST_BYTES);
@@ -185,7 +208,7 @@ function normalizeProfile(value: unknown): ProfileRevision {
     profileRevisionId,
     revision,
     model,
-    runtime: "ollama",
+    runtime: profile.runtime,
     parameters,
     systemPrompt,
   };
