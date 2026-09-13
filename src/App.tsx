@@ -102,6 +102,8 @@ import {
   formatByteCount,
   formatCount,
   formatDurationNs,
+  buildLegacyBlindEvaluationLockRequest,
+  reconcileLegacyBlindEvaluationRetry,
   objectiveVerificationEvidence,
 } from "./results-ui";
 import { assessRunComparability } from "./comparability";
@@ -129,11 +131,19 @@ import {
   arenaSummaryExportMarkdown,
   buildArenaSummaryPayload,
   buildBlindArenaCards,
+  arenaMonitorDisplay,
+  applyArenaProgress,
+  createArenaTelemetry,
   executeArena,
   groupArenaExecutions,
   rankArenaCompetitors,
+  refreshArenaTelemetry,
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
+  visibleArenaTelemetryError,
+  visibleArenaTelemetryMetrics,
+  arenaTelemetryLabel,
+  type ArenaTelemetry,
   type ArenaExecution,
   type ArenaProgress,
 } from "./arena-runner";
@@ -212,8 +222,9 @@ import {
 } from "./model-library";
 import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
+import { RoadmapFeaturesView } from "./roadmap-features-view";
 
-type ViewId = "overview" | "arena" | "advanced-arena" | "benchmarks" | "models" | "runs" | "settings";
+type ViewId = "overview" | "arena" | "advanced-arena" | "insights" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
   | { status: "loading" }
   | { status: "ready"; appStatus: AppStatus }
@@ -223,6 +234,7 @@ const NAV_ITEMS: readonly { id: ViewId; label: string; description: string }[] =
   { id: "overview", label: "Overview", description: "Workspace status" },
   { id: "arena", label: "Arena", description: "Compare model revisions" },
   { id: "advanced-arena", label: "Advanced Arena", description: "Rank saved evidence" },
+  { id: "insights", label: "Insights", description: "Single-model evidence" },
   { id: "benchmarks", label: "Benchmarks", description: "Versions and drafts" },
   { id: "models", label: "Models", description: "Profiles and local models" },
   { id: "runs", label: "Runs", description: "Execution history" },
@@ -360,6 +372,7 @@ function App() {
           {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
           {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
           {activeView === "advanced-arena" && <AdvancedArenaView />}
+          {activeView === "insights" && <RoadmapFeaturesView />}
           {activeView === "benchmarks" && <BenchmarksView />}
           {activeView === "models" && <ModelsView />}
           {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
@@ -2429,7 +2442,7 @@ function LegacyArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
 
 type ArenaSessionState =
   | { status: "idle" }
-  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress }
+  | { status: "busy"; request: ArenaExecutionRequest; progress: ArenaProgress; telemetry: ArenaTelemetry }
   | { status: "error"; message: string }
   | { status: "terminal"; request: ArenaExecutionRequest; results: ArenaExecution[] };
 
@@ -2459,6 +2472,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [repetitions, setRepetitions] = useState<number>(1);
+  const [blindExecution, setBlindExecution] = useState(false);
   const [session, setSession] = useState<ArenaSessionState>({ status: "idle" });
   const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
   const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
@@ -2557,7 +2571,17 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     setSummaryPersistence({ status: "idle" });
     setResponseState({ status: "idle" });
     cancelRequestedRef.current = false;
-  }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions]);
+  }, [selectedVersionId, selectedProfileRevisionIds.join("|"), selectedTaskId, selectedCaseId, repetitions, blindExecution]);
+
+  useEffect(() => {
+    if (session.status !== "busy") return;
+    const timer = window.setInterval(() => {
+      setSession((current) => current.status === "busy"
+        ? { ...current, telemetry: refreshArenaTelemetry(current.telemetry) }
+        : current);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [session.status]);
 
   const selectedProfiles = records.status === "ready"
     ? records.profiles.filter((profile) => selectedProfileRevisionIds.includes(profile.profileRevisionId))
@@ -2628,13 +2652,46 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       caseId: selectedCaseId,
       profiles: selectedProfiles,
       repetitions,
+      startedAtMs: Date.now(),
+      blind: blindExecution,
     };
     cancelRequestedRef.current = false;
     setResponseState({ status: "idle" });
-    setSession({ status: "busy", request, progress: { completed: 0, total: selectedProfiles.length * repetitions, currentCompetitor: "Queued", repetition: 1 } });
+    const initialTelemetry = createArenaTelemetry(request, request.startedAtMs);
+    setSession({
+      status: "busy",
+      request,
+      progress: {
+        completed: 0,
+        total: selectedProfiles.length * repetitions,
+        currentCompetitor: "Queued",
+        repetition: 1,
+        competitorOrdinal: 0,
+        sampleIndex: 0,
+        status: "queued",
+        timestampMs: request.startedAtMs,
+        sampleStartedAtMs: null,
+        sampleElapsedMs: null,
+        sampleDurationMs: null,
+        metrics: initialTelemetry.samples[0]?.metrics ?? {
+          loadDurationMs: null,
+          ttftMs: null,
+          generationDurationMs: null,
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          tokensPerSecond: null,
+          authoritative: false,
+        },
+        error: null,
+      },
+      telemetry: initialTelemetry,
+    });
     try {
       const results = await executeArena(request, executeRunOnce, (progress) => {
-        setSession((current) => current.status === "busy" ? { ...current, progress } : current);
+        setSession((current) => current.status === "busy"
+          ? { ...current, progress, telemetry: applyArenaProgress(current.telemetry, progress) }
+          : current);
       }, () => !cancelRequestedRef.current);
       setSummaryPersistence({ status: "saving" });
       try {
@@ -2692,6 +2749,10 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                   {ARENA_REPETITION_OPTIONS.map((value) => <option key={value} value={value}>{value} {value === 1 ? "sample" : "samples per competitor"}</option>)}
                 </select>
               </label>
+              <label className="arena-select-control arena-blind-toggle">
+                <span className="field-label">Evaluation visibility</span>
+                <span className="field-help"><input type="checkbox" checked={blindExecution} disabled={busy} onChange={(event) => setBlindExecution(event.currentTarget.checked)} /> Blind execution labels and metrics</span>
+              </label>
             </div>
             <fieldset className="arena-competitor-picker">
               <legend className="field-label">Competitors ({selectedProfiles.length}/{MAX_ARENA_COMPETITORS})</legend>
@@ -2730,7 +2791,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                 </div>
               </>
             )}
-            {busy && <div className="arena-execution-status"><StateMessage icon="…" title={summaryPersistence.status === "saving" ? "Saving Arena summary" : `Running ${session.progress.completed}/${session.progress.total}`} description={summaryPersistence.status === "saving" ? "Writing the repetition statistics and per-sample evidence to immutable local storage." : `${session.progress.currentCompetitor} · repetition ${session.progress.repetition}. Results are persisted per competitor; queued work can be cancelled.`} /></div>}
+            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} onCancel={() => { cancelRequestedRef.current = true; }} />}
             {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title="Arena could not start" description={session.message} error /></div>}
           </section>
         </div>
@@ -2739,6 +2800,82 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       {session.status === "terminal" && <ArenaResultsSurface request={session.request} results={session.results} responseState={responseState} summaryPersistence={summaryPersistence} onOpenRuns={onOpenRuns} />}
     </div>
   );
+}
+
+function ArenaExecutionMonitor({
+  telemetry,
+  blind,
+  saving,
+  onCancel,
+}: {
+  telemetry: ArenaTelemetry;
+  blind: boolean;
+  saving: boolean;
+  onCancel: () => void;
+}) {
+  const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
+    ?? [...telemetry.samples].reverse().find((sample) => sample.status !== "queued");
+  const competitors = [...new Map(telemetry.samples.map((sample) => [sample.competitorId, telemetry.samples.filter((candidate) => candidate.competitorId === sample.competitorId)])).values()];
+  const activeDisplay = arenaMonitorDisplay(telemetry, active?.sampleIndex ?? null, blind);
+  const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
+  return (
+    <div className="arena-execution-monitor" role="status" aria-live="polite">
+      <div className="section-heading compact-heading">
+        <div><p className="eyebrow">Live execution monitor</p><h4>{saving ? "Saving measured evidence" : "Arena is running"}</h4></div>
+        <span className="run-status run-status-neutral">{telemetry.completed}/{telemetry.total}</span>
+      </div>
+      <div className="arena-live-facts">
+        <BoundaryRow label="Arena state" value={saving ? "saving" : telemetry.state} />
+        <BoundaryRow label="Progress" value={`${telemetry.completed} / ${telemetry.total} samples`} />
+        <BoundaryRow label="Arena wall time" value={blind ? "Hidden during blind execution" : formatArenaMs(telemetry.wallElapsedMs)} />
+        <BoundaryRow label="ETA" value={blind ? "Hidden during blind execution" : telemetry.etaMs === null ? "Unavailable · needs 2 measured samples" : `~${formatArenaMs(telemetry.etaMs)}`} />
+      </div>
+      {active && (
+        <div className="arena-live-current">
+          <p className="eyebrow">Current sample</p>
+          <strong>{blind ? "" : `${arenaTelemetryLabel(active, false)} · `}Sample {activeDisplay.currentSampleNumber ?? active.sampleIndex + 1}/{activeDisplay.totalSamples}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · Repetition ${activeDisplay.repetitionNumber}/${activeDisplay.repetitionsPerCompetitor}` : ""}</strong>
+          <span>{active.status} · {blind ? "Elapsed hidden during blind execution" : formatArenaMs(active.elapsedMs)}</span>
+          {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
+        </div>
+      )}
+      <div className="arena-live-table" role="table" aria-label="Arena competitor execution status">
+        <div className="arena-live-header" role="row"><span role="columnheader">{blind ? "Competitor" : "Model"}</span><span role="columnheader">Status</span><span role="columnheader">Competitor progress</span><span role="columnheader">Arena wall time</span><span role="columnheader">Metrics</span></div>
+        {competitors.map((samples) => {
+          const first = samples[0];
+          const latest = [...samples].reverse().find((sample) => sample.status !== "queued") ?? first;
+          const rowDisplay = arenaMonitorDisplay(telemetry, first.sampleIndex, blind);
+          const metrics = visibleArenaTelemetryMetrics(latest.metrics, blind);
+          const latestError = visibleArenaTelemetryError(latest.error, blind);
+          return <div className="arena-live-row" role="row" key={first.competitorId}>
+            <strong role="cell">{arenaTelemetryLabel(first, blind)}</strong>
+            <span role="cell">{latest.status}</span>
+            <span role="cell">Completed {samples.filter((sample) => sample.status === "completed").length}/{samples.length} samples</span>
+            <span role="cell">{blind ? "Timing hidden" : `Competitor total ${formatArenaMs(rowDisplay.competitorElapsedMs)} · Arena total ${formatArenaMs(rowDisplay.arenaElapsedMs)}`}</span>
+            <span role="cell">{blind ? "Metrics hidden" : formatArenaMetrics(metrics)}</span>
+            {latestError && <em role="cell">{latestError}</em>}
+          </div>;
+        })}
+      </div>
+      {lastError && <p className="field-help" role="alert">Failure recorded: {lastError}</p>}
+      {telemetry.state === "cancelled" && <p className="field-help" role="status">Cancellation recorded. Queued samples were skipped; completed evidence was retained.</p>}
+      {telemetry.state === "failed" && <p className="field-help" role="alert">One or more samples failed. Other sequential competitors continued where possible.</p>}
+      <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total}>Cancel queued work</button></div>
+      <p className="field-help">Sample time is measured from Arena dispatch to terminal result. Generation metrics use authoritative runtime values; unsupported values show unavailable. Local execution remains sequential.</p>
+    </div>
+  );
+}
+
+function formatArenaMs(value: number | null): string {
+  return value === null || !Number.isFinite(value) ? "Unavailable" : formatDurationNs(value * 1_000_000);
+}
+
+function formatArenaMetrics(metrics: ReturnType<typeof visibleArenaTelemetryMetrics>): string {
+  const values = [
+    metrics.tokensPerSecond === null ? "tokens/s unavailable" : `${metrics.tokensPerSecond.toFixed(1)} tok/s`,
+    metrics.completionTokens === null ? "output unavailable" : `${metrics.completionTokens} output tokens`,
+    metrics.ttftMs === null ? "TTFT unavailable" : `TTFT ${formatArenaMs(metrics.ttftMs)}`,
+  ];
+  return values.join(" · ");
 }
 
 function ArenaResultsSurface({
@@ -2754,7 +2891,7 @@ function ArenaResultsSurface({
   summaryPersistence: ArenaSummaryPersistenceState;
   onOpenRuns: () => void;
 }) {
-  const [blind, setBlind] = useState(false);
+  const [blind, setBlind] = useState(request.blind === true);
   const [revealed, setRevealed] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>({});
   const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
@@ -2767,8 +2904,11 @@ function ArenaResultsSurface({
   const cards = buildBlindArenaCards(results, responseMap);
   const grouped = groupArenaExecutions(results);
   const competitorSummaries = summarizeArenaCompetitors(results);
+  const blindExecutionLocked = request.blind === true && !revealed;
+  const showBlindEvaluation = !revealed && (blind || request.blind === true);
+  const showMeasuredResults = !blindExecutionLocked;
   const ranking = lockState === "locked"
-    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.token] ?? 3] as const)))
+    ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.executionKey] ?? 3] as const)))
     : [];
 
   async function lockEvaluation() {
@@ -2777,16 +2917,15 @@ function ArenaResultsSurface({
     setLockMessage(null);
     try {
       for (const card of cards) {
-        const [runId] = card.executionKey.split(":");
+        const separator = card.executionKey.indexOf(":");
+        const runId = separator > 0 ? card.executionKey.slice(0, separator) : "";
         const preparation = await prepareBlindEvaluation(runId);
-        const prepared = preparation.responses.find((response) => response.text === card.text) ?? preparation.responses[0];
-        if (!prepared) continue;
-        await lockBlindEvaluation({
-          evaluationId: preparation.evaluationId,
-          runId,
-          scores: [{ token: prepared.token, overallScore: scores[card.token] ?? 3, criterionScores: {} }],
-          ranking: [[prepared.token]],
-        });
+        const selectedScore = scores[card.executionKey] ?? 3;
+        if (preparation.status === "locked") {
+          reconcileLegacyBlindEvaluationRetry(runId, card.executionKey, preparation.evaluationId, selectedScore, await readBlindEvaluation(runId));
+          continue;
+        }
+        await lockBlindEvaluation(buildLegacyBlindEvaluationLockRequest(runId, card.executionKey, preparation, selectedScore));
       }
       setLockState("locked");
       setRevealed(true);
@@ -2808,10 +2947,10 @@ function ArenaResultsSurface({
 
   return (
     <section className="panel arena-results-panel" aria-live="polite">
-      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{summary.completed}/{summary.total} samples completed</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
-      <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>
+      <div className="section-heading compact-heading"><div><p className="eyebrow">Arena results</p><h3>{showMeasuredResults ? `${summary.completed}/${summary.total} samples completed` : "Blind results locked until reveal"}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? "Saved" : "Summary unavailable"}</span></div>
+      {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={`${summary.failed} failed · ${summary.cancelled} cancelled`} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `Median ${summary.medianDurationMs.toFixed(0)} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>}
       {summaryPersistence.status === "error" && <StateMessage icon="!" title="Aggregate summary unavailable" description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
-      {summaryPersistence.status === "saved" && (
+      {showMeasuredResults && summaryPersistence.status === "saved" && (
         <div className="results-section">
           <p className="eyebrow">Immutable Arena summary</p>
           <div className="results-facts">
@@ -2827,12 +2966,12 @@ function ArenaResultsSurface({
       )}
       {responseState.status === "loading" && <StateMessage icon="…" title="Reading verified response artifacts" description="Response text is loaded only from app-owned, hash-verified artifacts." />}
       {responseState.status === "error" && <StateMessage icon="!" title="Some responses are unavailable" description={responseState.message} error />}
-      {blind && !revealed ? (
+      {showBlindEvaluation ? (
         <div className="blind-arena-surface">
           <div className="section-heading compact-heading"><div><p className="eyebrow">Blind evaluation</p><h4>Score anonymous responses before reveal</h4></div><span className="run-status run-status-neutral">Locked until submit</span></div>
           <p className="field-help">Model, provider, runtime, timing, tokens, objective status, and rank are hidden until the evaluation lock is saved.</p>
-          {cards.length === 0 ? <EmptyState title="No completed responses" description="Only completed, verified responses can enter blind review." /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><label className="field-label" htmlFor={`score-${card.token}`}>Overall score (1–5)<select className="font-select" id={`score-${card.token}`} value={scores[card.token] ?? 3} onChange={(event) => setScores((current) => ({ ...current, [card.token]: Number(event.currentTarget.value) }))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></article>)}</div>}
-          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? "Saving evaluation…" : "Lock scores and reveal"}</button><button className="text-button" type="button" onClick={() => setBlind(false)}>Back to comparison</button></div>
+          {cards.length === 0 ? <EmptyState title="No completed responses" description="Only completed, verified responses can enter blind review." /> : <div className="blind-card-grid">{cards.map((card) => <article className="blind-response-card" key={card.token}><p className="eyebrow">{card.label}</p><pre className="arena-response-text">{card.text}</pre><label className="field-label" htmlFor={`score-${card.token}`}>Overall score (1–5)<select className="font-select" id={`score-${card.token}`} value={scores[card.executionKey] ?? 3} onChange={(event) => setScores((current) => ({ ...current, [card.executionKey]: Number(event.currentTarget.value) }))}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></article>)}</div>}
+          <div className="arena-actions"><button className="primary-button" type="button" disabled={lockState === "busy" || cards.length === 0} onClick={() => void lockEvaluation()}>{lockState === "busy" ? "Saving evaluation…" : "Lock scores and reveal"}</button>{request.blind !== true && <button className="text-button" type="button" onClick={() => setBlind(false)}>Back to comparison</button>}</div>
           {lockMessage && <p className="field-help" role="alert">{lockMessage}</p>}
         </div>
       ) : (
