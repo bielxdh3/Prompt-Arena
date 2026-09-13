@@ -227,7 +227,7 @@ import { FONT_OPTIONS } from "./font-options";
 import { AdvancedArenaView } from "./advanced-arena-view";
 import { RoadmapFeaturesView } from "./roadmap-features-view";
 import { AccessibleListbox } from "./accessible-listbox";
-import { I18nProvider, useI18n } from "./i18n";
+import { I18nProvider, translate, useI18n } from "./i18n";
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "insights" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -260,6 +260,8 @@ function App() {
 }
 
 function AppShell() {
+  const { locale } = useI18n();
+  void locale;
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
@@ -317,21 +319,21 @@ function AppShell() {
       style={{ "--motion-scale": appearance.motionScale / 100 } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">
-        Skip to content
+        {translate("Skip to content")}
       </a>
-      <aside className="sidebar" aria-label="Prompt Arena navigation">
+      <aside className="sidebar" aria-label={translate("Prompt Arena navigation")}>
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             PA
           </div>
           <div>
-            <p className="eyebrow">Local workspace</p>
-            <p className="brand-name">Prompt Arena</p>
+            <p className="eyebrow">{translate("Local workspace")}</p>
+            <p className="brand-name">{translate("Prompt Arena")}</p>
           </div>
         </div>
 
-        <nav className="primary-nav" aria-label="Primary">
-          <p className="nav-heading">Workspace</p>
+        <nav className="primary-nav" aria-label={translate("Primary")}>
+          <p className="nav-heading">{translate("Workspace")}</p>
           {NAV_ITEMS.map((item) => (
             <button
               className={`nav-item ${activeView === item.id ? "is-active" : ""}`}
@@ -340,8 +342,8 @@ function AppShell() {
               aria-current={activeView === item.id ? "page" : undefined}
               onClick={() => setActiveView(item.id)}
             >
-              <span className="nav-item-label">{item.label}</span>
-              <span className="nav-item-description">{item.description}</span>
+              <span className="nav-item-label">{translate(item.label)}</span>
+              <span className="nav-item-description">{translate(item.description)}</span>
             </button>
           ))}
         </nav>
@@ -349,8 +351,8 @@ function AppShell() {
         <div className="sidebar-footer">
           <span className="status-dot" aria-hidden="true" />
           <div>
-            <p className="sidebar-footer-label">Workspace</p>
-            <p className="sidebar-footer-value">Local-first by default</p>
+            <p className="sidebar-footer-label">{translate("Workspace")}</p>
+            <p className="sidebar-footer-value">{translate("Local-first by default")}</p>
           </div>
         </div>
       </aside>
@@ -358,8 +360,8 @@ function AppShell() {
       <div className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Prompt Arena / {activeView}</p>
-            <h1>{NAV_ITEMS.find((item) => item.id === activeView)?.label}</h1>
+            <p className="eyebrow">{translate("Prompt Arena")} / {translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</p>
+            <h1>{translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</h1>
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
@@ -373,8 +375,8 @@ function AppShell() {
               !
             </span>
             <div>
-              <strong>Desktop bridge unavailable</strong>
-              <p>{connection.message} The content below remains an honest local preview.</p>
+              <strong>{translate("Desktop bridge unavailable")}</strong>
+              <p>{translate(connection.message)} {translate("The content below remains an honest local preview.")}</p>
             </div>
           </div>
         )}
@@ -404,14 +406,14 @@ function AppShell() {
 
 function ConnectionBadge({ connection }: { connection: ConnectionState }) {
   if (connection.status === "loading") {
-    return <span className="status-chip is-loading">Connecting locally…</span>;
+    return <span className="status-chip is-loading">{translate("Connecting locally…")}</span>;
   }
 
   if (connection.status === "error") {
-    return <span className="status-chip is-error">Preview mode</span>;
+    return <span className="status-chip is-error">{translate("Preview mode")}</span>;
   }
 
-  return <span className="status-chip is-ready">Local app ready</span>;
+  return <span className="status-chip is-ready">{translate("Local app ready")}</span>;
 }
 
 type OverviewData = {
@@ -468,7 +470,7 @@ function Overview({
   }, []);
 
   const count = (items: readonly unknown[] | undefined) => {
-    if (state.status === "preview") return "Preview";
+    if (state.status === "preview") return translate("Preview");
     if (state.status !== "ready" || !items) return state.status === "loading" ? "…" : "—";
     return items.length.toLocaleString();
   };
@@ -479,14 +481,13 @@ function Overview({
     <div className="view-stack">
       <section className="hero-panel panel">
         <div className="hero-copy">
-          <p className="eyebrow">Your local comparison workspace</p>
-          <h2>Compare models with evidence, not noise.</h2>
+          <p className="eyebrow">{translate("Your local comparison workspace")}</p>
+          <h2>{translate("Compare models with evidence, not noise.")}</h2>
           <p>
-            Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record
-            on this machine. The overview below reflects only data returned by the local desktop boundary.
+            {translate("Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record on this machine. The overview below reflects only data returned by the local desktop boundary.")}
           </p>
           <button className="primary-button" type="button" onClick={() => onNavigate("arena")}>
-            Open Arena
+            {translate("Open Arena")}
             <span aria-hidden="true">→</span>
           </button>
         </div>
@@ -499,39 +500,39 @@ function Overview({
 
       {state.status === "loading" && (
         <section className="panel dashboard-state" aria-live="polite">
-          <StateMessage icon="…" title="Loading your workspace" description="Reading runs, Arena summaries, profile revisions, and local model inventory." />
+          <StateMessage icon="…" title={translate("Loading your workspace")} description={translate("Reading runs, Arena summaries, profile revisions, and local model inventory.")} />
         </section>
       )}
       {state.status === "preview" && (
         <section className="panel dashboard-state" aria-live="polite">
-          <StateMessage icon="◇" title="Browser preview" description="The browser preview does not read desktop records or invent counts. Open the desktop app to see local workspace data." />
+          <StateMessage icon="◇" title={translate("Browser preview")} description={translate("The browser preview does not read desktop records or invent counts. Open the desktop app to see local workspace data.")} />
         </section>
       )}
       {state.status === "error" && (
         <section className="panel dashboard-state" aria-live="polite">
-          <StateMessage icon="!" title="Workspace data unavailable" description={state.message} error />
+          <StateMessage icon="!" title={translate("Workspace data unavailable")} description={translate(state.message)} error />
         </section>
       )}
 
-      <section className="metric-grid dashboard-metrics" aria-label="Local workspace records">
-        <MetricCard label="Saved runs" value={count(data?.runs)} detail="Immutable execution history" />
-        <MetricCard label="Arena summaries" value={count(data?.summaries)} detail="Persisted aggregate evidence" />
-        <MetricCard label="Model revisions" value={count(data?.profiles)} detail="Registered local profiles" />
-        <MetricCard label="Local models" value={count(data?.models)} detail="Ollama inventory" />
+      <section className="metric-grid dashboard-metrics" aria-label={translate("Local workspace records")}>
+        <MetricCard label={translate("Saved runs")} value={count(data?.runs)} detail={translate("Immutable execution history")} />
+        <MetricCard label={translate("Arena summaries")} value={count(data?.summaries)} detail={translate("Persisted aggregate evidence")} />
+        <MetricCard label={translate("Model revisions")} value={count(data?.profiles)} detail={translate("Registered local profiles")} />
+        <MetricCard label={translate("Local models")} value={count(data?.models)} detail={translate("Ollama inventory")} />
       </section>
 
       <section className="panel dashboard-panel" aria-labelledby="overview-actions-heading">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Workspace</p>
-            <h2 id="overview-actions-heading">Choose where to work next.</h2>
+            <p className="eyebrow">{translate("Workspace")}</p>
+            <h2 id="overview-actions-heading">{translate("Choose where to work next.")}</h2>
           </div>
           <span className="section-index">01</span>
         </div>
-        <nav className="overview-nav" aria-label="Overview shortcuts">
+        <nav className="overview-nav" aria-label={translate("Overview shortcuts")}>
           {OVERVIEW_LINKS.map((link) => (
             <button className="dashboard-link" key={link.id} type="button" onClick={() => onNavigate(link.id)}>
-              <span><strong>{link.label}</strong><small>{link.description}</small></span>
+              <span><strong>{translate(link.label)}</strong><small>{translate(link.description)}</small></span>
               <span aria-hidden="true">→</span>
             </button>
           ))}
@@ -541,13 +542,13 @@ function Overview({
       <section className="panel dashboard-panel" aria-labelledby="recent-evidence-heading">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Persisted evidence</p>
-            <h2 id="recent-evidence-heading">Recent Arena summaries.</h2>
+            <p className="eyebrow">{translate("Persisted evidence")}</p>
+            <h2 id="recent-evidence-heading">{translate("Recent Arena summaries.")}</h2>
           </div>
-          <button className="text-button" type="button" onClick={() => onNavigate("runs")}>Open Runs <span aria-hidden="true">→</span></button>
+          <button className="text-button" type="button" onClick={() => onNavigate("runs")}>{translate("Open Runs")} <span aria-hidden="true">→</span></button>
         </div>
         {state.status === "ready" && recentSummaries.length === 0 && (
-          <EmptyState title="No saved Arena summaries" description="Complete an Arena in the desktop app to see its aggregate evidence here. No sample records are bundled." actionLabel="Open Arena" onAction={() => onNavigate("arena")} />
+          <EmptyState title={translate("No saved Arena summaries")} description={translate("Complete an Arena in the desktop app to see its aggregate evidence here. No sample records are bundled.")} actionLabel={translate("Open Arena")} onAction={() => onNavigate("arena")} />
         )}
         {state.status === "ready" && recentSummaries.length > 0 && (
           <div className="dashboard-activity-list">
@@ -555,15 +556,15 @@ function Overview({
               <div className="dashboard-activity-row" key={summary.arenaId}>
                 <div>
                   <strong>{summary.arenaId}</strong>
-                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} samples · saved {summary.createdAt}</small>
+                  <small>{summary.benchmarkVersionId} · {summary.evidence.length} {translate("samples")} · {translate("saved")} {summary.createdAt}</small>
                 </div>
-                <span>{summary.summary.completed === undefined ? "Completed not recorded" : `${String(summary.summary.completed)} completed`}</span>
+                <span>{summary.summary.completed === undefined ? translate("Completed not recorded") : `${String(summary.summary.completed)} ${translate("completed")}`}</span>
               </div>
             ))}
           </div>
         )}
         {(state.status === "loading" || state.status === "preview" || state.status === "error") && (
-          <p className="field-help">Recent evidence will appear when the local workspace state is available.</p>
+          <p className="field-help">{translate("Recent evidence will appear when the local workspace state is available.")}</p>
         )}
       </section>
 
@@ -592,54 +593,53 @@ function DiagnosticsSurface({
   compact?: boolean;
 }) {
   const bridgeValue = connection.status === "loading"
-    ? "Checking desktop bridge"
+    ? translate("Checking desktop bridge")
     : connection.status === "ready"
-      ? "Connected"
-      : "Unavailable";
+      ? translate("Connected")
+      : translate("Unavailable");
   const storageValue = connection.status === "ready"
-    ? "App-owned local storage"
+    ? translate("App-owned local storage")
     : desktop
-      ? "Unavailable until bridge connects"
-      : "Not available in browser preview";
+      ? translate("Unavailable until bridge connects")
+      : translate("Not available in browser preview");
   const runtimeValue = connection.status === "ready"
-    ? "Ollama loopback for local generation"
+    ? translate("Ollama loopback for local generation")
     : desktop
-      ? "Unavailable until bridge connects"
-      : "Not queried in browser preview";
+      ? translate("Unavailable until bridge connects")
+      : translate("Not queried in browser preview");
   const capabilitiesValue = connection.status === "ready"
-    ? "Runs, Arena summaries, profiles, and model metadata"
+    ? translate("Runs, Arena summaries, profiles, and model metadata")
     : desktop
-      ? "No local capability read completed"
-      : "No desktop records or runtimes are read";
-  const platform = connection.status === "ready" ? connection.appStatus.supportedPlatform : "unknown";
-  const protocol = connection.status === "ready" ? `v${connection.appStatus.protocolVersion}` : "Not reported";
+      ? translate("No local capability read completed")
+      : translate("No desktop records or runtimes are read");
+  const platform = connection.status === "ready" ? connection.appStatus.supportedPlatform : translate("unknown");
+  const protocol = connection.status === "ready" ? `v${connection.appStatus.protocolVersion}` : translate("Not reported");
   const liveMessage = connection.status === "loading"
-    ? "Checking the local desktop bridge."
+    ? translate("Checking the local desktop bridge.")
     : connection.status === "ready"
-      ? "Desktop bridge connected. Local storage and capability boundaries are available."
-      : "Desktop bridge unavailable. The app is showing an honest browser or disconnected preview.";
+      ? translate("Desktop bridge connected. Local storage and capability boundaries are available.")
+      : translate("Desktop bridge unavailable. The app is showing an honest browser or disconnected preview.");
 
   return (
     <section className={`panel diagnostics-panel ${compact ? "diagnostics-panel-compact" : ""}`} aria-labelledby={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>
       <div className="section-heading compact-heading">
         <div>
-          <p className="eyebrow">Local diagnostics</p>
-          <h2 id={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>Know where your data lives.</h2>
+          <p className="eyebrow">{translate("Local diagnostics")}</p>
+          <h2 id={compact ? "overview-diagnostics-heading" : "settings-diagnostics-heading"}>{translate("Know where your data lives.")}</h2>
         </div>
         <span className={`run-status ${connection.status === "ready" ? "arena-status-success" : "run-status-neutral"}`} role="status" aria-live="polite">{bridgeValue}</span>
       </div>
       <p className="diagnostics-copy">
-        Prompt Arena is local-first. This surface reports the boundary it can verify; unavailable values stay unavailable.
-        Optional external provider calls are separate, explicit actions in Settings.
+        {translate("Prompt Arena is local-first. This surface reports the boundary it can verify; unavailable values stay unavailable. Optional external provider calls are separate, explicit actions in Settings.")}
       </p>
       <dl className="diagnostics-list">
-        <div><dt>Desktop bridge</dt><dd>{bridgeValue}</dd></div>
-        <div><dt>Storage boundary</dt><dd>{storageValue}</dd></div>
-        <div><dt>Runtime boundary</dt><dd>{runtimeValue}</dd></div>
-        <div><dt>Local capabilities</dt><dd>{capabilitiesValue}</dd></div>
-        <div><dt>Platform</dt><dd>{platform}</dd></div>
-        <div><dt>Protocol</dt><dd>{protocol}</dd></div>
-        <div><dt>Network default</dt><dd>None for local Arena work</dd></div>
+        <div><dt>{translate("Desktop bridge")}</dt><dd>{bridgeValue}</dd></div>
+        <div><dt>{translate("Storage boundary")}</dt><dd>{storageValue}</dd></div>
+        <div><dt>{translate("Runtime boundary")}</dt><dd>{runtimeValue}</dd></div>
+        <div><dt>{translate("Local capabilities")}</dt><dd>{capabilitiesValue}</dd></div>
+        <div><dt>{translate("Platform")}</dt><dd>{platform}</dd></div>
+        <div><dt>{translate("Protocol")}</dt><dd>{protocol}</dd></div>
+        <div><dt>{translate("Network default")}</dt><dd>{translate("None for local Arena work")}</dd></div>
       </dl>
       <p className="sr-only" role="status" aria-live="polite">{liveMessage}</p>
     </section>
@@ -4121,81 +4121,79 @@ function Settings({
   function exportAppearance() {
     try {
       downloadLocalText("appearance-preferences", "json", serializeAppearancePreferences(appearance));
-      setAppearanceTransferMessage("Sanitized appearance preferences downloaded locally.");
+      setAppearanceTransferMessage(translate("Sanitized appearance preferences downloaded locally."));
     } catch (error: unknown) {
-      setAppearanceTransferMessage(error instanceof Error ? error.message : "The appearance export could not be prepared.");
+      setAppearanceTransferMessage(error instanceof Error ? translate(error.message) : translate("The appearance export could not be prepared."));
     }
   }
 
   async function importAppearanceFile(file: File) {
     if (file.size > MAX_APPEARANCE_PAYLOAD_BYTES) {
-      setAppearanceTransferMessage("Appearance preference files must be 8 KiB or smaller.");
+      setAppearanceTransferMessage(translate("Appearance preference files must be 8 KiB or smaller."));
       return;
     }
     try {
       onAppearanceChange(importAppearancePreferences(await file.text()));
-      setAppearanceTransferMessage("Appearance preferences imported and normalized locally.");
+      setAppearanceTransferMessage(translate("Appearance preferences imported and normalized locally."));
     } catch (error: unknown) {
-      setAppearanceTransferMessage(error instanceof Error ? error.message : "The appearance import could not be applied.");
+      setAppearanceTransferMessage(error instanceof Error ? translate(error.message) : translate("The appearance import could not be applied."));
     }
   }
 
   return (
     <div className="view-stack">
       <section className="panel page-intro">
-        <p className="eyebrow">Appearance and boundaries</p>
-        <h2>Settings</h2>
+        <p className="eyebrow">{translate("Appearance and boundaries")}</p>
+        <h2>{translate("Settings")}</h2>
         <p>
-          Shape this local workspace for reading comfort. Changes preview immediately and stay inside the current
-          installation; there is no account, cloud sync, external font, or theme service.
+          {translate("Shape this local workspace for reading comfort. Changes preview immediately and stay inside the current installation; there is no account, cloud sync, external font, or theme service.")}
         </p>
       </section>
 
       <section className="panel settings-card language-settings" aria-labelledby="language-heading">
         <div className="section-heading compact-heading">
           <div>
-            <p className="eyebrow">Interface language</p>
-            <h3 id="language-heading">Choose your language</h3>
+            <p className="eyebrow">{translate("Interface language")}</p>
+            <h3 id="language-heading">{translate("Choose your language")}</h3>
           </div>
           <span className="section-index">L</span>
         </div>
         <AccessibleListbox
           id="interface-language"
-          label="Interface language"
+          label={translate("Interface language")}
           value={locale}
-          placeholder="Choose your language"
-          options={[{ value: "en", label: "English" }, { value: "pt-BR", label: "Português (Brasil)" }]}
+          placeholder={translate("Choose your language")}
+          options={[{ value: "en", label: translate("English") }, { value: "pt-BR", label: translate("Português (Brasil)") }]}
           onChange={(value) => setLocale(value as typeof locale)}
         />
-        <p className="field-help">The language is saved locally in this desktop webview and does not change stored evidence or credentials.</p>
+        <p className="field-help">{translate("The language is saved locally in this desktop webview and does not change stored evidence or credentials.")}</p>
       </section>
 
       <section className="appearance-grid">
         <div className="panel settings-card appearance-controls">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Personalization</p>
-              <h3>Make the workspace yours</h3>
+              <p className="eyebrow">{translate("Personalization")}</p>
+              <h3>{translate("Make the workspace yours")}</h3>
             </div>
             <span className="section-index">A</span>
           </div>
 
           <AccessibleListbox
             id="font-choice"
-            label="Interface font"
+            label={translate("Interface font")}
             value={appearance.fontId}
-            placeholder="Choose an interface font"
-            options={FONT_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+            placeholder={translate("Choose an interface font")}
+            options={FONT_OPTIONS.map((option) => ({ value: option.id, label: translate(option.label) }))}
             onChange={(value) => updateAppearance("fontId", value)}
           />
           <p className="field-help">
-            Seven local system stacks are available. Times New Roman remains the default intent, with honest Linux
-            fallbacks when a font is not installed.
+            {translate("Seven local system stacks are available. Times New Roman remains the default intent, with honest Linux fallbacks when a font is not installed.")}
           </p>
 
           <div className="appearance-field">
             <div className="field-label-row">
-              <label className="field-label" htmlFor="font-scale">Font scale</label>
+              <label className="field-label" htmlFor="font-scale">{translate("Font scale")}</label>
               <output className="control-value" htmlFor="font-scale">{appearance.fontScale}%</output>
             </div>
             <input
@@ -4208,12 +4206,12 @@ function Settings({
               value={appearance.fontScale}
               onChange={(event) => updateAppearance("fontScale", Number(event.target.value))}
             />
-            <div className="range-labels" aria-hidden="true"><span>Compact</span><span>Standard</span><span>Large</span></div>
+            <div className="range-labels" aria-hidden="true"><span>{translate("Compact")}</span><span>{translate("Standard")}</span><span>{translate("Large")}</span></div>
           </div>
 
           <div className="appearance-field">
             <div className="field-label-row">
-              <label className="field-label" htmlFor="motion-scale">Motion scale</label>
+              <label className="field-label" htmlFor="motion-scale">{translate("Motion scale")}</label>
               <output className="control-value" htmlFor="motion-scale" aria-live="polite">{appearance.motionScale}%</output>
             </div>
             <input
@@ -4227,12 +4225,12 @@ function Settings({
               aria-valuetext={`${appearance.motionScale}%`}
               onChange={(event) => updateAppearance("motionScale", Number(event.target.value))}
             />
-            <p className="field-help">Adjust the duration of discretionary interface motion.</p>
+            <p className="field-help">{translate("Adjust the duration of discretionary interface motion.")}</p>
             <div className="range-labels" aria-hidden="true"><span>0%</span><span>100%</span><span>200%</span></div>
           </div>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Accent color</legend>
+            <legend className="field-label">{translate("Accent color")}</legend>
             <div className="appearance-choice-grid">
               {ACCENT_OPTIONS.map((option) => (
                 <button
@@ -4244,14 +4242,14 @@ function Settings({
                   onClick={() => updateAppearance("accentId", option.id)}
                 >
                   <span className="appearance-swatch" data-accent={option.id} aria-hidden="true" />
-                  <span>{option.label}</span>
+                  <span>{translate(option.label)}</span>
                 </button>
               ))}
             </div>
           </fieldset>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Contrast</legend>
+            <legend className="field-label">{translate("Contrast")}</legend>
             <div className="appearance-choice-grid appearance-choice-grid-two">
               {CONTRAST_OPTIONS.map((option) => (
                 <button
@@ -4261,14 +4259,14 @@ function Settings({
                   aria-pressed={appearance.contrastId === option.id}
                   onClick={() => updateAppearance("contrastId", option.id)}
                 >
-                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
                 </button>
               ))}
             </div>
           </fieldset>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Corner shape</legend>
+            <legend className="field-label">{translate("Corner shape")}</legend>
             <div className="appearance-choice-grid appearance-choice-grid-two">
               {RADIUS_OPTIONS.map((option) => (
                 <button
@@ -4278,14 +4276,14 @@ function Settings({
                   aria-pressed={appearance.radiusId === option.id}
                   onClick={() => updateAppearance("radiusId", option.id)}
                 >
-                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
                 </button>
               ))}
             </div>
           </fieldset>
 
           <fieldset className="appearance-fieldset">
-            <legend className="field-label">Surface</legend>
+            <legend className="field-label">{translate("Surface")}</legend>
             <div className="appearance-choice-grid">
               {SURFACE_OPTIONS.map((option) => (
                 <button
@@ -4295,7 +4293,7 @@ function Settings({
                   aria-pressed={appearance.surfaceId === option.id}
                   onClick={() => updateAppearance("surfaceId", option.id)}
                 >
-                  <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <span><strong>{translate(option.label)}</strong><small>{translate(option.description)}</small></span>
                 </button>
               ))}
             </div>
@@ -4307,69 +4305,68 @@ function Settings({
               checked={appearance.reducedMotion}
               onChange={(event) => updateAppearance("reducedMotion", event.target.checked)}
             />
-            <span><strong>Reduce motion</strong><small>Keep transitions and animations minimal.</small></span>
+              <span><strong>{translate("Reduce motion")}</strong><small>{translate("Keep transitions and animations minimal.")}</small></span>
           </label>
 
           <button className="secondary-button restore-button" type="button" onClick={onRestoreDefaults}>
-            Restore defaults
+            {translate("Restore defaults")}
           </button>
 
           <div className="appearance-transfer">
             <div className="field-label-row">
-              <span className="field-label" id="appearance-transfer-heading">Preference file</span>
-              <span className="control-value">versioned JSON</span>
+              <span className="field-label" id="appearance-transfer-heading">{translate("Preference file")}</span>
+              <span className="control-value">{translate("versioned JSON")}</span>
             </div>
-            <p className="field-help">Download or import only bounded presentation preferences. Unknown fields are ignored; prompts, responses, credentials, and headers are not part of this payload.</p>
+            <p className="field-help">{translate("Download or import only bounded presentation preferences. Unknown fields are ignored; prompts, responses, credentials, and headers are not part of this payload.")}</p>
             <div className="export-actions" role="group" aria-labelledby="appearance-transfer-heading">
-              <button className="secondary-button" type="button" onClick={exportAppearance}>Download JSON</button>
-              <button className="secondary-button" type="button" onClick={() => appearanceFileInput.current?.click()}>Import JSON</button>
-              <input ref={appearanceFileInput} type="file" accept="application/json,.json" hidden aria-label="Import appearance preference JSON" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importAppearanceFile(file); }} />
+              <button className="secondary-button" type="button" onClick={exportAppearance}>{translate("Download JSON")}</button>
+              <button className="secondary-button" type="button" onClick={() => appearanceFileInput.current?.click()}>{translate("Import JSON")}</button>
+              <input ref={appearanceFileInput} type="file" accept="application/json,.json" hidden aria-label={translate("Import appearance preference JSON")} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importAppearanceFile(file); }} />
             </div>
-            {appearanceTransferMessage && <p className="field-help" role="status">{appearanceTransferMessage}</p>}
+            {appearanceTransferMessage && <p className="field-help" role="status">{translate(appearanceTransferMessage)}</p>}
           </div>
         </div>
 
         <div className="panel settings-card appearance-preview-card">
           <div className="section-heading compact-heading">
             <div>
-              <p className="eyebrow">Live preview</p>
-              <h3>Read it before you keep it</h3>
+              <p className="eyebrow">{translate("Live preview")}</p>
+              <h3>{translate("Read it before you keep it")}</h3>
             </div>
             <span className="section-index">B</span>
           </div>
 
           <div className="appearance-preview" aria-live="polite">
-            <p className="eyebrow">Current presentation</p>
-            <h3>Evidence over noise.</h3>
-            <p>One quiet surface for inspecting prompts, runs, and local records.</p>
+            <p className="eyebrow">{translate("Current presentation")}</p>
+            <h3>{translate("Evidence over noise.")}</h3>
+            <p>{translate("One quiet surface for inspecting prompts, runs, and local records.")}</p>
             <div className="preview-sample-row">
-              <span className="status-chip is-ready">Local only</span>
-              <button className="primary-button" type="button">Sample action <span aria-hidden="true">→</span></button>
+              <span className="status-chip is-ready">{translate("Local only")}</span>
+              <button className="primary-button" type="button">{translate("Sample action")} <span aria-hidden="true">→</span></button>
             </div>
           </div>
 
           <p className="field-help preview-note">
-            This sample uses the current font, scale, accent, surface, corner, and motion settings. It is a visual
-            preview only; it creates no record.
+            {translate("This sample uses the current font, scale, accent, surface, corner, and motion settings. It is a visual preview only; it creates no record.")}
           </p>
 
           <div className="storage-notice" role="status">
             <span className="storage-notice-mark" aria-hidden="true">{desktop ? "✓" : "◇"}</span>
             <div>
-              <strong>{desktop ? "Saved in this desktop webview" : "Browser preview: not persisted"}</strong>
+              <strong>{translate(desktop ? "Saved in this desktop webview" : "Browser preview: not persisted")}</strong>
               <p>
                 {desktop
-                  ? "Only sanitized presentation preferences are stored locally. No desktop records, telemetry, or cloud sync are involved."
-                  : "Changes are temporary and this preview does not read or write localStorage or desktop records."}
+                  ? translate("Only sanitized presentation preferences are stored locally. No desktop records, telemetry, or cloud sync are involved.")
+                  : translate("Changes are temporary and this preview does not read or write localStorage or desktop records.")}
               </p>
             </div>
           </div>
 
           <div className="boundary-list appearance-boundary-list">
-            <BoundaryRow label="Prompt Arena server" value="None" />
-            <BoundaryRow label="External fonts" value="Disabled" />
-            <BoundaryRow label="Theme telemetry" value="Disabled" />
-            <BoundaryRow label="Theme sync" value="Not available" />
+            <BoundaryRow label={translate("Prompt Arena server")} value={translate("None")} />
+            <BoundaryRow label={translate("External fonts")} value={translate("Disabled")} />
+            <BoundaryRow label={translate("Theme telemetry")} value={translate("Disabled")} />
+            <BoundaryRow label={translate("Theme sync")} value={translate("Not available")} />
           </div>
         </div>
       </section>
