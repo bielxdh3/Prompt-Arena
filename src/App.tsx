@@ -265,6 +265,49 @@ function AppShell() {
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
+  const mainRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const scrollRoot = root.closest<HTMLElement>(".workspace");
+    if (!scrollRoot) return;
+    const targets = Array.from(root.querySelectorAll<HTMLElement>(".view-stack > *, .models-layout > *, .settings-grid > *, .advanced-settings"));
+    targets.forEach((target) => target.classList.add("scroll-reveal"));
+    const reduced = root.closest<HTMLElement>(".app-shell")?.dataset.reducedMotion === "true"
+      || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced || typeof IntersectionObserver === "undefined") {
+      targets.forEach((target) => target.classList.add("is-visible"));
+      return;
+    }
+    let observer: IntersectionObserver | undefined;
+    let frame = 0;
+    const revealVisibleTargets = () => {
+      const scrollRootRect = scrollRoot.getBoundingClientRect();
+      targets.forEach((target) => {
+        const targetRect = target.getBoundingClientRect();
+        if (targetRect.top < scrollRootRect.bottom && targetRect.bottom > scrollRootRect.top) {
+          target.classList.add("is-visible");
+          observer?.unobserve(target);
+        } else {
+          observer?.observe(target);
+        }
+      });
+    };
+    observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          observer?.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, root: scrollRoot, rootMargin: "0px 0px -8% 0px" });
+    frame = window.requestAnimationFrame(revealVisibleTargets);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [activeView]);
 
   useEffect(() => {
     let current = true;
@@ -381,23 +424,25 @@ function AppShell() {
           </div>
         )}
 
-        <main className="main-content" id="main-content">
-          {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
-          {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
-          {activeView === "advanced-arena" && <AdvancedArenaView />}
-          {activeView === "insights" && <RoadmapFeaturesView />}
-          {activeView === "benchmarks" && <BenchmarksView />}
-          {activeView === "models" && <ModelsView />}
-          {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
-          {activeView === "settings" && (
-            <Settings
-              appearance={appearance}
-              desktop={isDesktopEnvironment()}
-              connection={connection}
-              onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
-              onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
-            />
-          )}
+        <main className="main-content" id="main-content" ref={mainRef}>
+          <div key={activeView} className="page-transition">
+            {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
+            {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
+            {activeView === "advanced-arena" && <AdvancedArenaView />}
+            {activeView === "insights" && <RoadmapFeaturesView />}
+            {activeView === "benchmarks" && <BenchmarksView />}
+            {activeView === "models" && <ModelsView />}
+            {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
+            {activeView === "settings" && (
+              <Settings
+                appearance={appearance}
+                desktop={isDesktopEnvironment()}
+                connection={connection}
+                onAppearanceChange={(next) => setAppearance(normalizeAppearance(next))}
+                onRestoreDefaults={() => setAppearance({ ...DEFAULT_APPEARANCE })}
+              />
+            )}
+          </div>
         </main>
       </div>
     </div>
