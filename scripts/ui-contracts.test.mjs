@@ -57,6 +57,9 @@ describe("static UI parity contracts", () => {
     expect(appSource).toContain('const { locale } = useI18n();');
     expect(appSource).toContain('translate("Interface language")');
     expect(appSource).toContain('translate("Motion scale")');
+    expect(appSource).toContain("requestAnimationFrame(revealVisibleTargets)");
+    expect(appSource).toContain("observer?.unobserve(entry.target)");
+    expect(appSource).toContain('className="page-transition"');
 
     const resourceKeys = new Set(
       [...i18nSource.matchAll(/^(?:\s*)(?:"((?:[^"\\]|\\.)+)"|([A-Za-z][A-Za-z0-9_]*))\s*:/gm)]
