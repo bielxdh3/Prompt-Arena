@@ -1,5 +1,6 @@
 import type { ObjectiveVerificationEvidence } from "./bridge";
-import { formatLocaleNumber, translate } from "./i18n";
+const translate = (value: string): string => value;
+const formatLocaleNumber = (value: number, _locale?: unknown, options?: Intl.NumberFormatOptions): string => new Intl.NumberFormat("en-US", options).format(value);
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
 
