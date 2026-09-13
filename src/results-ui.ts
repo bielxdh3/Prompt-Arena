@@ -1,6 +1,9 @@
 import type { ObjectiveVerificationEvidence } from "./bridge";
+import { formatLocaleNumber, translate } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
+
+export const BLIND_RESPONSE_MAX_HEIGHT_PX = 320;
 
 export function blindReviewHidesAttemptEvidence(status: string): boolean {
   switch (status.trim().toLowerCase()) {
@@ -35,6 +38,16 @@ export function blindEvaluationScoreLabel(score: number | null | undefined): str
   return score !== null && score !== undefined && Number.isInteger(score) && score >= 1 && score <= 5
     ? `${score}/5`
     : "Not scored";
+}
+
+export function updateBlindEvaluationScore(
+  scores: Readonly<Record<string, number | null>>,
+  token: string,
+  value: string,
+): Record<string, number | null> {
+  const score = value === "" ? null : Number(value);
+  if (score !== null && (!Number.isInteger(score) || score < 1 || score > 5)) return { ...scores };
+  return { ...scores, [token]: score };
 }
 
 export function objectiveVerificationEvidence(value: unknown): ObjectiveVerificationEvidence | null {
@@ -117,27 +130,28 @@ export function attemptStatusTone(status: string): AttemptStatusTone {
 
 export function formatCount(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
-    return "Not recorded";
+    return translate("Not recorded");
   }
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+  return formatLocaleNumber(value, undefined, { maximumFractionDigits: 0 });
 }
 
 export function formatByteCount(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
-    return "Not recorded";
+    return translate("Not recorded");
   }
   if (value < 1024) return `${formatCount(value)} B`;
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
-  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  if (value < 1024 ** 2) return `${formatLocaleNumber(value / 1024, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} KiB`;
+  if (value < 1024 ** 3) return `${formatLocaleNumber(value / 1024 ** 2, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MiB`;
+  return `${formatLocaleNumber(value / 1024 ** 3, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} GiB`;
 }
 
 export function formatDurationNs(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) {
-    return "Not recorded";
+    return translate("Not recorded");
   }
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} s`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} ms`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(2)} μs`;
+  if (value >= 1_000_000_000) return `${formatLocaleNumber(value / 1_000_000_000, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} s`;
+  if (value >= 1_000_000) return `${formatLocaleNumber(value / 1_000_000, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ms`;
+  if (value >= 1_000) return `${formatLocaleNumber(value / 1_000, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} μs`;
   return `${formatCount(value)} ns`;
 }
+
