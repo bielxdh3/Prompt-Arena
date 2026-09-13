@@ -20,7 +20,11 @@ evidence checkout is `492841dd9bdc1afbecd9c851cf7d44be8945bfb3`. CI run
 checkout, including Windows MSI/NSIS and Linux package smoke. PR #35 remains
 OPEN/DRAFT and unmerged. Native Tauri/runtime, live external-runtime, Docker,
 signing/Defender, independent security/publication, and owner merge gates are
-tracked separately in PR #42 and remain open.
+tracked separately in PR #42 and remain open. The tracked QA MSI revision
+`0.1.4.3` is checksum-valid at `downloadable-artifacts/Prompt-Arena-0.1.4.3-windows-x64.msi`
+(6,111,232 bytes, SHA-256 `3b0e7487d988222384d23552e0bd66b126cfface450954a4f34f73e776bb7b4f`);
+local checksum/NSIS clean-install smoke passed during this follow-up, without
+claiming fresh local WiX reproducibility or native visual acceptance.
 
 ## Phase status
 
