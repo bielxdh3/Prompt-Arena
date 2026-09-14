@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { displayName, numberedName, profileDisplayName } from "./display-names";
 import { formatLocaleDate, formatMessage, setActiveLocale } from "./i18n";
 import { attemptStatusLabel, attemptStatusTone, formatCount } from "./results-ui";
-import { HumanError } from "./human-error";
+import { FormFeedback, HumanError } from "./human-error";
+import { formatByokDecision, formatIdentityConfidence } from "./byok-ui";
+import { formatAdvancedValue } from "./advanced-arena-ui";
 
 afterEach(() => setActiveLocale("en"));
 
@@ -38,6 +40,17 @@ describe("human display identity", () => {
     const html = renderToStaticMarkup(<HumanError summary="Run history unavailable" detail="ECONNREFUSED raw runtime failure" />);
     expect(html).toContain("Detalhes técnicos");
     expect(html).toMatch(/<details><summary>.*<\/summary><pre[^>]*>ECONNREFUSED/);
+    expect(html).not.toContain("<details open");
+  });
+  it("localizes action feedback and provider result values", () => {
+    setActiveLocale("pt-BR");
+    expect(formatByokDecision("allow")).toBe("Permitido");
+    expect(formatIdentityConfidence("unverified")).toBe("Não verificado");
+    expect(formatAdvancedValue(1.25)).toBe("1,25");
+    const html = renderToStaticMarkup(<FormFeedback kind="error" message="ECONNREFUSED private-runtime-code" />);
+    expect(html).toContain("Não foi possível concluir a ação.");
+    expect(html.split("<details>")[0]).not.toContain("ECONNREFUSED");
+    expect(html).toContain("ECONNREFUSED private-runtime-code");
     expect(html).not.toContain("<details open");
   });
 });

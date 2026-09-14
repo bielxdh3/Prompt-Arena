@@ -372,7 +372,7 @@ export function AdvancedArenaView() {
         },
       });
       setSelectedCalibrationResultId(saved.record.resultId);
-      setCalibrationSaveMessage(`Calibration ${saved.saveOutcome === "already_present" ? "reopened" : "saved"}: ${saved.record.resultId}.`);
+      setCalibrationSaveMessage(translate(saved.saveOutcome === "already_present" ? "Calibration reopened." : "Calibration saved."));
       await refreshSummaries();
     } catch (error: unknown) {
       setCalibrationSaveMessage(error instanceof Error ? error.message : "The calibration artifact could not be saved.");
@@ -393,7 +393,7 @@ export function AdvancedArenaView() {
     setAiJudgePanelIds(record.judge.panel?.judgeIds.join(", ") ?? "");
     setHumanScoreText(formatCalibrationScores(record.humanScores));
     setAiJudgeScoreText(formatCalibrationScores(record.aiJudgeScores));
-    setCalibrationSaveMessage(`Reopened immutable calibration result ${record.resultId}.`);
+    setCalibrationSaveMessage(translate("Calibration reopened."));
   }
 
   async function saveTournamentArtifact() {
@@ -436,7 +436,7 @@ export function AdvancedArenaView() {
       const saved = await saveTournamentResult(payload);
       setSelectedTournamentResultId(saved.record.tournamentId);
       setTournamentResult({ kind: "saved", record: saved.record });
-      setTournamentSaveMessage(`Tournament ${saved.saveOutcome === "already_present" ? "reopened" : "saved"}: ${saved.record.tournamentId}.`);
+      setTournamentSaveMessage(translate(saved.saveOutcome === "already_present" ? "Tournament reopened." : "Tournament saved."));
       await refreshSummaries();
     } catch (error: unknown) {
       setTournamentSaveMessage(error instanceof Error ? error.message : "The tournament result could not be saved.");
@@ -448,7 +448,7 @@ export function AdvancedArenaView() {
     const record = artifactHistory.tournamentResults.find((item) => item.tournamentId === selectedTournamentResultId);
     if (!record) return;
     setTournamentId(record.tournamentId);
-    setTournamentSaveMessage(`Reopened immutable tournament result ${record.tournamentId}.`);
+    setTournamentSaveMessage(translate("Tournament reopened."));
     setTournamentResult({ kind: "saved", record });
   }
 

@@ -1266,6 +1266,28 @@ const PT_BR_MESSAGES_EXTRA = {
 };
 
 const HUMAN_UX_MESSAGES = {
+  "{input} input · {output} output · {total} total": "{input} de entrada · {output} de saída · {total} no total",
+  "Before generation": "Antes da geração",
+  "{input} input / {output} output per million tokens": "{input} de entrada / {output} de saída por milhão de tokens",
+  "The action could not be completed. Review the details and try again.": "Não foi possível concluir a ação. Confira os detalhes e tente novamente.",
+  "Sample failed": "A amostra falhou",
+  "{completed} of {total}": "{completed} de {total}",
+  "Benchmark validated successfully.": "Benchmark validado com sucesso.",
+  "Benchmark published. It is ready to use.": "Benchmark publicado. Ele está pronto para uso.",
+  "{model} selected for configuration.": "{model} selecionado para configuração.",
+  'Remove "{model}"? This deletes its app-managed GGUF file. The deletion remains recorded in technical details.': 'Remover "{model}"? Isso exclui o arquivo GGUF gerenciado pelo aplicativo. A exclusão fica registrada nos detalhes técnicos.',
+  "This model configuration is already saved.": "Esta configuração de modelo já está salva.",
+  "Model configuration saved.": "Configuração do modelo salva.",
+  "Tokens/s unavailable": "Tokens/s indisponíveis",
+  "Output unavailable": "Saída indisponível",
+  "{count} output tokens": "{count} tokens de saída",
+  "Time to first token unavailable": "Tempo até o primeiro token indisponível",
+  "{count} history entries removed. Protected source data was retained.": "{count} itens do histórico removidos. Os dados de origem protegidos foram preservados.",
+  "{provider} configuration saved securely on this computer.": "Configuração de {provider} salva com segurança neste computador.",
+  "Calibration reopened.": "Calibração reaberta.",
+  "Calibration saved.": "Calibração salva.",
+  "Tournament reopened.": "Torneio reaberto.",
+  "Tournament saved.": "Torneio salvo.",
   "{score}/5 average": "Média {score}/5",
   "{rate}% objective pass rate": "{rate}% de aprovação objetiva",
   "{count} samples": "{count} amostras",
@@ -1475,6 +1497,12 @@ export function formatLocaleCurrency(
 }
 
 export function formatLocaleDate(value: string | number | Date, locale: AppLocale = activeLocale): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime())
+      ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(date)
+      : translateText(locale, "Not recorded");
+  }
   const input = typeof value === "string" && /^\d{9,10}$/.test(value)
     ? Number(value) * 1000
     : typeof value === "string" && /^\d{13}$/.test(value) ? Number(value) : value;
