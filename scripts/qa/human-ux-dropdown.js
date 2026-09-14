@@ -15,6 +15,8 @@ async (page) => {
     await trigger.press('ArrowDown');
     const listbox = page.getByRole('listbox');
     await listbox.waitFor();
+    await page.locator('[role="listbox"][data-state="open"]').waitFor();
+    await page.waitForFunction(() => document.querySelector('[role="listbox"]')?.contains(document.activeElement), undefined, { timeout: 3000 });
     await page.screenshot({ path: `output/playwright/dropdown-${motionScale}-${reducedMotion}.png`, animations: 'disabled' });
     const state = await listbox.evaluate(el => {
       const r = el.getBoundingClientRect();
