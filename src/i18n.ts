@@ -1266,6 +1266,9 @@ const PT_BR_MESSAGES_EXTRA = {
 };
 
 const HUMAN_UX_MESSAGES = {
+  "{score}/5 average": "Média {score}/5",
+  "{rate}% objective pass rate": "{rate}% de aprovação objetiva",
+  "{count} samples": "{count} amostras",
   "Draft saved at revision {revision}.": "Rascunho salvo. Versão {revision}.",
   "Loaded revision {revision}.": "Versão {revision} carregada.",
   "{completed}/{total} samples completed": "{completed}/{total} amostras concluídas",
