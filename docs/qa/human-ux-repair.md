@@ -15,7 +15,7 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 
 ## Evidence obtained
 
-- Frontend: 31 test files, 133 tests passed; TypeScript check passed.
+- Frontend: 31 test files, 134 tests passed; TypeScript check passed.
 - Production frontend build passed (existing large-chunk warning remains).
 - Rust: formatting/check passed; 111 unit tests passed. Runtime tests that self-skip are not live-provider proof.
 - Repository boundary check and boundary fixtures passed.
@@ -23,6 +23,7 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - Browser fixture: Insights containment and absence of UUIDs in headings/listbox labels checked in English and PT-BR, neutral/warm/Paper, at 960 and 1280 pixels. Fixture data is synthetic and never exercises real generation.
 - Browser navigation fixture: all eight main screens passed title/selector UUID, replacement-character, and horizontal-overflow assertions in both languages at 960x720 with 115% font scale and motion preferences 0/100/200 (48 combinations). Screenshots finish finite animations for inspection; this does not verify animation behavior itself or populated result workflows. The PT-BR history screenshot was visually inspected.
 - PR #57 is a dedicated open draft stacked on P7. Linux and Windows CI passed for `b69b4e9b`; later commits require fresh remote checks.
+- Keyboard dropdown fixture passed after moving option focus from the hidden opening phase to the visible open phase. ArrowDown opens with option focus; Escape closes and returns focus; Enter selects and closes. The long-name dropdown remains inside 960x600 at motion 0/100/200 and with reduced motion. Screenshots finish animations, so this is focus/containment evidence, not animation timing proof.
 - Windows PE inspection: packaged application declares subsystem 2 (GUI).
 - MSI packaging succeeds using the repository's existing duplicate-worker WiX correction; WiX ICE warnings remain.
 
