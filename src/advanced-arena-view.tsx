@@ -118,11 +118,13 @@ export function AdvancedArenaView() {
   const [aiJudgePanelIds, setAiJudgePanelIds] = useState("");
   const [calibrationId, setCalibrationId] = useState("");
   const [calibrationSaveMessage, setCalibrationSaveMessage] = useState("");
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const [selectedCalibrationResultId, setSelectedCalibrationResultId] = useState("");
   const [tournamentMode, setTournamentMode] = useState<TournamentModeChoice>("round_robin");
   const [tournamentMetric, setTournamentMetric] = useState<AdvancedArenaMetric>("objective_pass_rate");
   const [tournamentId, setTournamentId] = useState("");
   const [tournamentSaveMessage, setTournamentSaveMessage] = useState("");
+  const [tournamentSaveError, setTournamentSaveError] = useState<string | null>(null);
   const [selectedTournamentResultId, setSelectedTournamentResultId] = useState("");
   const [tournamentCompetitorIds, setTournamentCompetitorIds] = useState<string[]>([]);
   const [maxMatches, setMaxMatches] = useState(MAX_ADVANCED_MATCHES);
@@ -289,6 +291,7 @@ export function AdvancedArenaView() {
     setTournamentError(null);
     setTournamentResult(null);
     setTournamentSaveMessage("");
+    setTournamentSaveError(null);
     try {
       if (!selectedSummary) throw new Error("Select a saved Arena summary before building a tournament.");
       if (selectedTournamentCompetitors.length < 2) throw new Error("Select at least two competitors for the tournament.");
@@ -323,6 +326,7 @@ export function AdvancedArenaView() {
 
   async function saveCalibrationArtifacts() {
     setCalibrationSaveMessage("Saving immutable calibration benchmark and result…");
+    setCalibrationError(null);
     try {
       if (!selectedSummary) throw new Error("Select a saved Arena summary before saving calibration.");
       if (scoreState.error) throw new Error("Fix the score entries before saving calibration.");
@@ -375,7 +379,8 @@ export function AdvancedArenaView() {
       setCalibrationSaveMessage(translate(saved.saveOutcome === "already_present" ? "Calibration reopened." : "Calibration saved."));
       await refreshSummaries();
     } catch (error: unknown) {
-      setCalibrationSaveMessage(error instanceof Error ? error.message : "The calibration artifact could not be saved.");
+      setCalibrationSaveMessage("The calibration artifact could not be saved.");
+      setCalibrationError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -394,10 +399,12 @@ export function AdvancedArenaView() {
     setHumanScoreText(formatCalibrationScores(record.humanScores));
     setAiJudgeScoreText(formatCalibrationScores(record.aiJudgeScores));
     setCalibrationSaveMessage(translate("Calibration reopened."));
+    setCalibrationError(null);
   }
 
   async function saveTournamentArtifact() {
     setTournamentSaveMessage("Saving immutable tournament result…");
+    setTournamentSaveError(null);
     try {
       if (!selectedSummary || !tournamentResult || (tournamentResult.kind !== "outcome" && tournamentResult.kind !== "blind")) {
         throw new Error("Build a tournament outcome before saving it.");
@@ -439,7 +446,8 @@ export function AdvancedArenaView() {
       setTournamentSaveMessage(translate(saved.saveOutcome === "already_present" ? "Tournament reopened." : "Tournament saved."));
       await refreshSummaries();
     } catch (error: unknown) {
-      setTournamentSaveMessage(error instanceof Error ? error.message : "The tournament result could not be saved.");
+      setTournamentSaveMessage("The tournament result could not be saved.");
+      setTournamentSaveError(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -449,6 +457,7 @@ export function AdvancedArenaView() {
     if (!record) return;
     setTournamentId(record.tournamentId);
     setTournamentSaveMessage(translate("Tournament reopened."));
+    setTournamentSaveError(null);
     setTournamentResult({ kind: "saved", record });
   }
 
@@ -633,7 +642,7 @@ export function AdvancedArenaView() {
                   </label>
                   <button className="primary-button" type="button" onClick={() => void saveCalibrationArtifacts()}>{translate("Save calibration")}</button>
                 </div>
-                {calibrationSaveMessage && <p className="field-help" role="status">{translate(calibrationSaveMessage)}</p>}
+                {calibrationSaveMessage && (calibrationError ? <HumanError summary={calibrationSaveMessage} detail={calibrationError} /> : <p className="field-help" role="status">{translate(calibrationSaveMessage)}</p>)}
                 <p className="field-help" role="status">{translate("AI-judge boundary: optional, frozen, manual/offline, and never fabricated. No network call is made.")}</p>
               </section>
 
@@ -754,7 +763,7 @@ export function AdvancedArenaView() {
                 <div className="arena-actions">
                   <button className="primary-button" type="button" onClick={buildTournament}>{translate("Build")} {tournamentMode === "blind_ranking" ? translate("blind ranking") : translate("schedule")}</button>
                 </div>
-                {tournamentError && <p className="form-feedback form-feedback-error" role="alert">{translate(tournamentError)}</p>}
+                {tournamentError && <HumanError summary="The tournament request is invalid." detail={tournamentError} />}
                 {tournamentResult?.kind === "schedule" && <TournamentScheduleResult schedule={tournamentResult.schedule} labels={new Map(competitorOptions.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
                 {tournamentResult?.kind === "blind" && <BlindRankingResult aggregation={tournamentResult.aggregation} />}
                 {tournamentResult?.kind === "outcome" && <TournamentOutcomeResult result={tournamentResult.result} />}
@@ -764,7 +773,7 @@ export function AdvancedArenaView() {
                     <button className="secondary-button" type="button" onClick={() => void saveTournamentArtifact()}>{translate("Save tournament result")}</button>
                   </div>
                 )}
-                {tournamentSaveMessage && <p className="field-help" role="status">{translate(tournamentSaveMessage)}</p>}
+                {tournamentSaveMessage && (tournamentSaveError ? <HumanError summary={tournamentSaveMessage} detail={tournamentSaveError} /> : <p className="field-help" role="status">{translate(tournamentSaveMessage)}</p>)}
               </section>
 
               <section className="panel advanced-calibration-panel" aria-labelledby="advanced-calibration-heading" aria-live="polite">

@@ -309,7 +309,8 @@ export function RoadmapFeaturesView() {
       setNotice(translate("Single-model evidence saved immutably."));
       await refresh();
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "The single-model benchmark could not be completed.");
+      setNotice(translate("The single-model benchmark could not be completed."));
+      setErrorDetail(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
