@@ -904,7 +904,7 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -3928,3 +3928,15 @@ button.official-pack-row:hover,
 .roadmap-list span { color: var(--color-text-muted); }
 .roadmap-list li { border-color: var(--color-border); }
 .roadmap-bundle-preview { background: var(--color-surface-muted); }
+
+/* Shared card containment: grid children and long labels may shrink within their panel. */
+.roadmap-features-view > .panel { padding: clamp(20px, 3vw, 32px); }
+.arena-selection-grid > *, .metric-grid > *, .roadmap-table, .arena-custom-listbox { min-width: 0; max-width: 100%; }
+.metric-card strong, .run-row h3, .profile-record-row strong, .roadmap-table td { overflow-wrap: anywhere; }
+.arena-actions { flex-wrap: wrap; }
+.arena-actions > button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+.human-error-detail { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+
+.technical-details { min-width: 0; overflow-wrap: anywhere; color: var(--color-text-muted); font-size: 0.875rem; }
+.technical-details summary { cursor: pointer; padding-block: 6px; }

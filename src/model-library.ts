@@ -1,3 +1,4 @@
+import { translate, formatLocaleNumber } from "./i18n";
 import type {
   HardwareSnapshot,
   ModelBackend,
@@ -169,7 +170,7 @@ export function modelEmptyCopy(): string {
 
 export function modelMetadataLabel(model: ModelInfo): string {
   const facts = [model.family, model.parameterSize, model.quantizationLevel].filter(Boolean);
-  return facts.length > 0 ? facts.join(" · ") : "Metadata not reported";
+  return facts.length > 0 ? facts.join(" · ") : translate("Metadata not reported");
 }
 
 export function modelBackendLabel(backend: ModelBackend): string {
@@ -179,32 +180,32 @@ export function modelBackendLabel(backend: ModelBackend): string {
 }
 
 export function modelDownloadCapabilityLabel(model: ModelRecord): string {
-  if (model.backend === "ollama") return "Download: supported through Ollama pull with progress and cancellation.";
-  if (model.backend === "lm_studio") return "Download: unsupported; LM Studio exposes no native download through this boundary.";
-  return "Download: unsupported; llama.cpp uses local GGUF import and no runtime download is invented.";
+  if (model.backend === "ollama") return translate("Download: supported through Ollama pull with progress and cancellation.");
+  if (model.backend === "lm_studio") return translate("Download: unsupported; LM Studio exposes no native download through this boundary.");
+  return translate("Download: unsupported; llama.cpp uses local GGUF import and no runtime download is invented.");
 }
 
 export function modelRemovalCapabilityLabel(model: ModelRecord): string {
   if (model.backend === "llama_cpp" && model.managed && model.managedPath) {
-    return "Removal: supported for app-managed GGUF with audit evidence and active-operation guard.";
+    return translate("Removal: supported for app-managed GGUF with audit evidence and active-operation guard.");
   }
-  if (model.backend === "llama_cpp") return "Removal: unsupported; only app-managed GGUF files can be removed here.";
-  return `Removal: unsupported for ${modelBackendLabel(model.backend)}; use its official runtime mechanism.`;
+  if (model.backend === "llama_cpp") return translate("Removal: unsupported; only app-managed GGUF files can be removed here.");
+  return `${translate("Remove this model using")} ${modelBackendLabel(model.backend)}.`;
 }
 
 export function modelSourceStatusLabel(status: ModelSourceStatus): string {
-  if (status === "available") return "Available";
-  if (status === "unavailable") return "Unavailable";
-  return "Error";
+  if (status === "available") return translate("Available");
+  if (status === "unavailable") return translate("Unavailable");
+  return translate("Error");
 }
 
 export function modelRecordMetadataLabel(model: ModelRecord): string {
   const facts = [model.family, model.parameterSize].filter(Boolean);
-  return facts.length > 0 ? facts.join(" · ") : "Metadata not reported";
+  return facts.length > 0 ? facts.join(" · ") : translate("Metadata not reported");
 }
 
 export function modelRecordQuantizationLabel(model: ModelRecord): string {
-  return model.quantizationLevel ?? "Quantization not reported";
+  return model.quantizationLevel ?? translate("Quantization not reported");
 }
 
 export type ModelRecordMetadataField = "format" | "license" | "source" | "location";
@@ -213,13 +214,13 @@ export function modelRecordMetadataValue(model: ModelRecord, field: ModelRecordM
   const value = model.metadata[field];
   if (typeof value === "string" && value.trim()) return value.trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return "Not reported";
+  return translate("Not reported");
 }
 
 export function modelDuplicateGroupLabel(group: ModelDuplicateGroup, models: ModelRecord[]): string {
   const labels = group.modelIds.map((modelId) => {
     const model = models.find((candidate) => candidate.modelId === modelId);
-    return model ? `${model.name} · ${modelRecordQuantizationLabel(model)}` : modelId;
+    return model ? `${model.name} · ${modelRecordQuantizationLabel(model)}` : translate("Model");
   });
   return labels.length > 0 ? labels.join(" · ") : "No model records";
 }
@@ -227,7 +228,7 @@ export function modelDuplicateGroupLabel(group: ModelDuplicateGroup, models: Mod
 export function modelDuplicateEvidenceLabel(group: ModelDuplicateGroup): string {
   if (group.contentHash) return `SHA-256 ${group.contentHash.slice(0, 12)}…`;
   if (group.digest) return `Digest ${group.digest.slice(0, 12)}…`;
-  return "Metadata match only";
+  return translate("Metadata match only");
 }
 
 export function filterModelCatalog(catalog: ModelCatalog, query: string): ModelRecord[] {
@@ -250,11 +251,11 @@ export function isActiveModelOperation(operation: ModelOperation): boolean {
 }
 
 export function modelOperationStatusLabel(status: ModelOperation["status"]): string {
-  if (status === "queued") return "Queued";
-  if (status === "running") return "Running";
-  if (status === "completed") return "Completed";
-  if (status === "cancelled") return "Cancelled";
-  return "Failed";
+  if (status === "queued") return translate("Queued");
+  if (status === "running") return translate("Running");
+  if (status === "completed") return translate("Completed");
+  if (status === "cancelled") return translate("Cancelled");
+  return translate("Failed");
 }
 
 export function modelOperationProgressLabel(operation: ModelOperation): string {
@@ -262,7 +263,7 @@ export function modelOperationProgressLabel(operation: ModelOperation): string {
     return `${Math.max(0, Math.min(100, Math.round(operation.progressPercent)))}%`;
   }
   if (operation.bytesTotal !== null && operation.bytesTotal > 0) {
-    return `${operation.bytesCompleted} / ${operation.bytesTotal} bytes`;
+    return `${formatLocaleNumber(operation.bytesCompleted)} / ${formatLocaleNumber(operation.bytesTotal)} bytes`;
   }
   return modelOperationStatusLabel(operation.status);
 }

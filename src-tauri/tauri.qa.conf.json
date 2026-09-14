@@ -1,0 +1,10 @@
+{
+  "version": "0.1.4+qa.5",
+  "bundle": {
+    "windows": {
+      "wix": {
+        "version": "0.1.4.5"
+      }
+    }
+  }
+}
