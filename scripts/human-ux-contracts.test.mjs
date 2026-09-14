@@ -15,7 +15,7 @@ describe("human UX regressions", () => {
         if (!Object.hasOwn(PT_BR_MESSAGES, value) && !technical.has(value)) missing.push(`${file}: ${value}`);
       }
       function visit(node) {
-        if (ts.isCallExpression(node) && node.expression.getText(source) === "translate" && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) check(node.arguments[0].text);
+        if (ts.isCallExpression(node) && ["translate", "formatMessage"].includes(node.expression.getText(source)) && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) check(node.arguments[0].text);
         if (ts.isJsxAttribute(node) && ["label", "description", "detail", "title", "actionLabel"].includes(node.name.getText(source)) && node.initializer && ts.isStringLiteral(node.initializer)) check(node.initializer.text);
         ts.forEachChild(node, visit);
       }

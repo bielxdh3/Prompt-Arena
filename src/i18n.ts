@@ -1266,6 +1266,12 @@ const PT_BR_MESSAGES_EXTRA = {
 };
 
 const HUMAN_UX_MESSAGES = {
+  "Draft saved at revision {revision}.": "Rascunho salvo. Versão {revision}.",
+  "Loaded revision {revision}.": "Versão {revision} carregada.",
+  "{completed}/{total} samples completed": "{completed}/{total} amostras concluídas",
+  "{failed} failed · {cancelled} cancelled": "{failed} com falha · {cancelled} canceladas",
+  "{completed} / {total} samples": "{completed} / {total} amostras",
+  "{count} verified responses are unavailable.": "{count} respostas verificadas estão indisponíveis.",
   "Unknown": "Desconhecido",
   "Metadata not reported": "Metadados não informados",
   "Quantization not reported": "Quantização não informada",
@@ -1435,6 +1441,13 @@ let activeLocale: AppLocale = "en";
 
 export function translate(message: string): string {
   return translateText(activeLocale, message);
+}
+
+export function formatMessage(message: string, values: Record<string, string | number>): string {
+  return translate(message).replace(/\{([a-zA-Z]+)\}/g, (placeholder, key: string) => {
+    const value = values[key];
+    return typeof value === "number" ? formatLocaleNumber(value) : value ?? placeholder;
+  });
 }
 
 export function setActiveLocale(locale: AppLocale): void {

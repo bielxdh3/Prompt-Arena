@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { displayName, numberedName, profileDisplayName } from "./display-names";
-import { formatLocaleDate, setActiveLocale } from "./i18n";
+import { formatLocaleDate, formatMessage, setActiveLocale } from "./i18n";
 import { attemptStatusLabel, attemptStatusTone, formatCount } from "./results-ui";
 import { HumanError } from "./human-error";
 
@@ -28,6 +28,7 @@ describe("human display identity", () => {
     expect(attemptStatusTone("completed")).toBe("success");
     expect(attemptStatusTone("failed")).toBe("failure");
     expect(formatCount(1234)).toBe("1.234");
+    expect(formatMessage("{completed}/{total} samples completed", { completed: 1200, total: 1400 })).toBe("1.200/1.400 amostras concluídas");
     expect(attemptStatusLabel("internal_state_v9")).toBe("Desconhecido");
     expect(formatLocaleDate("1789353240")).toBe(formatLocaleDate(1789353240000));
     expect(formatLocaleDate("invalid timestamp")).toBe("Não registrado");

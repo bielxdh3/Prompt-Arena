@@ -21,6 +21,5 @@ async (page) => {
    }
   }
  }
- console.log(JSON.stringify(results));
+ return results;
 }
-

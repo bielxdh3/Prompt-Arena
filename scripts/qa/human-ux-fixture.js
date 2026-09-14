@@ -20,4 +20,3 @@ async (page) => {
   });
   await page.goto('http://localhost:1422');
 }
-
