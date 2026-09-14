@@ -21,6 +21,8 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - Repository boundary check and boundary fixtures passed.
 - npm production audit: zero vulnerabilities. Full audit: two moderate findings in the development-only Vitest/mocker chain. No forced major upgrade was applied.
 - Browser fixture: Insights containment and absence of UUIDs in headings/listbox labels checked in English and PT-BR, neutral/warm/Paper, at 960 and 1280 pixels. Fixture data is synthetic and never exercises real generation.
+- Browser navigation fixture: all eight main screens passed title/selector UUID, replacement-character, and horizontal-overflow assertions in both languages at 960x720 with 115% font scale and motion preferences 0/100/200 (48 combinations). Screenshots finish finite animations for inspection; this does not verify animation behavior itself or populated result workflows. The PT-BR history screenshot was visually inspected.
+- PR #57 is a dedicated open draft stacked on P7. Linux and Windows CI passed for `b69b4e9b`; later commits require fresh remote checks.
 - Windows PE inspection: packaged application declares subsystem 2 (GUI).
 - MSI packaging succeeds using the repository's existing duplicate-worker WiX correction; WiX ICE warnings remain.
 
@@ -33,7 +35,7 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - Installation currently fails with Windows Installer Error 1730: removing the earlier per-machine installation requires Administrator. The installation was preserved.
 - Computer Use was stopped by the owner's physical Escape key. Do not count the observed older installed application as the repaired binary: its hash differed.
 - LM Studio/llama.cpp live smoke and Windows DPI checks remain unverified.
-- Remote CI not yet confirmed. No merge, tag, release, deployment, force-push, or legacy-PR closure is authorized by this ledger.
+- No merge, tag, release, deployment, force-push, or legacy-PR closure is authorized by this ledger.
 
 ## Repeatable browser checks
 
