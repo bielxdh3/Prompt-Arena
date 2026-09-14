@@ -1,6 +1,6 @@
 import { formatMessage } from "./i18n";
 import { TechnicalDetails } from "./technical-details";
-import { HumanError } from "./human-error";
+import { HumanError, FormFeedback } from "./human-error";
 import { displayName, numberedName, profileDisplayName } from "./display-names";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
@@ -868,10 +868,10 @@ function BenchmarksView() {
     setBusy(true);
     try {
       const { documentJson } = buildDocument();
-      const summary = await validateBenchmarkDocument(documentJson);
+      await validateBenchmarkDocument(documentJson);
       setFeedback({
         kind: "success",
-        message: `Valid benchmark-v1 document: ${summary.versionId} · ${summary.contentHash.slice(0, 12)}…`,
+        message: translate("Benchmark validated successfully."),
       });
     } catch (error: unknown) {
       setFeedback({
@@ -899,11 +899,11 @@ function BenchmarksView() {
     setBusy(true);
     try {
       const { documentJson } = buildDocument();
-      const validation = await validateBenchmarkDocument(documentJson);
-      const published = await publishBenchmarkDraft(form.draftId);
+      await validateBenchmarkDocument(documentJson);
+      await publishBenchmarkDraft(form.draftId);
       setFeedback({
         kind: "success",
-        message: `Published immutable ${published.summary.versionId} after validation (${validation.contentHash.slice(0, 12)}…).`,
+        message: translate("Benchmark published. It is ready to use."),
       });
       await refreshRecords();
     } catch (error: unknown) {
@@ -1071,7 +1071,7 @@ function BenchmarksView() {
             </div>
             <span className="section-index">05</span>
           </div>
-          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          {feedback && <FormFeedback kind={feedback.kind} message={feedback.message} />}
           <fieldset className="form-section">
             <legend>{translate("Pack")}</legend>
             <div className="form-grid form-grid-three">
@@ -1490,7 +1490,7 @@ function ModelsView() {
     setOperationAction(request.operationId);
     try {
       const operation = await startModelOperation(request);
-      const subject = operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model";
+      const subject = displayName(operation.modelName, "Model");
       setFeedback({
         kind: operation.status === "completed" ? "success" : operation.status === "cancelled" ? "info" : "error",
         message: `${subject}: ${modelOperationStatusLabel(operation.status).toLowerCase()}.`,
@@ -1525,7 +1525,7 @@ function ModelsView() {
   function handleUseModel(model: ModelRecord) {
     setSelectedProfileModelId(model.modelId);
     setForm((current) => ({ ...current, model: model.name }));
-    setFeedback({ kind: "info", message: `${model.name}: selected for profile.` });
+    setFeedback({ kind: "info", message: formatMessage("{model} selected for configuration.", { model: model.name }) });
   }
 
   function handleRetry(model: ModelRecord, operation: ModelOperation) {
@@ -1555,7 +1555,7 @@ function ModelsView() {
 
   function handleRemove(model: ModelRecord) {
     if (!desktop || !window.confirm(
-      `Remove "${model.name}" from the app-managed model root? This deletes only the managed GGUF and records its SHA-256 audit evidence.`,
+      formatMessage('Remove "{model}"? This deletes its app-managed GGUF file. The deletion remains recorded in technical details.', { model: model.name }),
     )) return;
     try {
       void launchOperation(buildRemoveModelOperationRequest(nextOperationId("remove"), model));
@@ -1680,8 +1680,8 @@ function ModelsView() {
         kind: "success",
         message:
           result.saveOutcome === "already_present"
-            ? `Immutable ${result.profileRevisionId} is already registered.`
-            : `Registered immutable ${result.profileRevisionId}.`,
+            ? translate("This model configuration is already saved.")
+            : translate("Model configuration saved."),
       });
       await refreshProfiles();
     } catch (error: unknown) {
@@ -1963,7 +1963,7 @@ function ModelsView() {
             </div>
             <span className="section-index">06</span>
           </div>
-          {feedback && <p className={`form-feedback form-feedback-${feedback.kind}`} role={feedback.kind === "error" ? "alert" : "status"}>{feedback.message}</p>}
+          {feedback && <FormFeedback kind={feedback.kind} message={feedback.message} />}
           <div className="profile-form form-section">
             <FormInput id="profile-id" label="Profile ID" value={form.profileId} onChange={(value) => updateField("profileId", value)} />
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
@@ -2937,7 +2937,7 @@ function ArenaExecutionMonitor({
       {active && (
         <div className="arena-live-current">
           <p className="eyebrow">{translate("Current sample")}</p>
-          <strong>{blind ? "" : `${arenaTelemetryLabel(active, false)} · `} {translate("Sample")} {activeDisplay.currentSampleNumber ?? active.sampleIndex + 1}/{activeDisplay.totalSamples}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · Repetition ${activeDisplay.repetitionNumber}/${activeDisplay.repetitionsPerCompetitor}` : ""}</strong>
+          <strong>{blind ? "" : `${arenaTelemetryLabel(active, false)} · `} {translate("Sample")} {activeDisplay.currentSampleNumber ?? active.sampleIndex + 1}/{activeDisplay.totalSamples}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · ${translate("Repetition")} ${formatLocaleNumber(activeDisplay.repetitionNumber)}/${formatLocaleNumber(activeDisplay.repetitionsPerCompetitor)}` : ""}</strong>
           <span>{active.status} · {blind ? translate("Elapsed hidden during blind execution") : formatArenaMs(active.elapsedMs)}</span>
           {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
         </div>
@@ -2970,14 +2970,14 @@ function ArenaExecutionMonitor({
 }
 
 function formatArenaMs(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? "Unavailable" : formatDurationNs(value * 1_000_000);
+  return value === null || !Number.isFinite(value) ? translate("Unavailable") : formatDurationNs(value * 1_000_000);
 }
 
 function formatArenaMetrics(metrics: ReturnType<typeof visibleArenaTelemetryMetrics>): string {
   const values = [
-    metrics.tokensPerSecond === null ? "tokens/s unavailable" : `${metrics.tokensPerSecond.toFixed(1)} tok/s`,
-    metrics.completionTokens === null ? "output unavailable" : `${metrics.completionTokens} output tokens`,
-    metrics.ttftMs === null ? "TTFT unavailable" : `TTFT ${formatArenaMs(metrics.ttftMs)}`,
+    metrics.tokensPerSecond === null ? translate("Tokens/s unavailable") : `${formatLocaleNumber(metrics.tokensPerSecond, undefined, { maximumFractionDigits: 1 })} tok/s`,
+    metrics.completionTokens === null ? translate("Output unavailable") : formatMessage("{count} output tokens", { count: metrics.completionTokens }),
+    metrics.ttftMs === null ? translate("Time to first token unavailable") : `${translate("Time to first token")} ${formatArenaMs(metrics.ttftMs)}`,
   ];
   return values.join(" · ");
 }
@@ -3081,7 +3081,7 @@ function ArenaResultsSurface({
       ) : (
         <>
           <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Comparison")}</p><h4>{translate("Responses by competitor")}</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>{translate("Blind evaluate")}</button><button className="text-button" type="button" onClick={onOpenRuns}>{translate("Open history →")}</button></div></div>
-          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Competitor")}</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} {translate("sample")}{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution ? attemptStatusLabel(item.execution.attempt.status) : translate(item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · objective ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? `· ${item.error}` : ""}</li>; })}</ul></article>; })}</div>
+          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Competitor")}</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} {translate("sample")}{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution ? attemptStatusLabel(item.execution.attempt.status) : translate(item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("Objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? <HumanError summary="Sample failed" detail={item.error} /> : null}</li>; })}</ul></article>; })}</div>
           {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? formatMessage("{score}/5 average", { score: formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }) : formatMessage("{rate}% objective pass rate", { rate: Math.round(entry.value * 100) })}{" · "}{formatMessage("{count} samples", { count: entry.sampleSize })}</span></li>)}</ol></div>}
           {revealed && lockState === "locked" && <p className="field-help" role="status">{translate("Blind scores are locked in immutable per-run evaluation records. Responses are now identified.")}</p>}
            <div className="export-actions" role="group" aria-label={translate("Current Arena evidence exports")}><button className="secondary-button" type="button" onClick={() => download("json")}>{translate("Export JSON")}</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>{translate("Export Markdown")}</button><button className="secondary-button" type="button" onClick={() => download("csv")}>{translate("Export CSV")}</button></div>
@@ -3128,7 +3128,7 @@ function ArenaExecutionResult({
           <p className="eyebrow">{translate("Terminal outcome")}</p>
           <h3>{statusLabel}</h3>
         </div>
-        <span className={`run-status arena-status-${status}`}>{execution.attempt.status}</span>
+        <span className={`run-status arena-status-${status}`}>{attemptStatusLabel(execution.attempt.status)}</span>
       </div>
       <div className="arena-terminal-facts">
         <BoundaryRow label="Run ID" value={execution.run.runId} />
@@ -3559,7 +3559,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
     <div className="arena-summary-history-detail">
       <div className="results-facts">
         <BoundaryRow label="Arena" value={record.arenaId} />
-        <BoundaryRow label="Task / case" value={`${record.taskId} / ${record.caseId}`} />
+        <TechnicalDetails label={translate("Task / case")} value={`${record.taskId} / ${record.caseId}`} />
         <BoundaryRow label="Saved" value={formatDisplayTimestamp(record.createdAt)} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
         <BoundaryRow label="Samples" value={String(record.evidence.length)} />
@@ -3579,9 +3579,9 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
             {record.competitors.map((competitor, index) => (
               <li key={`${String(competitor.competitorId ?? index)}`}>
                 <strong>{displayName(competitor.competitorLabel, "Competitor", index + 1)}</strong>
-                {` · ${summaryNumberText(competitor, "completed")}/${summaryNumberText(competitor, "total")} completed`}
-                {` · uncertainty ${summaryMetricText(competitor, "uncertainty")}`}
-                {` · tie margin ${summaryMetricText(competitor, "tieMargin")}`}
+                {` · ${summaryNumberText(competitor, "completed")}/${summaryNumberText(competitor, "total")} ${translate("completed")}`}
+                {` · ${translate("Uncertainty")} ${summaryMetricText(competitor, "uncertainty")}`}
+                {` · ${translate("Tie margin")} ${summaryMetricText(competitor, "tieMargin")}`}
               </li>
             ))}
           </ul>
@@ -3658,7 +3658,7 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
         <BoundaryRow label="Benchmark version identity" value={dimensions.benchmarkVersionIdentity === "declared" ? "Declared" : "Missing"} />
         <BoundaryRow label="Terminal status" value={terminalStatus} />
         <BoundaryRow label="Profile/runtime/model" value={configuration} />
-        <BoundaryRow label="Completed attempts" value={`${dimensions.completedAttemptCount} of ${dimensions.attemptCount}`} />
+        <BoundaryRow label="Completed attempts" value={formatMessage("{completed} of {total}", { completed: dimensions.completedAttemptCount, total: dimensions.attemptCount })} />
         <BoundaryRow
           label="Objective exact-text evidence"
           value={`${dimensions.objectiveExactTextEvidence.availableCount} of ${dimensions.objectiveExactTextEvidence.requiredCount} available`}
@@ -4122,7 +4122,7 @@ function StorageRetentionControls({ desktop }: { desktop: boolean }) {
         expectedRecords: state.preview.eligibleRecords,
         confirmation,
       });
-      setNotice(`${result.deletedRecords.toLocaleString()} local history record${result.deletedRecords === 1 ? "" : "s"} removed. Protected source records and artifacts were retained.`);
+      setNotice(formatMessage("{count} history entries removed. Protected source data was retained.", { count: result.deletedRecords }));
       setConfirmation("");
       await refresh();
     } catch (error: unknown) {
@@ -4703,7 +4703,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
         costPolicy: policy.policy,
       });
       updateMetadata(next);
-      setNotice({ kind: "success", message: `${providerLabel(selectedProviderId)} configuration saved in OS secure storage.` });
+      setNotice({ kind: "success", message: formatMessage("{provider} configuration saved securely on this computer.", { provider: providerLabel(selectedProviderId) }) });
     } catch (error: unknown) {
       setNotice({ kind: "error", message: byokErrorMessage(error) });
     } finally {
@@ -4825,9 +4825,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
       <p className="provider-intro">{translate("Configure one of four supported provider adapters with a key you own. Desktop mode reads only redacted metadata from OS secure storage; provider calls happen only after you submit a form with explicit network consent.")}</p>
 
       {notice && (
-        <p className={`form-feedback form-feedback-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}>
-          {notice.message}
-        </p>
+        <FormFeedback kind={notice.kind} message={notice.message} />
       )}
 
       {metadataState.status === "loading" && (
@@ -5124,7 +5122,7 @@ function ByokGenerationSuccess({ result }: { result: ExternalGenerationResult })
         <BoundaryRow label="Provider model" value={result.providerModel} />
         <BoundaryRow label="Identity confidence" value={formatIdentityConfidence(result.identityConfidence)} />
         <BoundaryRow label="Network used" value={result.networkUsed ? "Yes · consented" : "No"} />
-        <BoundaryRow label="Usage" value={`${formatByokTokens(result.usage.inputTokens)} input · ${formatByokTokens(result.usage.outputTokens)} output · ${formatByokTokens(result.usage.totalTokens)} total`} />
+        <BoundaryRow label="Usage" value={formatMessage("{input} input · {output} output · {total} total", { input: formatByokTokens(result.usage.inputTokens), output: formatByokTokens(result.usage.outputTokens), total: formatByokTokens(result.usage.totalTokens) })} />
         <BoundaryRow label="Estimated cost" value={formatByokMoney(result.cost.estimated.totalCostUsd)} />
         <BoundaryRow label="Actual cost" value={formatByokMoney(result.cost.actual.totalCostUsd)} />
         <BoundaryRow label="Final decision" value={formatByokDecision(result.cost.finalDecision)} />
@@ -5154,11 +5152,11 @@ function ByokEvidenceHistoryEntry({ record }: { record: ExternalGenerationEviden
         <BoundaryRow label="Requested model" value={record.requestedModel} />
         <BoundaryRow label="Provider model" value={`${record.providerModel} · ${formatIdentityConfidence(record.identityConfidence)}`} />
         <BoundaryRow label="Network disclosure" value={record.networkUsed ? "Yes · external HTTPS call consented" : "No network used"} />
-        <BoundaryRow label="Usage" value={`${formatByokTokens(record.usage.inputTokens)} input · ${formatByokTokens(record.usage.outputTokens)} output · ${formatByokTokens(record.usage.totalTokens)} total`} />
+        <BoundaryRow label="Usage" value={formatMessage("{input} input · {output} output · {total} total", { input: formatByokTokens(record.usage.inputTokens), output: formatByokTokens(record.usage.outputTokens), total: formatByokTokens(record.usage.totalTokens) })} />
         <BoundaryRow label="Estimated cost" value={formatByokMoney(record.estimated.totalCostUsd)} />
         <BoundaryRow label="Actual cost" value={formatByokMoney(record.actual.totalCostUsd)} />
-        <BoundaryRow label="Budget decisions" value={`preflight ${formatByokDecision(record.preflightDecision)} · final ${formatByokDecision(record.finalDecision)}`} />
-        <BoundaryRow label="Price snapshot" value={`${record.priceSnapshot.modelId} · ${record.priceSnapshot.capturedOn} · ${record.priceSnapshot.currency} · ${formatByokMoney(record.priceSnapshot.inputUsdPerMillionTokens)} input / ${formatByokMoney(record.priceSnapshot.outputUsdPerMillionTokens)} output per 1M`} />
+        <BoundaryRow label="Budget decisions" value={`${translate("Before generation")}: ${formatByokDecision(record.preflightDecision)} · ${translate("Final decision")}: ${formatByokDecision(record.finalDecision)}`} />
+        <BoundaryRow label="Price snapshot" value={`${record.priceSnapshot.modelId} · ${formatDisplayTimestamp(record.priceSnapshot.capturedOn)} · ${record.priceSnapshot.currency} · ${formatMessage("{input} input / {output} output per million tokens", { input: formatByokMoney(record.priceSnapshot.inputUsdPerMillionTokens), output: formatByokMoney(record.priceSnapshot.outputUsdPerMillionTokens) })}`} />
         <BoundaryRow label="Created" value={record.createdAt} />
       </div>
     </article>

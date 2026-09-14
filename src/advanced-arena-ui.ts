@@ -1,3 +1,4 @@
+import { formatLocaleNumber, translate } from "./i18n";
 import type { AiJudgeScoreInput } from "./advanced-arena";
 
 const MAX_SCORE_INPUT_BYTES = 256 * 1024;
@@ -66,8 +67,8 @@ export function scoreLookupFromEntries(entries: readonly AiJudgeScoreInput[]): M
 }
 
 export function formatAdvancedValue(value: number | null, suffix = ""): string {
-  if (value === null || !Number.isFinite(value)) return "Insufficient data";
-  return `${value.toFixed(2)}${suffix}`;
+  if (value === null || !Number.isFinite(value)) return translate("Insufficient data");
+  return `${formatLocaleNumber(value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${suffix}`;
 }
 
 function byteLength(value: string): number {
