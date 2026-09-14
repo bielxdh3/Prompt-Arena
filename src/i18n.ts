@@ -1266,6 +1266,7 @@ const PT_BR_MESSAGES_EXTRA = {
 };
 
 const HUMAN_UX_MESSAGES = {
+  "The single-model benchmark could not be completed.": "Não foi possível concluir o benchmark deste modelo.",
   "{input} input · {output} output · {total} total": "{input} de entrada · {output} de saída · {total} no total",
   "Before generation": "Antes da geração",
   "{input} input / {output} output per million tokens": "{input} de entrada / {output} de saída por milhão de tokens",
