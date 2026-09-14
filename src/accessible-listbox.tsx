@@ -79,6 +79,7 @@ export function AccessibleListbox({
   const listboxId = `${id}-options`;
   const open = menuPhase === "opening" || menuPhase === "open";
   const menuMounted = menuPhase !== "closed";
+  const menuReadyForFocus = menuPhase === "open" && menuPosition !== null;
 
   useEffect(() => {
     setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1);
@@ -87,8 +88,10 @@ export function AccessibleListbox({
   useEffect(() => {
     // The opening portal is initially hidden until its viewport position is known.
     // Focus only after that phase, when the option can actually receive focus.
-    if (menuPhase === "open") optionRefs.current[activeIndex]?.focus();
-  }, [activeIndex, menuPhase]);
+    if (!menuReadyForFocus) return;
+    const frame = window.requestAnimationFrame(() => optionRefs.current[activeIndex]?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeIndex, menuReadyForFocus]);
 
   useEffect(() => {
     if (isDisabled) closeMenu({ focusTrigger: false });
