@@ -1,3 +1,6 @@
+import { TechnicalDetails } from "./technical-details";
+import { HumanError } from "./human-error";
+import { numberedName, displayName } from "./display-names";
 import { useEffect, useMemo, useState } from "react";
 import {
   isDesktopEnvironment,
@@ -498,7 +501,7 @@ export function AdvancedArenaView() {
                 label={translate("Summary for rankings and tournaments")}
                 value={selectedSummaryId}
                 onChange={setSelectedSummaryId}
-                options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: `${summary.benchmarkVersionId} · ${formatAdvancedTimestamp(summary.createdAt)}` }))}
+                options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: `${displayName(summary.benchmarkVersionId, "Benchmark")} · ${formatAdvancedTimestamp(summary.createdAt)}` }))}
                 placeholder={translate("Select an immutable summary")}
               />
               <div className="advanced-source-facts">
@@ -533,7 +536,7 @@ export function AdvancedArenaView() {
                     label={translate("Calibration result")}
                     value={selectedCalibrationResultId}
                     placeholder={translate("No saved result selected")}
-                    options={artifactHistory.calibrationResults.map((record) => ({ value: record.resultId, label: record.resultId, detail: formatAdvancedTimestamp(record.createdAt) }))}
+                    options={artifactHistory.calibrationResults.map((record) => ({ value: record.resultId, label: numberedName("Calibration", record.resultId, artifactHistory.calibrationResults.map((item) => item.resultId)), detail: formatAdvancedTimestamp(record.createdAt) }))}
                     onChange={setSelectedCalibrationResultId}
                   />
                   <button className="secondary-button" type="button" disabled={!selectedCalibrationResultId} onClick={reopenCalibrationResult}>{translate("Reopen calibration")}</button>
@@ -544,7 +547,7 @@ export function AdvancedArenaView() {
                     label={translate("Tournament result")}
                     value={selectedTournamentResultId}
                     placeholder={translate("No saved result selected")}
-                    options={artifactHistory.tournamentResults.map((record) => ({ value: record.tournamentId, label: record.tournamentId, detail: record.mode }))}
+                    options={artifactHistory.tournamentResults.map((record) => ({ value: record.tournamentId, label: numberedName("Tournament", record.tournamentId, artifactHistory.tournamentResults.map((item) => item.tournamentId)), detail: record.mode }))}
                     onChange={setSelectedTournamentResultId}
                   />
                   <button className="secondary-button" type="button" disabled={!selectedTournamentResultId} onClick={reopenTournamentResult}>{translate("Reopen tournament")}</button>
@@ -567,20 +570,20 @@ export function AdvancedArenaView() {
                   </div>
                   <span className="run-status run-status-neutral">{translate("Local only")}</span>
                 </div>
-                <p className="field-help">{translate("Use one execution key per line in the form")} <code>run-id:attempt-id=score</code>{translate(". Keys are shown in the evidence table below. Scores are bounded from 1 to 5.")}</p>
+                <p className="field-help">{translate("Use one execution key per line in the form")} <code>{"run-id:attempt-id=score"}</code>{translate(". Keys are shown in the evidence table below. Scores are bounded from 1 to 5.")}</p>
                 <div className="advanced-input-grid">
                   <label className="advanced-field" htmlFor="advanced-human-scores">
                     <span className="field-label">{translate("Human scores")}</span>
-                    <textarea className="advanced-textarea" id="advanced-human-scores" value={humanScoreText} onChange={(event) => setHumanScoreText(event.currentTarget.value)} placeholder="arena-run-1:attempt-1=4" spellCheck={false} />
+                    <textarea className="advanced-textarea" id="advanced-human-scores" value={humanScoreText} onChange={(event) => setHumanScoreText(event.currentTarget.value)} placeholder={"arena-run-1:attempt-1=4"} spellCheck={false} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-judge-id">
                     <span className="field-label">{translate("Frozen AI-judge ID")}</span>
-                    <input className="advanced-input" id="advanced-ai-judge-id" value={aiJudgeId} onChange={(event) => setAiJudgeId(event.currentTarget.value)} placeholder="local-judge-v1" />
+                    <input className="advanced-input" id="advanced-ai-judge-id" value={aiJudgeId} onChange={(event) => setAiJudgeId(event.currentTarget.value)} placeholder={"local-judge-v1"} />
                     <span className="field-help">{translate("Identity is stored with the calibration result; it never selects or contacts a service.")}</span>
                   </label>
                   <label className="advanced-field advanced-field-wide" htmlFor="advanced-ai-scores">
                     <span className="field-label">{translate("AI-judge scores · manual/offline only")}</span>
-                    <textarea className="advanced-textarea" id="advanced-ai-scores" value={aiJudgeScoreText} onChange={(event) => setAiJudgeScoreText(event.currentTarget.value)} placeholder="arena-run-1:attempt-1=3.5" spellCheck={false} />
+                    <textarea className="advanced-textarea" id="advanced-ai-scores" value={aiJudgeScoreText} onChange={(event) => setAiJudgeScoreText(event.currentTarget.value)} placeholder={"arena-run-1:attempt-1=3.5"} spellCheck={false} />
                   </label>
                   <label className="advanced-field" htmlFor="advanced-ai-judge-version">
                     <span className="field-label">{translate("Judge version")}</span>
@@ -611,7 +614,7 @@ export function AdvancedArenaView() {
                   {aiJudgePanelSize !== "none" && (
                     <label className="advanced-field" htmlFor="advanced-ai-judge-panel-ids">
                       <span className="field-label">{translate("Panel judge IDs")}</span>
-                      <input className="advanced-input" id="advanced-ai-judge-panel-ids" value={aiJudgePanelIds} onChange={(event) => setAiJudgePanelIds(event.currentTarget.value)} placeholder="judge-a, judge-b, judge-c" />
+                      <input className="advanced-input" id="advanced-ai-judge-panel-ids" value={aiJudgePanelIds} onChange={(event) => setAiJudgePanelIds(event.currentTarget.value)} placeholder={"judge-a, judge-b, judge-c"} />
                       <span className="field-help">{translate("Enter exactly")} {aiJudgePanelSize} {translate("unique IDs. The panel is metadata only.")}</span>
                     </label>
                   )}
@@ -666,8 +669,8 @@ export function AdvancedArenaView() {
                   <span className="run-status run-status-neutral">{translate("Descriptive deltas")}</span>
                 </div>
                 <div className="advanced-selection-grid advanced-regression-controls">
-                  <AdvancedSelect id="advanced-baseline" label={translate("Baseline summary")} value={baselineId} onChange={setBaselineId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select baseline")} />
-                  <AdvancedSelect id="advanced-candidate" label={translate("Candidate summary")} value={candidateId} onChange={setCandidateId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: summary.arenaId, detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select candidate")} />
+                  <AdvancedSelect id="advanced-baseline" label={translate("Baseline summary")} value={baselineId} onChange={setBaselineId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select baseline")} />
+                  <AdvancedSelect id="advanced-candidate" label={translate("Candidate summary")} value={candidateId} onChange={setCandidateId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select candidate")} />
                   <AdvancedSelect id="advanced-regression-competitor" label={translate("Competitor scope")} value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: competitor.competitorLabel, detail: competitor.competitorId }))} placeholder={translate("All competitors")} />
                 </div>
                 <label className="advanced-checkbox" htmlFor="advanced-regression-human">
@@ -693,7 +696,7 @@ export function AdvancedArenaView() {
                     className="advanced-field"
                     label={translate("Mode")}
                     value={tournamentMode}
-                    placeholder="1v1"
+                    placeholder={"1v1"}
                     options={[
                       { value: "1v1", label: "1v1" },
                       { value: "blind_ranking", label: translate("Blind ranking") },
@@ -744,7 +747,7 @@ export function AdvancedArenaView() {
                 {tournamentMode === "blind_ranking" && (
                   <label className="advanced-field advanced-field-wide" htmlFor="advanced-blind-ranking">
                     <span className="field-label">{translate("Blind rank groups")}</span>
-                    <textarea className="advanced-textarea" id="advanced-blind-ranking" value={blindRankingText} onChange={(event) => setBlindRankingText(event.currentTarget.value)} placeholder="competitor-a@1, competitor-b@1&#10;competitor-c@1" spellCheck={false} />
+                    <textarea className="advanced-textarea" id="advanced-blind-ranking" value={blindRankingText} onChange={(event) => setBlindRankingText(event.currentTarget.value)} placeholder={"competitor-a@1, competitor-b@1&#10;competitor-c@1"} spellCheck={false} />
                     <span className="field-help">{translate("One rank group per line; separate ties with commas. Include every selected competitor exactly once. IDs remain visible to the local operator but no score is inferred.")}</span>
                   </label>
                 )}
@@ -770,7 +773,7 @@ export function AdvancedArenaView() {
                     <p className="eyebrow">{translate("Calibration and disagreement")}</p>
                     <h3 id="advanced-calibration-heading">{translate("Check manual judge agreement")}</h3>
                   </div>
-                  <span className={`run-status ${calibration.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{translate(calibration.status === "ready" ? "Ready" : "Insufficient data")}</span>
+                  <span className={`run-status ${calibration.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{translate(calibration.status === "ready" ? translate("Ready") : translate("Insufficient data"))}</span>
                 </div>
                 <div className="metric-grid advanced-metric-grid">
                   <AdvancedMetric label={translate("Agreement rate")} value={calibration.agreementRate === null ? translate("Insufficient data") : formatLocalePercent(calibration.agreementRate)} detail={`${formatLocaleNumber(calibration.agreementCount)} ${translate("agree")} · ${formatLocaleNumber(calibration.disagreementCount)} ${translate("disagree")}`} />
@@ -784,7 +787,7 @@ export function AdvancedArenaView() {
                     <ul className="advanced-id-list">{calibration.disagreementSampleIds.map((sampleId) => <li key={sampleId}><code>{sampleId}</code></li>)}</ul>
                   </div>
                 ) : (
-                  <p className="field-help">{translate(calibration.status === "ready" ? "No samples exceed the configured agreement tolerance of 1 point." : "Enter matching human and AI-judge score keys to calculate agreement, MAE, bias, and disagreement samples.")}</p>
+                  <p className="field-help">{translate(calibration.status === "ready" ? translate("No samples exceed the configured agreement tolerance of 1 point.") : translate("Enter matching human and AI-judge score keys to calculate agreement, MAE, bias, and disagreement samples."))}</p>
                 )}
               </section>
 
@@ -794,7 +797,7 @@ export function AdvancedArenaView() {
                     <p className="eyebrow">{translate("Evidence keys")}</p>
                     <h3 id="advanced-evidence-heading">{translate("Local samples available for scoring")}</h3>
                   </div>
-                  <span className="run-status run-status-neutral">n={formatLocaleNumber(evidenceState.samples.length)}</span>
+                  <span className="run-status run-status-neutral">{"n="}{formatLocaleNumber(evidenceState.samples.length)}</span>
                 </div>
                 {evidenceState.samples.length === 0 ? <AdvancedEmptyState title={translate("No usable evidence samples")} description={translate("This immutable summary has no bounded evidence rows for ranking or score entry.")} /> : <EvidenceTable samples={evidenceState.samples} />}
               </section>
@@ -930,9 +933,9 @@ function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
           <p className="eyebrow">{translate(ranking.category)}</p>
           <h4 id={titleId}>{translate(ranking.label)}</h4>
         </div>
-        <span className={`run-status ${ranking.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{translate(ranking.status === "ready" ? "Ready" : "Insufficient")}</span>
+        <span className={`run-status ${ranking.status === "ready" ? "arena-status-success" : "run-status-neutral"}`}>{translate(ranking.status === "ready" ? translate("Ready") : translate("Insufficient"))}</span>
       </div>
-      <p className="field-help">{translate("Direction:")} <strong>{translate(ranking.direction === "higher_is_better" ? "higher is better" : "lower is better")}</strong></p>
+      <p className="field-help">{translate("Direction:")} <strong>{translate(ranking.direction === "higher_is_better" ? translate("higher is better") : translate("lower is better"))}</strong></p>
       {ranking.entries.length === 0 ? (
         <p className="field-help">{translate("No usable samples are available for this metric.")}</p>
       ) : (
@@ -941,7 +944,7 @@ function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
             <li key={entry.competitorId}>
               <div>
                 <strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {entry.competitorLabel}</strong>
-                <span>{formatRankingValue(entry.metric, entry.value)} · n={formatLocaleNumber(entry.sampleSize)}</span>
+                <span>{formatRankingValue(entry.metric, entry.value)}{"· n="}{formatLocaleNumber(entry.sampleSize)}</span>
               </div>
               {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ") || translate("selected peers")}; {translate("margin")} {formatRankingValue(entry.metric, entry.tieMargin)}</small>}
             </li>
@@ -968,9 +971,9 @@ function RegressionResults({ comparison }: { comparison: ArenaRegressionComparis
           <tbody>
             {comparison.metrics.map((metric) => (
               <tr key={metric.metric}>
-                <th scope="row">{translate(metric.label)}<small>{translate(metric.direction === "higher_is_better" ? "Higher is better" : "Lower is better")}</small></th>
-                <td>{formatRegressionSample(metric.metric, metric.baselineValue)}<small>n={formatLocaleNumber(metric.baselineSampleSize)}</small></td>
-                <td>{formatRegressionSample(metric.metric, metric.candidateValue)}<small>n={formatLocaleNumber(metric.candidateSampleSize)}</small></td>
+                <th scope="row">{translate(metric.label)}<small>{translate(metric.direction === "higher_is_better" ? translate("Higher is better") : translate("Lower is better"))}</small></th>
+                <td>{formatRegressionSample(metric.metric, metric.baselineValue)}<small>{"n="}{formatLocaleNumber(metric.baselineSampleSize)}</small></td>
+                <td>{formatRegressionSample(metric.metric, metric.candidateValue)}<small>{"n="}{formatLocaleNumber(metric.candidateSampleSize)}</small></td>
                 <td>{metric.delta === null ? "—" : formatRegressionSample(metric.metric, metric.delta, true)}</td>
                 <td><span className={`advanced-assessment advanced-assessment-${metric.assessment}`}>{assessmentLabel(metric.assessment)}</span></td>
               </tr>
@@ -1113,8 +1116,8 @@ function EvidenceTable({ samples }: { samples: readonly ArenaEvidenceSample[] })
         <tbody>
           {samples.map((sample) => (
             <tr key={`${sample.runId}:${sample.attemptId ?? ""}:${sample.repetition}`}>
-              <th scope="row"><code>{`${sample.runId}:${sample.attemptId ?? ""}`}</code><small>{translate("repetition")} {sample.repetition}</small></th>
-              <td>{sample.competitorLabel}<small>{sample.competitorId}</small></td>
+              <th scope="row">{numberedName("Run", sample.runId, samples.map((item) => item.runId))}<TechnicalDetails value={`${sample.runId}:${sample.attemptId ?? ""}`} /><small>{translate("repetition")} {sample.repetition}</small></th>
+              <td>{displayName(sample.competitorLabel, "Competitor")}<TechnicalDetails value={sample.competitorId} /></td>
               <td>{translate(sample.status)}</td>
               <td>{sample.durationMs === null ? "—" : formatLocaleDuration(sample.durationMs)}</td>
               <td>{sample.tokensPerSecond === null ? "—" : formatLocaleNumber(sample.tokensPerSecond, undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>
@@ -1132,6 +1135,7 @@ function AdvancedMetric({ label, value, detail }: { label: string; value: string
 }
 
 function AdvancedBoundary({ label, value }: { label: string; value: string }) {
+  if (/\bID\b|hash/i.test(label) || /[0-9a-f]{8}-[0-9a-f]{4}-/i.test(value)) return <TechnicalDetails label={label} value={value} />;
   return <div className="boundary-row"><span>{translate(label)}</span><strong>{value}</strong></div>;
 }
 
@@ -1139,7 +1143,7 @@ function AdvancedStateMessage({ icon, title, description, error = false }: { ico
   return (
     <div className="state-panel">
       <span className={`state-icon ${error ? "state-icon-error" : "state-icon-loading"}`} aria-hidden="true">{icon}</span>
-      <div className="state-copy"><h3>{translate(title)}</h3><p>{translate(description)}</p></div>
+      <div className="state-copy"><h3>{translate(title)}</h3>{error ? <HumanError summary={title} detail={description} /> : <p>{translate(description)}</p>}</div>
     </div>
   );
 }
@@ -1149,9 +1153,7 @@ function AdvancedEmptyState({ title, description }: { title: string; description
 }
 
 function formatAdvancedTimestamp(value: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}T/iu.test(value)) return value;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? formatLocaleDate(timestamp) : value;
+  return formatLocaleDate(value);
 }
 
 function formatRankingValue(metric: AdvancedArenaMetric, value: number | null): string {
