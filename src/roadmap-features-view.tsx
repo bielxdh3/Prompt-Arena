@@ -27,6 +27,7 @@ import {
 import { buildPerformanceRecord, performanceEvidenceFromExecution } from "./performance-lab";
 import { compareHistoricalRuns, type HistoricalRegression } from "./historical-regression";
 import { computeEloRatings, ratingOutcomesFromArenaSummaries, type RatingSet } from "./model-ratings";
+import { generatePerturbations, scoreRobustness, type PerturbationType } from "./robustness-arena";
 
 type SurfaceState =
   | { status: "loading" }
@@ -60,6 +61,7 @@ export function RoadmapFeaturesView() {
   const [baselineId, setBaselineId] = useState("");
   const [candidateId, setCandidateId] = useState("");
   const [regression, setRegression] = useState<HistoricalRegression | null>(null);
+  const [perturbations, setPerturbations] = useState<Array<ReturnType<typeof generatePerturbations>[number] & { passed: boolean | null; runId?: string; attemptId?: string }>>([]);
 
   async function refresh() {
     if (!isDesktopEnvironment()) {
@@ -148,6 +150,56 @@ export function RoadmapFeaturesView() {
       await refresh();
     } catch (error: unknown) {
       setNotice(error instanceof Error ? error.message : "Ratings could not be saved.");
+    }
+  }
+
+  async function generateRobustness() {
+    if (!version || !document || !profileId) {
+      setNotice("Choose a benchmark and immutable model profile first.");
+      return;
+    }
+    const task = document.tasks.find((item) => item.taskId === taskId);
+    const sourceCase = task?.cases.find((item) => item.caseId === caseId);
+    const profile = state.status === "ready" ? state.profiles.find((item) => item.profileRevisionId === profileId) : undefined;
+    if (!task || !sourceCase || !profile) {
+      setNotice("The selected immutable task, case, or profile is unavailable.");
+      return;
+    }
+    const sourcePrompt = [task.prompt, sourceCase.prompt ?? null].filter(Boolean).join("\n\n");
+    const variants = generatePerturbations(sourcePrompt, sourceCase.expected, version.summary.versionId, 1, ["paraphrase", "instruction_reorder", "formatting_variation", "concise_wording", "verbose_wording", "irrelevant_noise"] as PerturbationType[]);
+    setBusy(true);
+    setNotice(null);
+    try {
+      const basePlan = buildRunPlan({ runId: newId("robust-base"), version, taskId, caseId, profileRevision: profile, metadata: { mode: "robustness_arena", variant: "base", featureVersion: 1 } });
+      if (basePlan.executionBoundary.status !== "available") throw new Error(basePlan.executionBoundary.reason ?? "The selected case is unavailable in this environment.");
+      const baseExecution = await executeRunOnce(basePlan);
+      const basePayload = buildSingleModelBenchmarkPayload({ run: baseExecution.run, attempt: baseExecution.attempt, profile, execution: baseExecution, performance: performanceEvidenceFromExecution(baseExecution), benchmarkVersionId: version.summary.versionId, taskId, caseId });
+      await saveRoadmapRecord(singleModelRecord(basePayload));
+      await saveRoadmapRecord(buildPerformanceRecord(basePayload));
+      const outcomes: Array<(typeof variants)[number] & { passed: boolean | null; runId?: string; attemptId?: string }> = [];
+      for (const variant of variants) {
+        const runId = newId("robust");
+        const plan = buildRunPlan({ runId, version, taskId, caseId, profileRevision: profile, promptOverride: variant.prompt, metadata: { mode: "robustness_arena", variantId: variant.perturbationId, featureVersion: 1 } });
+        if (plan.executionBoundary.status !== "available") {
+          outcomes.push({ ...variant, passed: null });
+          continue;
+        }
+        const execution = await executeRunOnce(plan);
+        const payload = buildSingleModelBenchmarkPayload({ run: execution.run, attempt: execution.attempt, profile, execution, performance: performanceEvidenceFromExecution(execution), benchmarkVersionId: version.summary.versionId, taskId, caseId });
+        await saveRoadmapRecord(singleModelRecord(payload));
+        await saveRoadmapRecord(buildPerformanceRecord(payload));
+        outcomes.push({ ...variant, passed: payload.objective?.passed === true ? true : payload.objective?.passed === false ? false : null, runId, attemptId: execution.attempt.attemptId });
+      }
+      const result = scoreRobustness(basePayload.objective?.passed === true ? true : basePayload.objective?.passed === false ? false : null, outcomes);
+      await saveRoadmapRecord({ recordId: `robustness-${version.summary.versionId}-${taskId}-${caseId}`, kind: "robustness_arena", payload: result as unknown as Record<string, unknown> });
+      setSingle(basePayload);
+      setPerturbations(outcomes);
+      setNotice("Robustness variants executed with the same immutable profile and expected-answer contract.");
+      await refresh();
+    } catch (error: unknown) {
+      setNotice(error instanceof Error ? error.message : "The robustness run could not be completed.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -311,6 +363,13 @@ export function RoadmapFeaturesView() {
         <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #39</p><h3 id="model-ratings-heading">Persistent model ratings</h3></div><span className="section-index">39</span></div>
         <p className="field-help">Ratings use only comparable immutable Arena outcomes, are deterministic for the same evidence, and retain category and uncertainty.</p>
         {ratings ? <><div className="roadmap-table"><table><thead><tr><th>Model</th><th>Category</th><th>Rating</th><th>Samples</th><th>Uncertainty</th></tr></thead><tbody>{ratings.ratings.map((rating) => <tr key={`${rating.category ?? ""}:${rating.competitorId}`}><td>{rating.competitorId}</td><td>{rating.category ?? "All"}</td><td>{rating.rating.toFixed(2)}</td><td>{rating.sampleCount}</td><td>±{rating.uncertainty.toFixed(2)}</td></tr>)}</tbody></table></div><button className="secondary-button" type="button" onClick={() => void persistRatings()}>Persist ratings</button></> : <StateMessage title="No eligible head-to-head evidence" description="Ratings remain empty until comparable immutable Arena outcomes exist." />}
+      </section>
+
+      <section className="panel" aria-labelledby="robustness-arena-heading">
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #40</p><h3 id="robustness-arena-heading">Robustness Arena</h3></div><span className="section-index">40</span></div>
+        <p className="field-help">Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.</p>
+        <button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>Run robustness variants</button>
+        {perturbations.length > 0 && <ul className="roadmap-list">{perturbations.map((variant) => <li key={variant.perturbationId}><strong>{variant.transformationType}</strong><span>{variant.provenance} · {variant.passed === null ? "Unavailable" : variant.passed ? "Pass" : "Fail"}</span></li>)}</ul>}
       </section>
     </div>
   );
