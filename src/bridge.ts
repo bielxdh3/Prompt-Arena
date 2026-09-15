@@ -318,8 +318,13 @@ export type ArenaExecutionEvidence = {
   attemptId: string | null;
   status: string;
   durationMs: number | null;
+  loadDurationMs?: number | null;
+  generationDurationMs?: number | null;
+  ttftMs?: number | null;
+  promptTokens?: number | null;
   tokensPerSecond?: number | null;
   completionTokens: number | null;
+  totalTokens?: number | null;
   objectivePassed: boolean | null;
 };
 
@@ -331,6 +336,7 @@ export type ArenaSummaryPayload = {
   repetitions: number;
   packId: string | null;
   materializationSeed: number | null;
+  arenaWallTimeMs?: number | null;
   summary: Record<string, unknown>;
   competitors: Array<Record<string, unknown>>;
   evidence: ArenaExecutionEvidence[];
