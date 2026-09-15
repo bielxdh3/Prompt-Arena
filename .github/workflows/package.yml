@@ -1,18 +1,35 @@
-name: QA 0.1.4.5 package handoff
+name: Desktop packages
 
 on:
-  push:
-    branches: [qa/package-0.1.4.5-download]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact commit, branch, or tag to package
+        required: true
+        default: main
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  package-windows:
-    runs-on: windows-latest
+  package:
+    name: ${{ matrix.platform }} installers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+          - platform: linux
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out exact branch head
+      - name: Check out exact ref
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -22,35 +39,93 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Verify synchronized package version
+        run: npm run check:version
+
+      - name: Check repository boundaries
+        run: npm run check:boundaries
+
+      - name: Test boundary checker
+        run: npm run test:boundaries
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high
+
+      - name: Frontend validation
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
-      - name: Build QA MSI 0.1.4.5
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential curl file wget xvfb libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libgtk-3-dev libglib2.0-dev
+
+      - name: Rust validation
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Build mandatory Windows NSIS installer
+        if: runner.os == 'Windows'
+        run: npm run tauri:build -- --bundles nsis
+
+      - name: Build mandatory Windows MSI installer
+        if: runner.os == 'Windows'
+        run: npm run build:windows-msi
+
+      - name: Build Linux packages
+        if: runner.os == 'Linux'
+        run: npm run tauri:build -- --bundles deb,appimage
+
+      - name: Record Windows MSI build evidence
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:VITE_APP_VERSION = '0.1.4.5'
-          npm run tauri:build -- --bundles msi --config src-tauri/tauri.qa.conf.json --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host 'Tauri MSI bundling failed; applying repository WiX duplicate-worker correction.'
-            node --input-type=module -e "import path from 'node:path'; import('./scripts/build-windows-msi.mjs').then(m => console.log(m.buildPatchedMsi('0.1.4.5', path.resolve('src-tauri/target/x86_64-pc-windows-msvc/release'))))"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          New-Item -ItemType Directory -Force package-artifacts | Out-Null
+          $msi = @(Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+          $lines = @(
+            'MSI build command: npm run build:windows-msi'
+            "MSI artifacts found: $($msi.Count)"
+          )
+          if ($msi.Count -ne 1) { throw "MSI result: expected exactly one artifact, found $($msi.Count)." }
+          $lines += 'MSI result: produced; the normalized artifact will be checksum-verified below.'
+          $lines | Set-Content package-artifacts/msi-build-evidence.txt
 
-      - name: Verify MSI and write checksum
-        shell: pwsh
-        run: |
-          $msi = @(Get-ChildItem -Path 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi' -Filter '*.msi' -File)
-          if ($msi.Count -ne 1) { throw "Expected exactly one MSI, found $($msi.Count)." }
-          New-Item -ItemType Directory -Force qa-artifact | Out-Null
-          Copy-Item $msi[0].FullName 'qa-artifact/Prompt-Arena-0.1.4.5-windows-x64.msi'
-          $hash = (Get-FileHash 'qa-artifact/Prompt-Arena-0.1.4.5-windows-x64.msi' -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  Prompt-Arena-0.1.4.5-windows-x64.msi" | Set-Content 'qa-artifact/Prompt-Arena-0.1.4.5-windows-x64.msi.sha256.txt'
-          Write-Host "MSI_SHA256=$hash"
+      - name: Normalize Linux packages and write checksums
+        if: runner.os == 'Linux'
+        run: npm run package:artifacts -- --platform linux
 
-      - name: Upload QA MSI
+      - name: Normalize Windows installers and write checksums
+        if: runner.os == 'Windows'
+        run: npm run package:artifacts -- --platform windows
+
+      - name: Verify Windows packages and run clean-install smoke
+        if: runner.os == 'Windows'
+        run: npm run verify:package -- --platform windows --smoke
+
+      - name: Verify Linux packages and run package/app smoke
+        if: runner.os == 'Linux'
+        run: npm run verify:package -- --platform linux --smoke
+
+      - name: Upload unsigned installers and checksums
         uses: actions/upload-artifact@v4
         with:
-          name: prompt-arena-0.1.4.5-windows-x64
-          path: qa-artifact/
+          name: prompt-arena-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            package-artifacts/
+            checksums-sha256.txt
+            package-verification.txt
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 14
