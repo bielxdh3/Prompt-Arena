@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a product improvement with a clear user problem.
+title: "feature: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What workflow or limitation should be improved?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the behavior a user should be able to rely on.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Possible approach
+      description: Optional implementation idea. Keep this separate from the user problem.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Suggested acceptance criteria
+      placeholder: "- [ ] ..."
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Arena / evaluation
+        - Benchmarks / verification
+        - Model Library / runtime
+        - Performance / telemetry
+        - History / ratings / regression
+        - Packaging / release
+        - UI / accessibility / localization
+        - Security / privacy
+        - Other

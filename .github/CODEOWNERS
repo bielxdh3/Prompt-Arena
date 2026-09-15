@@ -1,0 +1,11 @@
+# Default ownership
+* @bielxdh3
+
+# Trust-boundary and release-sensitive areas
+/src-tauri/ @bielxdh3
+/.github/workflows/ @bielxdh3
+/scripts/ @bielxdh3
+/schemas/ @bielxdh3
+/packs/ @bielxdh3
+/docs/SECURITY.md @bielxdh3
+/docs/RELEASE_CHECKLIST.md @bielxdh3
