@@ -4,91 +4,121 @@
 
 **Local-first desktop benchmarking for reproducible AI model evaluation.**
 
+[![Release](https://img.shields.io/github/v/release/bielxdh3/Prompt-Arena?include_prereleases&sort=semver&label=release)](https://github.com/bielxdh3/Prompt-Arena/releases/latest)
 [![CI](https://github.com/bielxdh3/Prompt-Arena/actions/workflows/ci.yml/badge.svg)](https://github.com/bielxdh3/Prompt-Arena/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.4-blue)](https://github.com/bielxdh3/Prompt-Arena/releases)
 [![Status](https://img.shields.io/badge/status-beta-orange)](#project-status)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#platform-support)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#downloads)
 [![Desktop](https://img.shields.io/badge/desktop-Tauri%202-FFC131)](#technology)
 
-Prompt Arena runs benchmarks against local AI runtimes, preserves immutable execution evidence, compares results, and keeps the primary workflow on the user's machine.
+Prompt Arena runs model benchmarks, preserves immutable execution evidence, compares results, and keeps the primary workflow on your machine.
 
-[Releases](https://github.com/bielxdh3/Prompt-Arena/releases) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](docs/SECURITY.md)
+[**Download v0.1.4 Beta**](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](docs/SECURITY.md)
 
 </div>
 
 > [!IMPORTANT]
-> Prompt Arena 0.1.4 is a **beta**. The current Windows UI/package path has substantial native QA, but the project still has open acceptance gaps around end-to-end multi-model execution, some performance telemetry, llama.cpp live validation, coding/Docker boundaries, and release signing. See [ROADMAP.md](ROADMAP.md) and [docs/DELIVERY_MATRIX.md](docs/DELIVERY_MATRIX.md) for the exact state.
+> Prompt Arena 0.1.4 is a **beta**. Windows has the deepest native QA coverage. Some acceptance work remains around multi-model end-to-end execution, advanced telemetry, llama.cpp live validation, Docker/coding boundaries, and release signing. The current product truth lives in [ROADMAP.md](ROADMAP.md) and [docs/DELIVERY_MATRIX.md](docs/DELIVERY_MATRIX.md).
 
-## What it does
+## Downloads
 
-Prompt Arena is a standalone model-comparison laboratory built around immutable evidence instead of disposable chat sessions.
+| Platform | Recommended package | Alternative |
+|---|---|---|
+| **Windows x64** | [MSI installer](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/Prompt-Arena-0.1.4-windows-x64.msi) | [NSIS `.exe`](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-windows-nsis.exe) |
+| **Linux x64** | [AppImage](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-linux-appimage.AppImage) | [Debian `.deb`](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-linux-deb.deb) |
 
-- run versioned benchmark tasks against immutable model profiles;
-- compare 2–8 competitors in Arena workflows;
-- run a single model against benchmark cases or suites;
-- preserve runs, attempts, outputs, effective configuration, hashes, and evaluation evidence;
-- use deterministic objective verification where possible and blind human review where appropriate;
-- discover local models through Ollama, LM Studio, and llama.cpp/GGUF boundaries;
-- compare historical runs and calculate deterministic Elo-style ratings;
-- run bounded robustness perturbations;
-- export/import integrity-checked, secret-sanitized reproduction bundles;
-- optionally use external BYOK provider adapters with explicit network/cost boundaries;
-- package native desktop builds for Windows and Linux.
+Checksums and package-verification evidence are published beside every installer in the [GitHub Release](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4).
+
+> [!WARNING]
+> Current beta packages are **unsigned** unless a release explicitly says otherwise.
+
+## The idea at a glance
+
+```mermaid
+flowchart TD
+    U[You<br/>benchmarks · models · runs · evaluations]
+    UI[Prompt Arena UI<br/>Arena · Benchmarks · Models · Runs]
+    CORE[Rust / Tauri desktop core<br/>validation · persistence · evidence · trust boundary]
+    DB[(SQLite metadata<br/>+ immutable artifacts)]
+    WORKER[One-shot worker<br/>bounded execution]
+    LOCAL[Local model runtime<br/>Ollama · LM Studio · llama.cpp]
+    BYOK[Optional BYOK provider<br/>explicit network / cost boundary]
+
+    U --> UI
+    UI -->|typed Tauri commands| CORE
+    CORE --> DB
+    CORE -->|one bounded process| WORKER
+    WORKER -->|loopback| LOCAL
+    WORKER -. explicit external boundary .-> BYOK
+```
+
+The desktop core owns persistence and trust boundaries. Model output, imported benchmark content, and provider responses are treated as untrusted data.
 
 ## How a benchmark round works
 
-```text
-Published benchmark + immutable model profile
-                    │
-                    ▼
-        Deterministic run configuration
-                    │
-                    ▼
-          Prompt Arena desktop core
-      validation · storage · trust boundary
-                    │
-                    ▼
-             one-shot worker
-                    │ loopback / explicit provider boundary
-                    ▼
-          local model runtime / BYOK
-                    │
-                    ▼
-       immutable execution evidence
-                    │
-          ┌─────────┴─────────┐
-          ▼                   ▼
- objective verification   blind review
-          └─────────┬─────────┘
-                    ▼
-      history · comparison · export
+A benchmark round starts from versioned inputs and resolves them into a deterministic execution plan before a model is called.
+
+```mermaid
+flowchart TD
+    B[Published benchmark<br/>version · task · case]
+    M[Immutable model profile<br/>model · parameters · revision]
+    PLAN[Deterministic run configuration<br/>prompt · case · runtime settings]
+    CORE[Prompt Arena desktop core<br/>validate · persist · create run evidence]
+    WORKER[One-shot worker<br/>start · run · exit]
+    RUNTIME[Local runtime / BYOK<br/>bounded provider call]
+    EVIDENCE[Immutable execution evidence<br/>attempt · result · artifacts · hashes · effective config]
+    OBJ[Objective verification<br/>when deterministic]
+    BLIND[Blind human review<br/>when judgment is appropriate]
+    OUT[History · comparison · regression · export]
+
+    B --> PLAN
+    M --> PLAN
+    PLAN --> CORE
+    CORE --> WORKER
+    WORKER --> RUNTIME
+    RUNTIME --> EVIDENCE
+    EVIDENCE --> OBJ
+    EVIDENCE --> BLIND
+    OBJ --> OUT
+    BLIND --> OUT
 ```
 
-The desktop core owns persistence and trust boundaries. Model output and imported benchmark content are treated as untrusted data.
+The point is not merely to get an answer from a model. The point is to keep enough evidence to inspect **what ran, with which configuration, against which benchmark version, and how the result was evaluated**.
+
+## What Prompt Arena does
+
+- runs versioned benchmark tasks against immutable model profiles;
+- compares 2–8 competitors in Arena workflows;
+- runs a single model against benchmark cases or suites;
+- preserves runs, attempts, outputs, effective configuration, hashes, and evaluation evidence;
+- supports deterministic objective verification and blind human review;
+- discovers local models through Ollama, LM Studio, and llama.cpp/GGUF boundaries;
+- compares historical runs and calculates deterministic Elo-style ratings;
+- runs bounded robustness perturbations;
+- exports/imports integrity-checked, secret-sanitized reproduction bundles;
+- optionally uses external BYOK provider adapters behind explicit network/cost boundaries;
+- packages native desktop builds for Windows and Linux.
 
 ## Project status
 
-Current canonical version: **0.1.4**.
+Current canonical version: **0.1.4 Beta**.
 
-The clean replacement stack #43–#58 is merged into `main`. The Windows QA path has covered the human-readable UI, PT-BR/English navigation, themes, reduced motion, installed WebView2 behavior, MSI install/uninstall, console-free production launch, and the repaired PA atom animation. CI is green on the integrated `main`.
-
-The project is **not being represented as production-complete**. Open product acceptance work is tracked in issues [#36](https://github.com/bielxdh3/Prompt-Arena/issues/36)–[#41](https://github.com/bielxdh3/Prompt-Arena/issues/41).
+The integrated desktop product is on `main`, the release pipeline is operational, and v0.1.4 packages are published for Windows and Linux. Product gaps are tracked in the roadmap and issue tracker rather than hidden behind a “finished” label.
 
 | Area | Current state |
 |---|---|
-| Foundation / trust boundary | Complete |
+| Foundation / trust boundary | **Complete** |
 | Core multi-model Arena | Implemented; native end-to-end acceptance still open |
 | Official packs / verification | Implemented; Docker boundary smoke still open |
 | Model Library | Ollama + LM Studio + llama.cpp/GGUF paths implemented; llama.cpp live smoke open |
 | Single-model benchmark | Implemented and persisted; live generation-contract acceptance open |
 | Performance Lab | Timing/token metrics present; TTFT/system telemetry incomplete |
 | Historical comparison | Implemented; statistical depth still limited |
-| Elo ratings | Deterministic Elo v1 implemented; richer rating history/uncertainty remains |
-| Robustness Arena | Implemented with deterministic perturbations; semantic-preservation validation remains |
+| Elo ratings | Deterministic Elo v1 implemented; richer history/uncertainty remains |
+| Robustness Arena | Implemented; semantic-preservation validation remains |
 | Repro Bundle | Integrity/export/import implemented; automatic rerun reconstruction remains |
 | BYOK | Adapters and safety boundaries implemented; broader real-provider acceptance remains |
-| Windows packaging | MSI/NSIS pipeline implemented; signing is not yet a release guarantee |
-| Linux packaging | DEB/AppImage pipeline implemented; release artifact validation remains part of release QA |
+| Windows packaging | MSI + NSIS published; signing not yet guaranteed |
+| Linux packaging | AppImage + DEB published |
 
 ## Technology
 
@@ -106,11 +136,11 @@ The project is **not being represented as production-complete**. Open product ac
 
 | Platform | Status | Packages |
 |---|---|---|
-| Windows x64 | Primary supported beta target | MSI, NSIS |
-| Linux x64 | Supported build target | `.deb`, `.AppImage` |
+| Windows x64 | Primary beta target | MSI, NSIS |
+| Linux x64 | Supported beta build target | `.deb`, `.AppImage` |
 | macOS | Out of scope | — |
 
-## Install / run from source
+## Run from source
 
 Requirements: Node.js 22+, Rust stable, npm, and a supported local runtime when model execution is desired.
 
@@ -121,7 +151,7 @@ npm ci
 npm run tauri:dev
 ```
 
-Browser preview is available with `npm run dev`, but it is intentionally not equivalent to the desktop app and does not represent desktop persistence/runtime behavior.
+Browser preview is available with `npm run dev`, but it is intentionally not equivalent to the desktop app and does not represent native persistence/runtime behavior.
 
 ## Validation
 
@@ -147,21 +177,19 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
 CI executes the supported Windows/Linux validation matrix on pushes and pull requests.
 
-## Releases and installers
+## Releases
 
-GitHub Releases are the canonical distribution surface. Release automation builds from an exact ref, re-runs validation, produces Windows/Linux native packages, publishes checksums and verification evidence, and marks 0.x builds as prereleases unless explicitly promoted.
+GitHub Releases are the canonical distribution surface. Release automation builds from an exact ref, re-runs validation, creates Windows/Linux native packages, publishes checksums and verification evidence, and marks 0.x builds as prereleases unless explicitly promoted.
 
-Artifacts are currently **unsigned** unless a release explicitly says otherwise. Never treat an unsigned development/beta installer as code-signed production software.
-
-See [docs/RELEASING.md](docs/RELEASING.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+See [docs/RELEASING.md](docs/RELEASING.md), [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), and the [v0.1.4 release notes](docs/releases/v0.1.4.md).
 
 ## Local-first and privacy boundary
 
-- no Prompt Arena account or hosted inference service is required for the local workflow;
+- no Prompt Arena account or hosted Prompt Arena inference service is required for the local workflow;
 - local runtimes use explicit loopback boundaries;
 - external APIs are optional BYOK paths and must disclose network egress;
 - benchmark versions, profile revisions, evidence, evaluations, and exports are designed to remain auditable;
-- browser preview cannot silently become a substitute for desktop evidence;
+- browser preview cannot silently substitute for desktop evidence;
 - Prompt Arena does not intentionally include product telemetry.
 
 Read [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md).
