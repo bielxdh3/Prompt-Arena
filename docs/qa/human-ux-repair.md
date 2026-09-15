@@ -35,6 +35,8 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - Executable SHA-256: `d6ef0b6a6a375a048b42280232d1e782129c65c8bee5192139e7d2429a07cf0a`.
 - The owner authorized resuming Computer Use and elevated installation. The subsequent UAC elevation terminated with Windows reporting that the operation was cancelled by the user; no elevated installation log was created. Do not retry elevation automatically or count this as installation success.
 - Single-model simulated failure was verified in the browser: localized summary shown first, original fixture diagnostic preserved inside collapsed technical details.
+- After the owner reported the application open, Computer Use identified `C:\Program Files\Prompt Arena\prompt-arena.exe`; its SHA-256 matched the packaged executable above. Installation and running-binary identity are now confirmed. Clean-install behavior, console flash, visual interaction, close/reopen and uninstall remain unverified.
+- Native capture failed twice with `SetIsBorderRequired failed: interface not supported (0x80004002)`. Accessibility-only inspection returned the window/title bar without application controls. Owner screenshots and launch observations were requested; do not substitute browser fixture evidence for this native gate.
 
 ## Remaining gates
 
