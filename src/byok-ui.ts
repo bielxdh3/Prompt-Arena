@@ -293,38 +293,38 @@ export function formatByokTokens(value: number | null | undefined): string {
 
 export function formatIdentityConfidence(value: IdentityConfidence | null | undefined): string {
   switch (value) {
-    case "provider_reported": return "Provider reported";
-    case "unverified": return "Unverified";
-    default: return "Not available";
+    case "provider_reported": return translate("Provider reported");
+    case "unverified": return translate("Unverified");
+    default: return translate("Not available");
   }
 }
 
 export function formatStorageStatus(value: SecureStorageStatus | null | undefined): string {
   switch (value) {
-    case "available": return "Available";
-    case "unsupported": return "Unsupported";
-    case "error": return "Error";
-    default: return "Not available";
+    case "available": return translate("Available");
+    case "unsupported": return translate("Unsupported");
+    case "error": return translate("Error");
+    default: return translate("Not available");
   }
 }
 
 export function formatCredentialSource(value: CredentialSource | null | undefined): string {
   switch (value) {
-    case "os_secure_storage": return "OS secure storage";
-    case "not_configured": return "Not configured";
-    case "unavailable": return "Unavailable";
-    default: return "Not available";
+    case "os_secure_storage": return translate("OS secure storage");
+    case "not_configured": return translate("Not configured");
+    case "unavailable": return translate("Unavailable");
+    default: return translate("Not available");
   }
 }
 
 export function formatByokDecision(value: "allow" | "confirm" | "deny" | "confirmation_required" | "ceiling_exceeded" | null | undefined): string {
   switch (value) {
-    case "allow": return "Allowed";
+    case "allow": return translate("Allowed");
     case "confirm":
-    case "confirmation_required": return "Confirmation required";
+    case "confirmation_required": return translate("Confirmation required");
     case "deny":
-    case "ceiling_exceeded": return "Blocked by ceiling";
-    default: return "Not available";
+    case "ceiling_exceeded": return translate("Blocked by ceiling");
+    default: return translate("Not available");
   }
 }
 

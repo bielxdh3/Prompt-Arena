@@ -1,3 +1,5 @@
+import { displayName, profileDisplayName } from "./display-names";
+import { translate, formatLocaleNumber } from "./i18n";
 import type { BenchmarkVersionSummary, ExecutionBoundary, ProfileRevision, RunPlan } from "./bridge";
 import type { ObjectiveVerifierPolicy } from "./objective-verifiers";
 
@@ -67,10 +69,10 @@ export function arenaEmptyCopy(kind: "versions" | "profiles" | "tasks" | "cases"
 export function versionOptions(versions: readonly BenchmarkVersionSummary[]): ArenaOption[] {
   return [...versions]
     .sort(compareOptionValues)
-    .map((version) => ({
+    .map((version, index) => ({
       value: version.versionId,
-      label: version.versionId,
-      detail: `${version.benchmarkId} · saved ${version.createdAt}`,
+      label: `${displayName(version.displayName ?? version.benchmarkId, "Benchmark", index + 1)} / ${translate("Version")} ${formatLocaleNumber(version.versionNumber)}`,
+      detail: "",
     }));
 }
 
@@ -79,7 +81,7 @@ export function profileOptions(profiles: readonly ProfileRevision[]): ArenaOptio
     .sort((left, right) => compareStrings(left.profileRevisionId, right.profileRevisionId))
     .map((profile) => ({
       value: profile.profileRevisionId,
-      label: profile.profileRevisionId,
+      label: profileDisplayName(profile),
       detail: `${profile.model} · ${profile.runtime}`,
     }));
 }
@@ -149,16 +151,16 @@ export function taskOptions(document: ArenaDocument): ArenaOption[] {
   return document.tasks.map((task) => ({
     value: task.taskId,
     label: task.name,
-    detail: task.taskId,
+    detail: "",
   }));
 }
 
 export function caseOptions(document: ArenaDocument, taskId: string): ArenaOption[] {
   const task = document.tasks.find((candidate) => candidate.taskId === taskId);
-  return task?.cases.map((benchmarkCase) => ({
+  return task?.cases.map((benchmarkCase, index) => ({
     value: benchmarkCase.caseId,
-    label: benchmarkCase.caseId,
-    detail: benchmarkCase.prompt === null ? "No case-specific prompt" : "Case prompt available",
+    label: `${translate("Case")} ${formatLocaleNumber(index + 1)}`,
+    detail: translate(benchmarkCase.prompt === null ? "No case-specific prompt" : "Case prompt available"),
   })) ?? [];
 }
 

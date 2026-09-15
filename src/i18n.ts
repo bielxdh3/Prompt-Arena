@@ -181,6 +181,7 @@ const PT_BR_MESSAGES_BASE = {
   "Unified local catalog": "Catálogo local unificado",
   "Not installed": "Não instalado",
   Download: "Baixar",
+  Import: "Importar",
   Downloading: "Baixando",
   Installed: "Instalado",
   Failed: "Falhou",
@@ -346,7 +347,11 @@ const PT_BR_MESSAGES_EXTRA = {
   "The selected run responses could not be prepared.": "Não foi possível preparar as respostas da execução selecionada.",
   "The blind evaluation could not be locked.": "Não foi possível bloquear a avaliação às cegas.",
   "The local export could not be prepared.": "Não foi possível preparar a exportação local.",
+  "Ready for blind review": "Pronto para revisão às cegas",
+  "Locked and read-only": "Bloqueada e somente leitura",
+  "No eligible responses": "Nenhuma resposta elegível",
   "Evaluation unavailable": "Avaliação indisponível",
+  "Not scored": "Sem pontuação",
   "The evaluation reported locked without a readable record.": "A avaliação informou bloqueio sem um registro legível.",
   "logical processor": "processador lógico",
   "logical processors": "processadores lógicos",
@@ -429,6 +434,32 @@ const PT_BR_MESSAGES_EXTRA = {
   Uncertainty: "Incerteza",
   "Tie margin": "Margem de empate",
   "Benchmark version identity": "Identidade da versão do benchmark",
+  "Competitor ID": "ID do concorrente",
+  "Benchmark version identity is missing.": "A identidade da versão do benchmark está ausente.",
+  "Diagnostic comparable": "Diagnóstico comparável",
+  "Diagnostic objective ordering/tie": "Ordenação e empates do objetivo",
+  "Not comparable": "Não comparável",
+  "The run and every attempt must have a terminal status.": "A execução e todas as tentativas precisam ter um status terminal.",
+  "No completed attempts are available.": "Nenhuma tentativa concluída está disponível.",
+  "Completed attempts do not declare a complete profile/runtime/model configuration.": "As tentativas concluídas não declaram uma configuração completa de perfil/runtime/modelo.",
+  "Completed attempts do not share one profile/runtime/model configuration.": "As tentativas concluídas não compartilham uma configuração de perfil/runtime/modelo.",
+  "Every completed attempt must have objective exact-text evidence.": "Toda tentativa concluída precisa ter evidência de texto exato do objetivo.",
+  "Completed attempts must have stable attempt identities.": "As tentativas concluídas precisam ter identidades estáveis.",
+  Declared: "Declarada",
+  Missing: "Ausente",
+  Order: "Ordem",
+  "Objective pass": "Objetivo aprovado",
+  "Objective fail": "Objetivo reprovado",
+  "Execution error": "Erro de execução",
+  "Execution failed": "A execução falhou.",
+  "Output limit reached": "Limite de saída atingido",
+  "Tool call": "Chamada de ferramenta",
+  "Provider ID": "ID do provedor",
+  "Immutable competitor": "Concorrente imutável",
+  "Started": "Iniciada",
+  "Response chunk": "Trecho da resposta",
+  "Progress truncated": "Progresso truncado",
+  "Event": "Evento",
   "Terminal status": "Status terminal",
   "Profile/runtime/model": "Perfil/runtime/modelo",
   "Completed attempts": "Tentativas concluídas",
@@ -745,6 +776,7 @@ const PT_BR_MESSAGES_EXTRA = {
   Bias: "Viés",
   "Matched samples": "Amostras correspondentes",
   "Disagreement samples": "Amostras divergentes",
+  "Source match IDs": "IDs das partidas de origem",
   "Evidence keys": "Chaves de evidência",
   "Local samples available for scoring": "Amostras locais disponíveis para pontuação",
   "Use these local execution keys for manual score entry": "Use estas chaves de execução locais para inserir pontuações manualmente",
@@ -1128,6 +1160,7 @@ const PT_BR_MESSAGES_EXTRA = {
   "Desktop bridge": "Ponte da área de trabalho",
   "Storage boundary": "Limite de armazenamento",
   "Runtime boundary": "Limite de runtime",
+  "Local runtime": "Runtime local",
   "Local capabilities": "Capacidades locais",
   Platform: "Plataforma",
   Protocol: "Protocolo",
@@ -1265,9 +1298,185 @@ const PT_BR_MESSAGES_EXTRA = {
   "Arena total": "Total da Arena",
 };
 
-export const PT_BR_MESSAGES = { ...PT_BR_MESSAGES_BASE, ...PT_BR_MESSAGES_EXTRA } as const;
+const HUMAN_UX_MESSAGES = {
+  "The single-model benchmark could not be completed.": "Não foi possível concluir o benchmark deste modelo.",
+  "{input} input · {output} output · {total} total": "{input} de entrada · {output} de saída · {total} no total",
+  "Before generation": "Antes da geração",
+  "{input} input / {output} output per million tokens": "{input} de entrada / {output} de saída por milhão de tokens",
+  "The action could not be completed. Review the details and try again.": "Não foi possível concluir a ação. Confira os detalhes e tente novamente.",
+  "Sample failed": "A amostra falhou",
+  "{available} of {required} available": "{available} de {required} disponíveis",
+  "Source details": "Detalhes da fonte",
+  "Operation details": "Detalhes da operação",
+  "Duplicate evidence": "Evidência de duplicidade",
+  "Starting…": "Iniciando…",
+  "Working…": "Processando…",
+  removed: "removido",
+  blocked: "bloqueado",
+  "{completed} of {total}": "{completed} de {total}",
+  "Benchmark validated successfully.": "Benchmark validado com sucesso.",
+  "Benchmark published. It is ready to use.": "Benchmark publicado. Ele está pronto para uso.",
+  "{model} selected for configuration.": "{model} selecionado para configuração.",
+  'Remove "{model}"? This deletes its app-managed GGUF file. The deletion remains recorded in technical details.': 'Remover "{model}"? Isso exclui o arquivo GGUF gerenciado pelo aplicativo. A exclusão fica registrada nos detalhes técnicos.',
+  "This model configuration is already saved.": "Esta configuração de modelo já está salva.",
+  "Model configuration saved.": "Configuração do modelo salva.",
+  "Tokens/s unavailable": "Tokens/s indisponíveis",
+  "Output unavailable": "Saída indisponível",
+  "{count} output tokens": "{count} tokens de saída",
+  "Time to first token unavailable": "Tempo até o primeiro token indisponível",
+  "{count} history entries removed. Protected source data was retained.": "{count} itens do histórico removidos. Os dados de origem protegidos foram preservados.",
+  "{provider} configuration saved securely on this computer.": "Configuração de {provider} salva com segurança neste computador.",
+  "Calibration reopened.": "Calibração reaberta.",
+  "Calibration saved.": "Calibração salva.",
+  "Tournament reopened.": "Torneio reaberto.",
+  "Tournament saved.": "Torneio salvo.",
+  "{score}/5 average": "Média {score}/5",
+  "{rate}% objective pass rate": "{rate}% de aprovação objetiva",
+  "{count} samples": "{count} amostras",
+  "Draft saved at revision {revision}.": "Rascunho salvo. Versão {revision}.",
+  "Loaded revision {revision}.": "Versão {revision} carregada.",
+  "{completed}/{total} samples completed": "{completed}/{total} amostras concluídas",
+  "{failed} failed · {cancelled} cancelled": "{failed} com falha · {cancelled} canceladas",
+  "{completed} / {total} samples": "{completed} / {total} amostras",
+  "{count} verified responses are unavailable.": "{count} respostas verificadas estão indisponíveis.",
+  "Unknown": "Desconhecido",
+  "Metadata not reported": "Metadados não informados",
+  "Quantization not reported": "Quantização não informada",
+  "Queued": "Na fila",
+  "Metadata match only": "Semelhança nos metadados",
+  "Download: supported through Ollama pull with progress and cancellation.": "Baixe pelo Ollama e acompanhe o progresso. Você pode cancelar o download.",
+  "Download: unsupported; LM Studio exposes no native download through this boundary.": "Para baixar este modelo, use o LM Studio.",
+  "Download: unsupported; llama.cpp uses local GGUF import and no runtime download is invented.": "Para usar este modelo, importe um arquivo GGUF local.",
+  "Removal: supported for app-managed GGUF with audit evidence and active-operation guard.": "Você pode remover arquivos GGUF gerenciados pelo aplicativo quando não estiverem em uso.",
+  "Removal: unsupported; only app-managed GGUF files can be removed here.": "Aqui você só pode remover arquivos GGUF gerenciados pelo aplicativo.",
+  "Remove this model using": "Remova este modelo usando",
+  "Response": "Resposta",
+  "Compare immutable runs": "Comparar execuções",
+  "Immutable versions": "Versões publicadas",
+  "Immutable execution history": "Histórico de execuções",
+  "Model revisions": "Configurações de modelos",
+  "Persisted aggregate evidence": "Resultados das comparações",
+  "Persisted evidence": "Resultados salvos",
+  "Read persisted results": "Ver resultados salvos",
+  "Run single benchmark": "Executar este caso",
+  "Run full benchmark suite": "Executar todos os casos",
+  "Choose a benchmark and immutable model profile first.": "Escolha um benchmark e uma configuração de modelo primeiro.",
+  "Benchmark suite saved immutably": "Resultados de todos os casos salvos",
+  "Single-model evidence saved immutably.": "Resultado do teste salvo.",
+  "Ratings saved immutably.": "Classificação salva.",
+  "Ratings could not be saved.": "Não foi possível salvar a classificação.",
+  "Persist ratings": "Salvar classificação",
+  "Persistent model ratings": "Classificação dos modelos",
+  "Preflight cost evidence": "Estimativa antes da execução",
+  "Input estimate": "Entrada estimada",
+  "Output cap": "Limite de saída",
+  "Estimated total": "Total estimado",
+  "Budget decision": "Verificação do orçamento",
+  "Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record on this machine. The overview below reflects only data returned by the local desktop boundary.": "Compare modelos nas mesmas condições, leia as respostas e consulte os resultados salvos neste computador.",
+  "Author one bounded benchmark draft at a time, validate it against benchmark-v1, then explicitly publish an immutable local version. Bundled official packs are separate read-only source records; they are inspected without editing or persistence. No remote pack or browser-side persistence is used.": "Crie um benchmark, revise os casos e publique uma versão para executar os testes. Você também pode consultar os pacotes oficiais incluídos no aplicativo.",
+  "Runs and Arena summaries are read from the app-owned local store. Select a record to inspect its persisted configuration, verified response evidence, and deterministic metrics. Browser preview never creates sample data.": "Consulte os testes e as comparações salvos neste computador. Selecione uma execução para ver as respostas, as configurações e as métricas.",
+  "Time to first token": "Tempo até o primeiro token",
+  "Generation time": "Tempo de geração",
+  "Thinking time": "Tempo de raciocínio",
+  "Average VRAM": "VRAM média",
+  "Peak VRAM": "Pico de VRAM",
+  "Average RAM": "RAM média",
+  "Peak RAM": "Pico de RAM",
+  "CPU usage": "Uso de CPU",
+  "GPU usage": "Uso de GPU",
+  "Energy": "Energia",
+  "App version": "Versão do aplicativo",
+  "Paraphrase": "Reformulação",
+  "Instruction order": "Ordem das instruções",
+  "Formatting": "Formatação",
+  "Concise wording": "Texto conciso",
+  "Detailed wording": "Texto detalhado",
+  "Irrelevant context": "Contexto irrelevante",
+  "cold": "modelo ainda não carregado",
+  "warm": "modelo já carregado",
+  "high": "alta",
+  "medium": "média",
+  "low": "baixa",
+  "insufficient_data": "dados insuficientes",
+  "Run": "Execução",
+  "Attempts": "Tentativas",
+  "Configuration": "Configuração",
+  "Technical details": "Detalhes técnicos",
+  "Saved run": "Execução salva",
+  "Cancelled": "Cancelada",
+  "All": "Todas",
+  "Baseline run": "Execução de referência",
+  "Candidate run": "Execução para comparar",
+  "Category": "Categoria",
+  "Choose response": "Escolher resposta",
+  "Choose score": "Escolher pontuação",
+  "Competitors (": "Concorrentes (",
+  "Evidence": "Resultados",
+  "Failure recorded:": "Falha registrada:",
+  "Format:": "Formato:",
+  "Immutable model profile": "Configuração do modelo",
+  "Immutable source records": "Resultados salvos",
+  "Immutable verifier evidence": "Resultado da verificação",
+  "Loading roadmap evidence": "Carregando análises",
+  "No single-model records yet": "Nenhum teste de modelo salvo",
+  "Rating": "Classificação",
+  "Reading immutable local model records.": "Carregando os resultados salvos neste computador.",
+  "Roadmap evidence unavailable": "Não foi possível carregar as análises",
+  "Run a bounded case to create the first immutable evidence record.": "Execute um caso para salvar o primeiro resultado.",
+  "Run a single-model benchmark before exporting a bundle.": "Execute um benchmark de modelo único antes de exportar o pacote.",
+  "Run a single-model benchmark to populate this local table.": "Execute um benchmark de modelo único para ver as métricas.",
+  "Run one immutable model/profile against one case, or process every case in the selected benchmark. Every saved record keeps the source run, objective result, and measured runtime fields together.": "Teste um modelo em um caso ou execute todos os casos do benchmark. Os resultados incluem a configuração usada, a avaliação e as métricas medidas.",
+  "Run robustness variants": "Testar variações do prompt",
+  "Running…": "Executando…",
+  "Runtime unavailable": "Ambiente de execução indisponível",
+  "Saved single-model runs": "Testes de modelo salvos",
+  "Select an immutable benchmark version first.": "Selecione uma versão do benchmark primeiro.",
+  "Select…": "Selecionar…",
+  "Single-model evidence without a competitor matrix.": "Conheça os resultados de cada modelo.",
+  "The comparison was calculated but could not be saved.": "A comparação foi calculada, mas não foi possível salvá-la.",
+  "The repro bundle could not be generated.": "Não foi possível gerar o pacote de reprodução.",
+  "The repro bundle could not be imported.": "Não foi possível importar o pacote de reprodução.",
+  "The selected immutable profile is unavailable.": "A configuração de modelo selecionada está indisponível.",
+  "The selected immutable task, case, or profile is unavailable.": "A tarefa, o caso ou a configuração selecionada está indisponível.",
+  "Value": "Valor",
+  "unavailable cases skipped": "casos indisponíveis ignorados",
+  "Historical comparison saved immutably.": "Comparação histórica salva.",
+  "Compare immutable source runs while surfacing changed model, runtime, benchmark, seed, hardware, or prompt conditions.": "Compare execuções salvas e veja quais condições mudaram entre os testes.",
+  "Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.": "Teste variações do prompt com a mesma configuração de modelo para avaliar a consistência das respostas.",
+  "Ratings remain empty until comparable immutable Arena outcomes exist.": "Execute Arenas com condições comparáveis para ver a classificação dos modelos.",
+  "Ratings use only comparable immutable Arena outcomes, are deterministic for the same evidence, and retain category and uncertainty.": "A classificação usa resultados de Arenas com condições comparáveis e mostra a categoria e a margem de incerteza.",
+  "Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.": "Veja o tempo de resposta e o desempenho medido. Os detalhes indicam a origem, a confiabilidade e as condições de cada medição.",
+  "Bundles are bounded JSON with a SHA-256 manifest. Credentials and unrelated environment data are excluded; importing never overwrites source evidence.": "Exporte os dados necessários para reproduzir o teste. Credenciais ficam de fora, e a importação preserva os resultados existentes.",
+  ". These source and audit tables are never part of cleanup.": ". Esses dados de origem e auditoria são preservados na limpeza.",
+  "· License:": "· Licença:",
+  "· Location:": "· Local:",
+  "· Source:": "· Origem:",
+  "· registered revision": "· configuração registrada",
+  "· revision": "· versão",
+} as const;
+
+export const PT_BR_MESSAGES = { ...PT_BR_MESSAGES_BASE, ...PT_BR_MESSAGES_EXTRA, ...HUMAN_UX_MESSAGES } as const;
 
 export type TranslationKey = keyof typeof PT_BR_MESSAGES;
+
+const HUMAN_EN_MESSAGES: Record<string, string> = {
+  "Immutable model profile": "Model configuration",
+  "Compare immutable runs": "Compare runs",
+  "Immutable versions": "Published versions",
+  "Immutable execution history": "Execution history",
+  "Model revisions": "Model configurations",
+  "Persisted aggregate evidence": "Comparison results",
+  "Persisted evidence": "Saved results",
+  "Read persisted results": "View saved results",
+  "Run single benchmark": "Run this case",
+  "Run full benchmark suite": "Run all cases",
+  "Persist ratings": "Save ratings",
+  "Persistent model ratings": "Model ratings",
+  "Single-model evidence without a competitor matrix.": "Explore each model's results.",
+  "Run one immutable model/profile against one case, or process every case in the selected benchmark. Every saved record keeps the source run, objective result, and measured runtime fields together.": "Test a model on one case or run every case in the benchmark. Saved results include the model configuration, evaluation, and measured performance.",
+  "Build repeatable Arenas, compare immutable model revisions, inspect verified responses, and keep the record on this machine. The overview below reflects only data returned by the local desktop boundary.": "Compare models under the same conditions, read their responses, and revisit results saved on this computer.",
+  "Runs and Arena summaries are read from the app-owned local store. Select a record to inspect its persisted configuration, verified response evidence, and deterministic metrics. Browser preview never creates sample data.": "Browse tests and comparisons saved on this computer. Select a run to see its responses, settings, and metrics.",
+};
 
 export function normalizeAppLocale(value: unknown): AppLocale {
   return value === "pt-BR" || value === "en" ? value : "en";
@@ -1292,13 +1501,20 @@ export function saveAppLocale(locale: AppLocale, storage: Pick<Storage, "setItem
 export function translateText(locale: AppLocale, message: string): string {
   return locale === "pt-BR" && Object.prototype.hasOwnProperty.call(PT_BR_MESSAGES, message)
     ? PT_BR_MESSAGES[message as TranslationKey]
-    : message;
+    : locale === "en" ? HUMAN_EN_MESSAGES[message] ?? message : message;
 }
 
 let activeLocale: AppLocale = "en";
 
 export function translate(message: string): string {
   return translateText(activeLocale, message);
+}
+
+export function formatMessage(message: string, values: Record<string, string | number>): string {
+  return translate(message).replace(/\{([a-zA-Z]+)\}/g, (placeholder, key: string) => {
+    const value = values[key];
+    return typeof value === "number" ? formatLocaleNumber(value) : value ?? placeholder;
+  });
 }
 
 export function setActiveLocale(locale: AppLocale): void {
@@ -1323,7 +1539,19 @@ export function formatLocaleCurrency(
 }
 
 export function formatLocaleDate(value: string | number | Date, locale: AppLocale = activeLocale): string {
-  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime())
+      ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(date)
+      : translateText(locale, "Not recorded");
+  }
+  const input = typeof value === "string" && /^\d{9,10}$/.test(value)
+    ? Number(value) * 1000
+    : typeof value === "string" && /^\d{13}$/.test(value) ? Number(value) : value;
+  const date = new Date(input);
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date)
+    : translateText(locale, "Not recorded");
 }
 
 export function formatLocaleDuration(valueMs: number, locale: AppLocale = activeLocale): string {

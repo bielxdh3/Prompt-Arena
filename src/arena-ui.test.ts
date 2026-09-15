@@ -73,10 +73,10 @@ describe("bounded Arena UI helpers", () => {
     const document = parseArenaDocument(version().documentJson);
 
     expect(taskOptions(document)).toEqual([
-      { value: "task-1", label: "Answer one", detail: "task-1" },
+      { value: "task-1", label: "Answer one", detail: "" },
     ]);
     expect(caseOptions(document, "task-1")).toEqual([
-      { value: "case-1", label: "case-1", detail: "Case prompt available" },
+      { value: "case-1", label: "Case 1", detail: "Case prompt available" },
     ]);
     expect(caseOptions(document, "missing")).toEqual([]);
     expect(arenaEmptyCopy("versions")).toContain("does not invent");

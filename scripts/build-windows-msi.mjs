@@ -37,14 +37,14 @@ function patchDuplicateWorkerComponent(wxsPath) {
   fs.writeFileSync(wxsPath, patched, "utf8");
 }
 
-function buildPatchedMsi(version) {
+export function buildPatchedMsi(version, releaseDirectory = path.join(REPOSITORY_ROOT, "src-tauri", "target", "release")) {
   const wixRoot = wixToolsRoot();
-  const wixDirectory = path.join(REPOSITORY_ROOT, "src-tauri", "target", "release", "wix", "x64");
+  const wixDirectory = path.join(releaseDirectory, "wix", "x64");
   const wxsPath = path.join(wixDirectory, "main.wxs");
   if (!fs.existsSync(wxsPath)) throw new Error(`Tauri did not leave WiX source behind: ${wxsPath}`);
   patchDuplicateWorkerComponent(wxsPath);
   const wixObject = path.join(wixDirectory, "prompt-arena-fixed.wixobj");
-  const outputDirectory = path.join(REPOSITORY_ROOT, "src-tauri", "target", "release", "bundle", "msi");
+  const outputDirectory = path.join(releaseDirectory, "bundle", "msi");
   const outputPath = path.join(outputDirectory, `Prompt Arena_${version}_x64_en-US.msi`);
   fs.mkdirSync(outputDirectory, { recursive: true });
   const candleStatus = run(path.join(wixRoot, "candle.exe"), ["-arch", "x64", "-out", wixObject, wxsPath]);
