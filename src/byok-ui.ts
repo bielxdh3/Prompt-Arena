@@ -18,6 +18,9 @@ import type {
   CredentialSource,
   PriceSnapshot,
 } from "./bridge";
+const translate = (value: string): string => value;
+const formatLocaleNumber = (value: number, _locale?: unknown, options?: Intl.NumberFormatOptions): string => new Intl.NumberFormat("en-US", options).format(value);
+const formatLocaleCurrency = (value: number, _locale?: unknown, currency = "USD", options?: Intl.NumberFormatOptions): string => new Intl.NumberFormat("en-US", { style: "currency", currency, ...options }).format(value);
 
 export const MAX_BYOK_PROMPT_BYTES = 64 * 1024;
 export const MAX_BYOK_ENDPOINT_LENGTH = 2 * 1024;
@@ -280,14 +283,14 @@ export function providerLabel(providerId: ExternalProviderId): string {
 
 export function formatByokMoney(value: number | null | undefined): string {
   return value === null || value === undefined || !Number.isFinite(value) || value < 0
-    ? "Not set"
-    : `$${value.toFixed(6)}`;
+    ? translate("Not set")
+    : formatLocaleCurrency(value, undefined, "USD", { minimumFractionDigits: 6, maximumFractionDigits: 6 });
 }
 
 export function formatByokTokens(value: number | null | undefined): string {
   return value === null || value === undefined || !Number.isSafeInteger(value) || value < 0
-    ? "Not recorded"
-    : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+    ? translate("Not recorded")
+    : formatLocaleNumber(value, undefined, { maximumFractionDigits: 0 });
 }
 
 export function formatIdentityConfidence(value: IdentityConfidence | null | undefined): string {
@@ -360,3 +363,4 @@ export function byokErrorMessage(error: unknown): string {
 export function providerIds(): readonly ProviderId[] {
   return PROVIDER_CATALOG.map((provider) => provider.id);
 }
+
