@@ -1,5 +1,5 @@
 import { HumanError } from "./human-error";
-import { displayName, numberedName, profileDisplayName, metricDisplayName } from "./display-names";
+import { displayName, numberedName, profileDisplayName, metricDisplayName, runtimeDisplayName } from "./display-names";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -391,7 +391,7 @@ export function RoadmapFeaturesView() {
 
       <section className="panel" aria-labelledby="single-history-heading">
         <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Immutable source records")}</p><h3 id="single-history-heading">{translate("Saved single-model runs")}</h3></div><span className="run-status run-status-neutral">{formatLocaleNumber(singlePayloads.length)}</span></div>
-        {singlePayloads.length === 0 ? <StateMessage title={translate("No single-model records yet")} description={translate("Run a bounded case to create the first immutable evidence record.")} /> : <div className="roadmap-table"><table><thead><tr><th>{translate("Run")}</th><th>{translate("Model")}</th><th>{translate("Task / case")}</th><th>{translate("Objective")}</th></tr></thead><tbody>{singlePayloads.map((payload) => <tr key={payload.runId}><td>{numberedName("Run", payload.runId, singlePayloads.map((item) => item.runId))}<details><summary>{translate("Technical details")}</summary><code>{payload.runId}</code></details></td><td>{String(payload.profileRevision.model ?? translate("Unavailable"))}</td><td>{displayName(payload.taskId, "Task")} / {displayName(payload.caseId, "Case")}</td><td>{payload.objective?.passed === true ? translate("Pass") : payload.objective?.passed === false ? translate("Fail") : translate("Unavailable")}</td></tr>)}</tbody></table></div>}
+        {singlePayloads.length === 0 ? <StateMessage title={translate("No single-model records yet")} description={translate("Run a bounded case to create the first immutable evidence record.")} /> : <div className="roadmap-table"><table><thead><tr><th>{translate("Run")}</th><th>{translate("Model")}</th><th>{translate("Task / case")}</th><th>{translate("Objective")}</th></tr></thead><tbody>{singlePayloads.map((payload) => <tr key={payload.runId}><td>{numberedName("Run", payload.runId, singlePayloads.map((item) => item.runId))}<details><summary>{translate("Technical details")}</summary><code>{payload.runId}</code></details></td><td>{displayName(payload.profileRevision.model, "Model")}</td><td>{displayName(payload.taskId, "Task")} / {displayName(payload.caseId, "Case")}</td><td>{payload.objective?.passed === true ? translate("Pass") : payload.objective?.passed === false ? translate("Fail") : translate("Unavailable")}</td></tr>)}</tbody></table></div>}
       </section>
 
       <section className="panel" aria-labelledby="performance-lab-heading">
@@ -436,7 +436,8 @@ function FieldSelect({ id, label, value, options, onChange }: { id: string; labe
 }
 
 function EvidenceSummary({ payload }: { payload: SingleModelBenchmarkPayload }) {
-  return <div className="metric-grid"><RoadmapMetricCard label={translate("Run")} value={translate("Saved run")} detail={displayName(payload.benchmarkVersionId, "Benchmark")} /><RoadmapMetricCard label={translate("Model")} value={String(payload.profileRevision.model ?? translate("Unavailable"))} detail={String(payload.profileRevision.runtime ?? translate("Runtime unavailable"))} /><RoadmapMetricCard label={translate("Objective")} value={payload.objective?.passed === true ? translate("Pass") : payload.objective?.passed === false ? translate("Fail") : translate("Unavailable")} detail={translate("Immutable verifier evidence")} /></div>;
+  const runtime = typeof payload.profileRevision.runtime === "string" ? payload.profileRevision.runtime : "";
+  return <div className="metric-grid"><RoadmapMetricCard label={translate("Run")} value={translate("Saved run")} detail={displayName(payload.benchmarkVersionId, "Benchmark")} /><RoadmapMetricCard label={translate("Model")} value={displayName(payload.profileRevision.model, "Model")} detail={runtimeDisplayName(runtime)} /><RoadmapMetricCard label={translate("Objective")} value={payload.objective?.passed === true ? translate("Pass") : payload.objective?.passed === false ? translate("Fail") : translate("Unavailable")} detail={translate("Immutable verifier evidence")} /></div>;
 }
 
 function MetricTable({ payload }: { payload: SingleModelBenchmarkPayload }) {
