@@ -1,0 +1,58 @@
+name: Bug report
+description: Report reproducible Prompt Arena behavior that is incorrect.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for reporting a bug. Remove API keys, private prompts and unrelated model output before submitting."
+  - type: input
+    id: version
+    attributes:
+      label: Prompt Arena version
+      placeholder: "0.1.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - Other / unsupported
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Model runtime
+      placeholder: "Ollama / LM Studio / llama.cpp / none"
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the incorrect behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Logs, screenshots, model/profile details or run metadata with secrets/private data removed.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, secrets and unrelated private data.
+          required: true
+        - label: This is not a security vulnerability report.
+          required: true

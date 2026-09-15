@@ -2,8 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main, phase-01-foundation]
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   checks:
@@ -20,9 +27,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Verify synchronized package version
+        run: npm run check:version
 
       - name: Check repository boundaries
         run: npm run check:boundaries
@@ -66,6 +77,9 @@ jobs:
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Check Rust targets
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 
       - name: Test Rust contracts
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
