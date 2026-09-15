@@ -1,5 +1,5 @@
 import type { AttemptRecord, RunRecord } from "./bridge";
-import { attemptStatusLabel, objectiveVerificationEvidence } from "./results-ui";
+import { objectiveVerificationEvidence } from "./results-ui";
 
 export type ComparabilityConfigurationState = "consistent" | "inconsistent" | "unavailable";
 
@@ -47,15 +47,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizedStatus(value: unknown): string {
-  return typeof value === "string" ? attemptStatusLabel(value) : "Unknown";
+  if (typeof value !== "string") return "unknown";
+  switch (value.trim().toLowerCase()) {
+    case "completed":
+    case "succeeded":
+    case "success": return "completed";
+    case "failed":
+    case "failure":
+    case "error": return "failed";
+    case "cancelled":
+    case "canceled": return "cancelled";
+    default: return value.trim().toLowerCase();
+  }
 }
 
 function isTerminalStatus(value: unknown): boolean {
-  return ["Completed", "Failed", "Cancelled"].includes(normalizedStatus(value));
+  return ["completed", "failed", "cancelled"].includes(normalizedStatus(value));
 }
 
 function isCompletedStatus(value: unknown): boolean {
-  return normalizedStatus(value) === "Completed";
+  return normalizedStatus(value) === "completed";
 }
 
 type DeclaredConfiguration = {

@@ -257,7 +257,7 @@ describe("model library profile boundary", () => {
 
   it("labels persisted operation progress without guessing missing values", () => {
     expect(modelOperationProgressLabel(modelOperation({ progressPercent: 42 }))).toBe("42%");
-    expect(modelOperationProgressLabel(modelOperation({ progressPercent: null, bytesCompleted: 512, bytesTotal: 2_048 }))).toBe("512 / 2048 bytes");
+    expect(modelOperationProgressLabel(modelOperation({ progressPercent: null, bytesCompleted: 512, bytesTotal: 2_048 }))).toBe("512 / 2,048 bytes");
     expect(modelOperationProgressLabel(modelOperation({ status: "queued", progressPercent: null, bytesCompleted: 0, bytesTotal: null }))).toBe("Queued");
     expect(modelOperationStatusLabel("cancelled")).toBe("Cancelled");
     expect(isActiveModelOperation(modelOperation({ status: "running" }))).toBe(true);
@@ -308,7 +308,7 @@ describe("model library profile boundary", () => {
     expect(modelDownloadCapabilityLabel(managed)).toContain("unsupported");
     expect(modelRemovalCapabilityLabel(managed)).toContain("supported");
     expect(modelRemovalCapabilityLabel(unmanaged)).toContain("unsupported");
-    expect(modelRemovalCapabilityLabel(ollama)).toContain("unsupported");
+    expect(modelRemovalCapabilityLabel(ollama)).toBe("Remove this model using Ollama.");
   });
 
   it("keeps profile IDs, revisions, and model names bounded", () => {

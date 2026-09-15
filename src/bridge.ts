@@ -257,6 +257,7 @@ export type BlindEvaluationRecord = {
 };
 
 export type BenchmarkVersionSummary = {
+  displayName?: string;
   versionId: string;
   benchmarkId: string;
   versionNumber: number;
@@ -926,10 +927,20 @@ export async function lockBlindEvaluation(
 }
 
 export async function readBenchmarkVersions(): Promise<BenchmarkVersionSummary[]> {
-  return invokeDesktop<BenchmarkVersionSummary[]>(
+  const summaries = await invokeDesktop<BenchmarkVersionSummary[]>(
     "list_benchmark_versions",
     "The local benchmark versions could not be reached.",
   );
+  return Promise.all(summaries.map(async (summary) => {
+    try {
+      const version = await readBenchmarkVersion(summary.versionId);
+      const name: unknown = version ? JSON.parse(version.documentJson)?.benchmark?.name : undefined;
+      return typeof name === "string" ? { ...summary, displayName: name } : summary;
+    } catch {
+      // A missing display document must not make existing history inaccessible.
+      return summary;
+    }
+  }));
 }
 
 export async function readOfficialPacks(): Promise<OfficialPackSummary[]> {

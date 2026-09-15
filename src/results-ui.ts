@@ -1,6 +1,5 @@
 import type { BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord, ObjectiveVerificationEvidence } from "./bridge";
-const translate = (value: string): string => value;
-const formatLocaleNumber = (value: number, _locale?: unknown, options?: Intl.NumberFormatOptions): string => new Intl.NumberFormat("en-US", options).format(value);
+import { translate, formatLocaleNumber } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
 
@@ -25,20 +24,20 @@ export function blindReviewHidesAttemptEvidence(status: string): boolean {
 export function blindEvaluationStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {
     case "prepared":
-      return "Ready for blind review";
+      return translate("Ready for blind review");
     case "locked":
-      return "Locked and read-only";
+      return translate("Locked and read-only");
     case "empty":
-      return "No eligible responses";
+      return translate("No eligible responses");
     default:
-      return "Evaluation unavailable";
+      return translate("Evaluation unavailable");
   }
 }
 
 export function blindEvaluationScoreLabel(score: number | null | undefined): string {
   return score !== null && score !== undefined && Number.isInteger(score) && score >= 1 && score <= 5
     ? `${score}/5`
-    : "Not scored";
+    : translate("Not scored");
 }
 
 export function updateBlindEvaluationScore(
@@ -149,24 +148,36 @@ export function attemptStatusLabel(status: string): string {
     case "completed":
     case "succeeded":
     case "success":
-      return "Completed";
+      return translate("Completed");
     case "cancelled":
     case "canceled":
-      return "Cancelled";
+      return translate("Cancelled");
     case "failed":
     case "failure":
     case "error":
-      return "Failed";
+      return translate("Failed");
+    case "running":
+      return translate("Running");
+    case "queued":
+      return translate("Queued");
+    case "preparing":
+      return translate("preparing");
+    case "verifying":
+      return translate("verifying");
     default:
-      return status.trim() || "Unknown";
+      return translate("Unknown");
   }
 }
 
 export function attemptStatusTone(status: string): AttemptStatusTone {
-  switch (attemptStatusLabel(status)) {
-    case "Completed":
+  switch (status.trim().toLowerCase()) {
+    case "completed":
+    case "succeeded":
+    case "success":
       return "success";
-    case "Failed":
+    case "failed":
+    case "failure":
+    case "error":
       return "failure";
     default:
       return "neutral";

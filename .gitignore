@@ -26,6 +26,7 @@ secrets/
 *.db-wal
 artifacts/
 output/
+.playwright-cli/
 package-artifacts/
 
 # Editor and operating-system noise
