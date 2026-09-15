@@ -1,0 +1,4 @@
+/* P6 primary navigation is intentionally labels-only. */
+.primary-nav .nav-item-description {
+  display: none;
+}
