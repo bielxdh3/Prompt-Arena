@@ -427,3 +427,4 @@ function bytes(value: string | undefined): number {
   if (value === undefined) throw new Error("Value could not be serialized.");
   return new TextEncoder().encode(value).byteLength;
 }
+

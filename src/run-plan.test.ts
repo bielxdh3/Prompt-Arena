@@ -175,12 +175,17 @@ describe("bounded run-plan contract", () => {
         },
       });
       expect(plan.profileRevision.runtime).toBe(runtime);
-      expect(plan.runtimeConfig.endpoint).toBe(runtime === "lm_studio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080");
+      expect(plan.runtimeConfig.endpoint).toBe(
+        runtime === "lm_studio" ? "http://127.0.0.1:1234" : "http://127.0.0.1:8080",
+      );
     }
   });
 
   it("requires an explicit endpoint for non-Ollama local profiles", () => {
-    expect(() => buildRunPlan({ ...input(), profileRevision: { ...profile(), runtime: "lm_studio" } })).toThrow("loopback profile endpoint");
+    expect(() => buildRunPlan({
+      ...input(),
+      profileRevision: { ...profile(), runtime: "lm_studio" },
+    })).toThrow("loopback profile endpoint");
   });
 
   it("rejects unsafe profile parameters and oversized plan content", () => {
@@ -227,3 +232,4 @@ describe("bounded run-plan contract", () => {
     }))).toThrow("Profile extra fields");
   });
 });
+
