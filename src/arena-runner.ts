@@ -123,15 +123,6 @@ export type ArenaTelemetry = {
   lastError: string | null;
 };
 
-export type ArenaMonitorDisplay = {
-  currentSampleNumber: number | null;
-  totalSamples: number;
-  repetitionNumber: number | null;
-  repetitionsPerCompetitor: number | null;
-  competitorElapsedMs: number | null;
-  arenaElapsedMs: number | null;
-};
-
 const unavailableTelemetryMetrics = (): ArenaTelemetryMetrics => ({
   loadDurationMs: null,
   ttftMs: null,
@@ -191,6 +182,15 @@ export function refreshArenaTelemetry(telemetry: ArenaTelemetry, timestampMs = D
   const active = samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex);
   return { ...telemetry, wallElapsedMs: Math.max(0, timestampMs - telemetry.startedAtMs), samples, etaMs: telemetry.etaMs === null ? null : telemetry.etaMs, activeSampleIndex: active?.sampleIndex ?? telemetry.activeSampleIndex };
 }
+
+export type ArenaMonitorDisplay = {
+  currentSampleNumber: number | null;
+  totalSamples: number;
+  repetitionNumber: number | null;
+  repetitionsPerCompetitor: number | null;
+  competitorElapsedMs: number | null;
+  arenaElapsedMs: number | null;
+};
 
 export function arenaMonitorDisplay(telemetry: ArenaTelemetry, activeSampleIndex: number | null, blind: boolean): ArenaMonitorDisplay {
   const active = telemetry.samples.find((sample) => sample.sampleIndex === activeSampleIndex);
