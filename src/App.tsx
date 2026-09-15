@@ -3666,7 +3666,7 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
         <BoundaryRow label="Completed attempts" value={formatMessage("{completed} of {total}", { completed: dimensions.completedAttemptCount, total: dimensions.attemptCount })} />
         <BoundaryRow
           label="Objective exact-text evidence"
-          value={`${dimensions.objectiveExactTextEvidence.availableCount} of ${dimensions.objectiveExactTextEvidence.requiredCount} available`}
+          value={formatMessage("{available} of {required} available", { available: dimensions.objectiveExactTextEvidence.availableCount, required: dimensions.objectiveExactTextEvidence.requiredCount })}
         />
       </div>
       {diagnostic.status === "not_ready" && (
@@ -4057,6 +4057,7 @@ function effectiveConfigText(config: Record<string, unknown>, key: string): stri
   const value = config[key];
   if (typeof value === "string") {
     if (key === "runtime" || key === "profileBackend") return runtimeDisplayName(value);
+    if (key === "provider") return providerLabel(value as ExternalProviderId);
     if (key === "model") return displayName(value, "Model");
     return value;
   }
