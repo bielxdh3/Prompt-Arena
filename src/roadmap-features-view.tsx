@@ -5,10 +5,12 @@ import {
   isDesktopEnvironment,
   readBenchmarkVersion,
   readBenchmarkVersions,
+  readArenaSummaries,
   readProfileRevisions,
   readRoadmapRecords,
   saveRoadmapRecord,
   type AttemptRecord,
+  type ArenaSummaryRecord,
   type BenchmarkVersion,
   type ProfileRevision,
   type RoadmapRecord,
@@ -24,10 +26,11 @@ import {
 } from "./single-model-benchmark";
 import { buildPerformanceRecord, performanceEvidenceFromExecution } from "./performance-lab";
 import { compareHistoricalRuns, type HistoricalRegression } from "./historical-regression";
+import { computeEloRatings, ratingOutcomesFromArenaSummaries, type RatingSet } from "./model-ratings";
 
 type SurfaceState =
   | { status: "loading" }
-  | { status: "ready"; versions: Array<{ versionId: string; label: string }>; profiles: ProfileRevision[]; records: RoadmapRecord[] }
+  | { status: "ready"; versions: Array<{ versionId: string; label: string }>; profiles: ProfileRevision[]; records: RoadmapRecord[]; summaries: ArenaSummaryRecord[] }
   | { status: "preview" }
   | { status: "error"; message: string };
 
@@ -65,16 +68,18 @@ export function RoadmapFeaturesView() {
     }
     setState({ status: "loading" });
     try {
-      const [versions, profiles, records] = await Promise.all([
+      const [versions, profiles, records, summaries] = await Promise.all([
         readBenchmarkVersions(),
         readProfileRevisions(),
         readRoadmapRecords(),
+        readArenaSummaries(),
       ]);
       setState({
         status: "ready",
         versions: versions.map((item) => ({ versionId: item.versionId, label: item.versionId })),
         profiles,
         records,
+        summaries,
       });
       if (!versionId && versions[0]) setVersionId(versions[0].versionId);
       if (!profileId && profiles[0]) setProfileId(profiles[0].profileRevisionId);
@@ -125,6 +130,26 @@ export function RoadmapFeaturesView() {
   const singlePayloads = useMemo(() => state.status === "ready"
     ? state.records.filter((record) => record.kind === "single_model_benchmark").map((record) => record.payload as unknown as SingleModelBenchmarkPayload)
     : [], [state]);
+
+  const ratings = useMemo<RatingSet | null>(() => {
+    if (state.status !== "ready") return null;
+    const outcomes = ratingOutcomesFromArenaSummaries(state.summaries);
+    return outcomes.length > 0 ? computeEloRatings(outcomes) : null;
+  }, [state]);
+
+  async function persistRatings() {
+    if (!ratings) {
+      setNotice("No eligible head-to-head evidence.");
+      return;
+    }
+    try {
+      await saveRoadmapRecord({ recordId: `ratings-${ratings.createdAt}`, kind: "model_ratings", payload: ratings as unknown as Record<string, unknown> });
+      setNotice("Ratings saved immutably.");
+      await refresh();
+    } catch (error: unknown) {
+      setNotice(error instanceof Error ? error.message : "Ratings could not be saved.");
+    }
+  }
 
   async function calculateRegression() {
     const baseline = singlePayloads.find((payload) => payload.runId === baselineId);
@@ -280,6 +305,12 @@ export function RoadmapFeaturesView() {
         <div className="arena-selection-grid"><FieldSelect id="insights-baseline" label="Baseline run" value={baselineId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setBaselineId} /><FieldSelect id="insights-candidate" label="Candidate run" value={candidateId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setCandidateId} /></div>
         <button className="secondary-button" type="button" onClick={() => void calculateRegression()} disabled={singlePayloads.length < 2}>Compare immutable runs</button>
         {regression && <RegressionTable comparison={regression} />}
+      </section>
+
+      <section className="panel" aria-labelledby="model-ratings-heading">
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #39</p><h3 id="model-ratings-heading">Persistent model ratings</h3></div><span className="section-index">39</span></div>
+        <p className="field-help">Ratings use only comparable immutable Arena outcomes, are deterministic for the same evidence, and retain category and uncertainty.</p>
+        {ratings ? <><div className="roadmap-table"><table><thead><tr><th>Model</th><th>Category</th><th>Rating</th><th>Samples</th><th>Uncertainty</th></tr></thead><tbody>{ratings.ratings.map((rating) => <tr key={`${rating.category ?? ""}:${rating.competitorId}`}><td>{rating.competitorId}</td><td>{rating.category ?? "All"}</td><td>{rating.rating.toFixed(2)}</td><td>{rating.sampleCount}</td><td>±{rating.uncertainty.toFixed(2)}</td></tr>)}</tbody></table></div><button className="secondary-button" type="button" onClick={() => void persistRatings()}>Persist ratings</button></> : <StateMessage title="No eligible head-to-head evidence" description="Ratings remain empty until comparable immutable Arena outcomes exist." />}
       </section>
     </div>
   );
