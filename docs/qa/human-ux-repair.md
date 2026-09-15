@@ -1,6 +1,6 @@
 # Human UX repair — verification ledger
 
-Status: implementation and verification in progress. Do not treat this draft as owner acceptance.
+Status: implementation and verification in progress. Static, rendered, and native local UI evidence is recorded; privileged clean-install/uninstall and live-provider gates remain open. Do not treat this draft as owner acceptance.
 
 Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/human-ux-repair`.
 
@@ -22,6 +22,9 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - npm production audit: zero vulnerabilities. Full audit: two moderate findings in the development-only Vitest/mocker chain. No forced major upgrade was applied.
 - Browser fixture: Insights containment and absence of UUIDs in headings/listbox labels checked in English and PT-BR, neutral/warm/Paper, at 960 and 1280 pixels. Fixture data is synthetic and never exercises real generation.
 - Browser navigation fixture: all eight main screens passed title/selector UUID, replacement-character, and horizontal-overflow assertions in both languages at 960x720 with 115% font scale and motion preferences 0/100/200 (48 combinations). Screenshots finish finite animations for inspection; this does not verify animation behavior itself or populated result workflows. The PT-BR history screenshot was visually inspected.
+- Native installed WebView2 audit: the running binary at `C:\Program Files\Prompt Arena\prompt-arena.exe` matched the packaged executable hash. A second isolated WebView2 profile connected through CDP to that same installed binary and passed all eight screens in English and PT-BR at motion 0/100/200 (48 combinations): headings and listbox labels had no UUID-like primary text, PT-BR had no checked raw English status terms, no replacement characters appeared, and no horizontal overflow was reported. Native screenshots are under `output/playwright/native-*.png`.
+- Native settings controls: the installed WebView2 switched between neutral, warm, and Paper surfaces; enabled high contrast; moved the motion slider to 0 and 200; enabled Reduce Motion; and persisted the normalized appearance preferences. Screenshots include `native-theme-neutral.png`, `native-theme-warm.png`, and `native-theme-paper.png`.
+- Native lifecycle and console check: the isolated CDP page was closed and relaunched with the same installed executable; the reopened page returned to the Overview heading. Computer Use window enumeration showed only Prompt Arena windows for the installed executable and no console/CMD window. The Computer Use screenshot API itself remains unavailable on this host (`SetIsBorderRequired ... 0x80004002`), so CDP screenshots are the native visual evidence.
 - PR #57 is a dedicated open draft stacked on P7. Linux and Windows CI passed for `b69b4e9b`; later commits require fresh remote checks.
 - Keyboard dropdown fixture passed after moving option focus from the hidden opening phase to the visible open phase. ArrowDown opens with option focus; Escape closes and returns focus; Enter selects and closes. The long-name dropdown remains inside 960x600 at motion 0/100/200 and with reduced motion. Screenshots finish animations, so this is focus/containment evidence, not animation timing proof.
 - Windows PE inspection: packaged application declares subsystem 2 (GUI).
@@ -33,19 +36,15 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - QA MSI: `Prompt Arena_0.1.4.5_x64_en-US.msi`.
 - MSI SHA-256: `5ad91b54921080e89c074187aed5343c24b2d81024e0888d0164a6617fd9c494`.
 - Executable SHA-256: `d6ef0b6a6a375a048b42280232d1e782129c65c8bee5192139e7d2429a07cf0a`.
-- The owner authorized resuming Computer Use and elevated installation. The subsequent UAC elevation terminated with Windows reporting that the operation was cancelled by the user; no elevated installation log was created. Do not retry elevation automatically or count this as installation success.
+- The owner authorized resuming Computer Use and elevated installation. The earlier UAC elevation terminated with Windows reporting that the operation was cancelled by the user; no elevated installation log was created. The existing per-machine installation was preserved.
 - Single-model simulated failure was verified in the browser: localized summary shown first, original fixture diagnostic preserved inside collapsed technical details.
-- After the owner reported the application open, Computer Use identified `C:\Program Files\Prompt Arena\prompt-arena.exe`; its SHA-256 matched the packaged executable above. Installation and running-binary identity are now confirmed. Clean-install behavior, console flash, visual interaction, close/reopen and uninstall remain unverified.
-- Native capture failed twice with `SetIsBorderRequired failed: interface not supported (0x80004002)`. Accessibility-only inspection returned the window/title bar without application controls. Owner screenshots and launch observations were requested; do not substitute browser fixture evidence for this native gate.
+- The installed binary identity is confirmed by SHA-256, and its native WebView2 navigation/settings/lifecycle evidence is recorded above. The isolated QA profile had no saved benchmark/run records, so native populated single-model, long-name, history, and result workflows were not exercised; the browser fixtures cover those synthetic data paths.
 
 ## Remaining gates
 
-- Finish the product-wide dynamic-language/display audit and rendered checks outside the repaired Insights path.
-- Complete motion 0/100/200, reduced-motion, edge-dropdown, and keyboard rendered verification.
 - Regenerate the installer again if further implementation changes are made; the current package provenance is recorded below.
-- Installed Windows launch/close/reopen, navigation, languages, themes, motion, long-name layouts, error presentation, and uninstall are not passed.
-- Installation currently fails with Windows Installer Error 1730: removing the earlier per-machine installation requires Administrator. The installation was preserved.
-- Computer Use was stopped by the owner's physical Escape key. Do not count the observed older installed application as the repaired binary: its hash differed.
+- A privileged clean-install/uninstall cycle is still open: Windows Installer returned Error 1730 while the earlier per-machine installation was present, and the attempted UAC elevation was cancelled. The installed repaired executable itself is running and hash-matched, but this does not prove clean-install or uninstall behavior.
+- Native populated workflows (Single-model benchmark, long model/benchmark names, run/history naming, and an in-app error generated from a real provider) remain unverified because the isolated local profile contained no records and no provider was available. Synthetic browser checks remain the available evidence for these paths.
 - LM Studio/llama.cpp live smoke and Windows DPI checks remain unverified.
 - No merge, tag, release, deployment, force-push, or legacy-PR closure is authorized by this ledger.
 
