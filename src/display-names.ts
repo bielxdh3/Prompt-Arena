@@ -1,10 +1,19 @@
 import { formatLocaleNumber, translate } from "./i18n";
 
 // Display labels never replace persisted identity. Callers retain IDs for selection and diagnostics.
+export function isMachineIdentity(value: unknown): boolean {
+  const name = typeof value === "string" ? value.trim() : "";
+  return Boolean(name) && (
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(name)
+    || /^[0-9a-f]{32,}$/i.test(name)
+    || /^(?:arena|run|profile|case|task|benchmark|sample|execution|attempt|result|tournament|calibration|judge|source|bundle|regression)(?:[-_:@.])/i.test(name)
+    || /^[A-Za-z][A-Za-z0-9._-]*@\d+$/i.test(name)
+  );
+}
+
 export function displayName(value: unknown, fallback: string, ordinal?: number): string {
   const name = typeof value === "string" ? value.trim() : "";
-  const machine = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|^[0-9a-f]{32,}$|^(?:arena|run|profile|case|task|benchmark|sample|execution|result)[-_]\d+(?:[-_@]\d+)*$/i;
-  return name && !machine.test(name)
+  return name && !isMachineIdentity(name)
     ? name
     : `${translate(fallback)}${ordinal === undefined ? "" : ` ${formatLocaleNumber(ordinal)}`}`;
 }

@@ -13,7 +13,7 @@ describe("human display identity", () => {
   it("keeps UUIDs and generated keys out of primary names in both languages", () => {
     for (const locale of ["en", "pt-BR"] as const) {
       setActiveLocale(locale);
-      for (const id of ["arena-f750c9c0-c39f-45e2-b8e6-5562efa53cbe-1-1", "profile-1@2", "a".repeat(64), ""]) {
+      for (const id of ["arena-f750c9c0-c39f-45e2-b8e6-5562efa53cbe-1-1", "profile-1@2", "logic@1", "sample-alpha-1", "a".repeat(64), ""]) {
         const label = displayName(id, "Run", 12);
         expect(label).toBe(locale === "en" ? "Run 12" : "Execução 12");
       }

@@ -1,6 +1,6 @@
 import { TechnicalDetails } from "./technical-details";
 import { HumanError } from "./human-error";
-import { numberedName, displayName } from "./display-names";
+import { numberedName, displayName, isMachineIdentity } from "./display-names";
 import { useEffect, useMemo, useState } from "react";
 import {
   isDesktopEnvironment,
@@ -680,7 +680,7 @@ export function AdvancedArenaView() {
                 <div className="advanced-selection-grid advanced-regression-controls">
                   <AdvancedSelect id="advanced-baseline" label={translate("Baseline summary")} value={baselineId} onChange={setBaselineId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select baseline")} />
                   <AdvancedSelect id="advanced-candidate" label={translate("Candidate summary")} value={candidateId} onChange={setCandidateId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select candidate")} />
-                  <AdvancedSelect id="advanced-regression-competitor" label={translate("Competitor scope")} value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: competitor.competitorLabel, detail: competitor.competitorId }))} placeholder={translate("All competitors")} />
+                  <AdvancedSelect id="advanced-regression-competitor" label={translate("Competitor scope")} value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: displayName(competitor.competitorLabel, "Competitor"), detail: competitor.competitorId }))} placeholder={translate("All competitors")} />
                 </div>
                 <label className="advanced-checkbox" htmlFor="advanced-regression-human">
                   <input id="advanced-regression-human" type="checkbox" checked={includeHumanRegression} onChange={(event) => setIncludeHumanRegression(event.currentTarget.checked)} />
@@ -688,7 +688,7 @@ export function AdvancedArenaView() {
                 </label>
                 {regressionState.error && <p className="form-feedback form-feedback-error" role="alert">{translate(regressionState.error)}</p>}
                 {!regressionState.comparison && <AdvancedEmptyState title={translate("Select two different summaries")} description={translate("A regression needs a baseline and candidate immutable summary. The comparison never mixes unsaved execution output.")} />}
-                {regressionState.comparison && <RegressionResults comparison={regressionState.comparison} />}
+                {regressionState.comparison && <RegressionResults comparison={regressionState.comparison} competitorLabels={new Map(regressionCompetitors.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
               </section>
 
               <section className="panel advanced-tournament-panel" aria-labelledby="advanced-tournament-heading" aria-live="polite">
@@ -747,7 +747,7 @@ export function AdvancedArenaView() {
                       return (
                         <label className={`competitor-option ${checked ? "is-selected" : ""}`} key={competitor.competitorId}>
                           <input type="checkbox" checked={checked} disabled={!checked && tournamentCompetitorIds.length >= MAX_ADVANCED_COMPETITORS} onChange={() => toggleTournamentCompetitor(competitor.competitorId)} />
-                          <span><strong>{competitor.competitorLabel}</strong><small>{competitor.competitorId}</small></span>
+                          <span><strong>{displayName(competitor.competitorLabel, "Competitor")}</strong><small>{competitor.competitorId}</small></span>
                         </label>
                       );
                     })}
@@ -765,7 +765,7 @@ export function AdvancedArenaView() {
                 </div>
                 {tournamentError && <HumanError summary="The tournament request is invalid." detail={tournamentError} />}
                 {tournamentResult?.kind === "schedule" && <TournamentScheduleResult schedule={tournamentResult.schedule} labels={new Map(competitorOptions.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
-                {tournamentResult?.kind === "blind" && <BlindRankingResult aggregation={tournamentResult.aggregation} />}
+                {tournamentResult?.kind === "blind" && <BlindRankingResult aggregation={tournamentResult.aggregation} labels={new Map(competitorOptions.map((competitor) => [competitor.competitorId, competitor.competitorLabel]))} />}
                 {tournamentResult?.kind === "outcome" && <TournamentOutcomeResult result={tournamentResult.result} />}
                 {tournamentResult?.kind === "saved" && <SavedTournamentDetails record={tournamentResult.record} />}
                 {(tournamentResult?.kind === "outcome" || tournamentResult?.kind === "blind") && (
@@ -793,7 +793,7 @@ export function AdvancedArenaView() {
                 {calibration.disagreementSampleIds.length > 0 ? (
                   <div className="advanced-disagreement" role="status">
                     <strong>{translate("Disagreement samples")}</strong>
-                    <ul className="advanced-id-list">{calibration.disagreementSampleIds.map((sampleId) => <li key={sampleId}><code>{sampleId}</code></li>)}</ul>
+                    <ul className="advanced-id-list">{calibration.disagreementSampleIds.map((sampleId) => <li key={sampleId}>{numberedName("Sample", sampleId, calibration.disagreementSampleIds)}<TechnicalDetails value={sampleId} /></li>)}</ul>
                   </div>
                 ) : (
                   <p className="field-help">{translate(calibration.status === "ready" ? translate("No samples exceed the configured agreement tolerance of 1 point.") : translate("Enter matching human and AI-judge score keys to calculate agreement, MAE, bias, and disagreement samples."))}</p>
@@ -935,6 +935,13 @@ function AdvancedSelect({
 
 function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
   const titleId = `advanced-ranking-${ranking.metric}`;
+  const competitorIds = ranking.entries.map((entry) => entry.competitorId);
+  const competitorLabels = new Map(ranking.entries.map((entry) => [entry.competitorId, entry.competitorLabel]));
+  const humanCompetitorName = (competitorId: string) => displayName(
+    competitorLabels.get(competitorId),
+    "Competitor",
+    competitorIds.indexOf(competitorId) + 1,
+  );
   return (
     <article className="advanced-ranking-card" aria-labelledby={titleId}>
       <div className="section-heading compact-heading">
@@ -952,10 +959,10 @@ function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
           {ranking.entries.map((entry) => (
             <li key={entry.competitorId}>
               <div>
-                <strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {entry.competitorLabel}</strong>
+                <strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {displayName(entry.competitorLabel, "Competitor")}</strong>
                 <span>{formatRankingValue(entry.metric, entry.value)}{"· n="}{formatLocaleNumber(entry.sampleSize)}</span>
               </div>
-              {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ") || translate("selected peers")}; {translate("margin")} {formatRankingValue(entry.metric, entry.tieMargin)}</small>}
+              {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).map(humanCompetitorName).join(", ") || translate("selected peers")}; {translate("margin")} {formatRankingValue(entry.metric, entry.tieMargin)}</small>}
             </li>
           ))}
         </ol>
@@ -965,11 +972,14 @@ function AdvancedRankingCard({ ranking }: { ranking: AdvancedRanking }) {
   );
 }
 
-function RegressionResults({ comparison }: { comparison: ArenaRegressionComparison }) {
+function RegressionResults({ comparison, competitorLabels }: { comparison: ArenaRegressionComparison; competitorLabels: ReadonlyMap<string, string> }) {
+  const scope = comparison.competitorId
+    ? displayName(competitorLabels.get(comparison.competitorId), "Competitor")
+    : translate("All competitors");
   return (
     <div className="advanced-regression-results">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label={translate("Scope")} value={comparison.competitorId ?? translate("All competitors")} />
+        <AdvancedBoundary label={translate("Scope")} value={scope} />
         <AdvancedBoundary label={translate("Overall status")} value={comparison.status === "ready" ? translate("Ready") : translate("Insufficient data")} />
         <AdvancedBoundary label={translate("Metrics ready")} value={`${formatLocaleNumber(comparison.metrics.length - comparison.insufficientMetrics.length)}/${formatLocaleNumber(comparison.metrics.length)}`} />
       </div>
@@ -1006,7 +1016,7 @@ function SavedCalibrationDetails({ record }: { record: CalibrationResultRecord }
         <AdvancedBoundary label={translate("Content hash")} value={record.contentHash} />
       </div>
       {record.metrics.disagreementSampleIds.length > 0 ? (
-        <p className="field-help">{translate("Disagreement samples:")} {record.metrics.disagreementSampleIds.join(", ")}</p>
+        <p className="field-help">{translate("Disagreement samples:")} {record.metrics.disagreementSampleIds.map((sampleId, index) => <span key={sampleId}>{index > 0 ? ", " : ""}{numberedName("Sample", sampleId, record.metrics.disagreementSampleIds)}<TechnicalDetails value={sampleId} /></span>)}</p>
       ) : (
         <p className="field-help">{translate("No saved samples exceeded the calibration tolerance.")}</p>
       )}
@@ -1054,7 +1064,7 @@ function TournamentStandingsTable({ standings }: { standings: readonly { rank: n
           {standings.map((standing) => (
             <tr key={standing.competitorId}>
         <th scope="row">{standing.rank === null ? "—" : `#${standing.rank}`}{standing.tied ? ` · ${translate("tie")}` : ""}</th>
-              <td>{standing.competitorLabel}<small>{standing.competitorId}</small></td>
+              <td>{displayName(standing.competitorLabel, "Competitor")}<TechnicalDetails value={standing.competitorId} /></td>
               <td>{standing.wins}-{standing.losses}-{standing.ties}</td>
               <td>{formatLocaleNumber(standing.points, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               <td>{standing.metricValue === null ? translate("Insufficient data") : formatLocaleNumber(standing.metricValue, undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</td>
@@ -1079,23 +1089,25 @@ function TournamentScheduleResult({
         <AdvancedBoundary label={translate("Mode")} value={schedule.mode === "round_robin" ? translate("Round robin") : schedule.mode === "single_elimination" ? translate("Single elimination") : "1v1"} />
         <AdvancedBoundary label={translate("Rounds")} value={formatLocaleNumber(schedule.roundCount)} />
         <AdvancedBoundary label={translate("Matches")} value={`${formatLocaleNumber(schedule.matches.length)}/${formatLocaleNumber(schedule.maxMatches)}`} />
-        <AdvancedBoundary label={translate("Byes")} value={schedule.byeCompetitorIds.length === 0 ? translate("None") : schedule.byeCompetitorIds.join(", ")} />
+        <AdvancedBoundary label={translate("Byes")} value={schedule.byeCompetitorIds.length === 0 ? translate("None") : schedule.byeCompetitorIds.map((competitorId) => labels.get(competitorId) ?? displayName(competitorId, "Competitor")).join(", ")} />
       </div>
       <ol className="advanced-schedule-list">
         {schedule.matches.map((match) => (
           <li key={match.matchId}>
             <strong>{translate("Round")} {match.round} · {translate("Match")} {match.matchNumber}</strong>
             <span>{participantLabel(match.competitorAId, match.sourceMatchIds[0], labels)} <b aria-hidden="true">{translate("vs")}</b> {participantLabel(match.competitorBId, match.sourceMatchIds[1], labels)}</span>
-            {match.sourceMatchIds.length > 0 && <small>{translate("Feeds from")} {match.sourceMatchIds.join(", ")}</small>}
+            {match.sourceMatchIds.length > 0 && <small>{translate("Feeds from")} <TechnicalDetails label={translate("Source match IDs")} value={match.sourceMatchIds.join(", ")} /></small>}
           </li>
         ))}
       </ol>
-      {schedule.byeCompetitorIds.length > 0 && <p className="field-help">{translate("Byes are explicit:")} {schedule.byeCompetitorIds.map((competitorId) => labels.get(competitorId) ?? competitorId).join(", ")} {translate("advance without a scheduled opponent in this bracket.")}</p>}
+      {schedule.byeCompetitorIds.length > 0 && <p className="field-help">{translate("Byes are explicit:")} {schedule.byeCompetitorIds.map((competitorId) => labels.get(competitorId) ?? displayName(competitorId, "Competitor")).join(", ")} {translate("advance without a scheduled opponent in this bracket.")}</p>}
     </div>
   );
 }
 
-function BlindRankingResult({ aggregation }: { aggregation: BlindRankingAggregation }) {
+function BlindRankingResult({ aggregation, labels }: { aggregation: BlindRankingAggregation; labels: ReadonlyMap<string, string> }) {
+  const ids = aggregation.entries.map((entry) => entry.competitorId);
+  const humanCompetitorName = (competitorId: string) => displayName(labels.get(competitorId), "Competitor", ids.indexOf(competitorId) + 1);
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
@@ -1106,8 +1118,8 @@ function BlindRankingResult({ aggregation }: { aggregation: BlindRankingAggregat
       <ol className="advanced-ranking-list">
         {aggregation.entries.map((entry) => (
           <li key={entry.competitorId}>
-            <div><strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {entry.competitorId}</strong><span>{entry.averagePoints === null ? translate("Insufficient data") : `${formatLocaleNumber(entry.averagePoints, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${translate("points")} · n=${formatLocaleNumber(entry.rankingSampleSize)}`}</span></div>
-            {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).join(", ")}</small>}
+            <div><strong>{entry.rank === null ? "—" : `#${entry.rank}`} · {humanCompetitorName(entry.competitorId)}</strong><span>{entry.averagePoints === null ? translate("Insufficient data") : `${formatLocaleNumber(entry.averagePoints, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${translate("points")} · n=${formatLocaleNumber(entry.rankingSampleSize)}`}</span></div>
+            {entry.tied && <small className="advanced-tie-note">{translate("Tie with")} {entry.tiesWith.filter((competitorId) => competitorId !== entry.competitorId).map(humanCompetitorName).join(", ")}</small>}
           </li>
         ))}
       </ol>
@@ -1144,7 +1156,7 @@ function AdvancedMetric({ label, value, detail }: { label: string; value: string
 }
 
 function AdvancedBoundary({ label, value }: { label: string; value: string }) {
-  if (/\bID\b|hash/i.test(label) || /[0-9a-f]{8}-[0-9a-f]{4}-/i.test(value)) return <TechnicalDetails label={label} value={value} />;
+  if (/\bID\b|hash/i.test(label) || isMachineIdentity(value)) return <TechnicalDetails label={label} value={value} />;
   return <div className="boundary-row"><span>{translate(label)}</span><strong>{value}</strong></div>;
 }
 
@@ -1191,6 +1203,6 @@ function assessmentLabel(assessment: ArenaRegressionComparison["metrics"][number
 }
 
 function participantLabel(competitorId: string | null, sourceMatchId: string | undefined, labels: ReadonlyMap<string, string>): string {
-  if (competitorId !== null) return labels.get(competitorId) ?? competitorId;
+  if (competitorId !== null) return displayName(labels.get(competitorId) ?? competitorId, "Competitor");
   return sourceMatchId ? `${translate("Winner of")} ${sourceMatchId}` : translate("TBD");
 }

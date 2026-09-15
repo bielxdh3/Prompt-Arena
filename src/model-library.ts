@@ -258,6 +258,12 @@ export function modelOperationStatusLabel(status: ModelOperation["status"]): str
   return translate("Failed");
 }
 
+export function modelOperationKindLabel(kind: ModelOperation["kind"]): string {
+  if (kind === "download") return translate("Download");
+  if (kind === "import") return translate("Import");
+  return translate("Remove");
+}
+
 export function modelOperationProgressLabel(operation: ModelOperation): string {
   if (operation.progressPercent !== null && Number.isFinite(operation.progressPercent)) {
     return `${Math.max(0, Math.min(100, Math.round(operation.progressPercent)))}%`;

@@ -17,8 +17,10 @@ async (page) => {
         await page.getByRole('heading', { name: label, exact: true, level: 1 }).waitFor();
         await page.screenshot({ path: `output/playwright/navigation-${locale}-${motionScale}-${labels[locale].indexOf(label)}.png`, animations: 'disabled' });
         const audit = await page.evaluate(() => {
-          const raw = [...document.querySelectorAll('h1,h2,h3,h4,.arena-listbox-trigger')]
-            .filter(el => /[a-f0-9]{8}-[a-f0-9]{4}-/i.test(el.textContent)).map(el => el.textContent);
+          const primary = [...document.querySelectorAll('h1,h2,h3,h4,.arena-listbox-trigger,.benchmark-record-row strong,.competitor-result-card h4,.advanced-ranking-list strong')].map((el) => el.textContent || '');
+          const summaryLabels = [...document.querySelectorAll('.benchmark-record-row > span:first-child > small')]
+            .flatMap((el) => [...el.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent || ''));
+          const raw = [...primary, ...summaryLabels].filter((text) => /[a-f0-9]{8}-[a-f0-9]{4}-/i.test(text));
           return { raw, overflow: document.documentElement.scrollWidth > innerWidth, replacement: document.body.innerText.includes('\uFFFD') };
         });
         results.push({ locale, motionScale, label, ...audit });
