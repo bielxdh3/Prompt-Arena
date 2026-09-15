@@ -9,6 +9,7 @@ import {
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
   applyArenaProgress,
+  arenaMonitorDisplay,
   arenaTelemetryLabel,
   createArenaTelemetry,
   visibleArenaTelemetryError,
@@ -128,6 +129,8 @@ describe("arena runner", () => {
     const responses = new Map([["arena-1-1:arena-1-1-attempt", "one response"], ["arena-2-1:arena-2-1-attempt", "two response"]]);
     const cards = buildBlindArenaCards(results, responses);
     expect(cards.map((card) => card.label)).toEqual(["Response A", "Response B"]);
+    const reversed = buildBlindArenaCards([...results].reverse(), responses);
+    expect(reversed.map((card) => [card.token, card.executionKey])).toEqual(cards.map((card) => [card.token, card.executionKey]));
     expect(cards[0]).not.toHaveProperty("competitorLabel");
     expect(arenaExportJson(request, results)).not.toContain("runs/");
     expect(arenaExportJson(request, results)).not.toContain("must-not-export");
@@ -175,10 +178,44 @@ describe("arena runner", () => {
   it("keeps blind telemetry neutral and hides identity-sensitive metrics", () => {
     const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 1 };
     const telemetry = createArenaTelemetry(request, 10);
-    expect(arenaTelemetryLabel(telemetry.samples[0], true)).toMatch(/^Competitor [A-Z]$/);
-    expect(arenaTelemetryLabel(telemetry.samples[1], true)).toMatch(/^Competitor [A-Z]$/);
-    expect(arenaTelemetryLabel(telemetry.samples[0], true)).not.toBe(arenaTelemetryLabel(telemetry.samples[1], true));
+    const firstBlindLabel = arenaTelemetryLabel(telemetry.samples[0], true);
+    const secondBlindLabel = arenaTelemetryLabel(telemetry.samples[1], true);
+    expect(firstBlindLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(secondBlindLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(arenaTelemetryLabel({ ...telemetry.samples[0], competitorOrdinal: 999 }, true)).toBe(firstBlindLabel);
+    expect(arenaTelemetryLabel({ ...telemetry.samples[1], competitorOrdinal: 0 }, true)).toBe(secondBlindLabel);
+    expect(firstBlindLabel).not.toBe(secondBlindLabel);
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
+  });
+
+  it("exposes honest sample/repetition denominators and blind timing visibility", () => {
+    const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 3 };
+    const baseTelemetry = createArenaTelemetry(request, 10);
+    const telemetry = {
+      ...baseTelemetry,
+      wallElapsedMs: 900,
+      samples: baseTelemetry.samples.map((sample) => ({
+        ...sample,
+        durationMs: sample.competitorId === "two@1" && sample.repetition < 3 ? sample.repetition * 100 : null,
+      })),
+    };
+    expect(arenaMonitorDisplay(telemetry, 4, false)).toMatchObject({
+      currentSampleNumber: 5,
+      totalSamples: 6,
+      repetitionNumber: 2,
+      repetitionsPerCompetitor: 3,
+      competitorElapsedMs: 300,
+      arenaElapsedMs: 900,
+    });
+    expect(arenaMonitorDisplay(telemetry, 0, false).competitorElapsedMs).toBeNull();
+    expect(arenaMonitorDisplay(telemetry, 4, true)).toMatchObject({
+      currentSampleNumber: 5,
+      totalSamples: 6,
+      repetitionNumber: 2,
+      repetitionsPerCompetitor: 3,
+      competitorElapsedMs: null,
+      arenaElapsedMs: null,
+    });
   });
 
   it("keeps blind telemetry errors generic while retaining non-blind detail", () => {
