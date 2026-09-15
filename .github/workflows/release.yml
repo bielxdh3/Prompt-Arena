@@ -1,0 +1,152 @@
+name: Publish beta release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without leading v
+        required: true
+        default: 0.1.4
+      ref:
+        description: Exact commit, branch, or tag to release
+        required: true
+        default: main
+      prerelease:
+        description: Publish as a GitHub prerelease
+        required: true
+        type: boolean
+        default: true
+      confirm:
+        description: Type RELEASE to authorize publication
+        required: true
+  push:
+    branches: [main]
+    paths:
+      - docs/releases/v0.1.4.md
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release-${{ inputs.version || '0.1.4' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      ref: ${{ steps.meta.outputs.ref }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.confirm }}" != "RELEASE" ]; then
+              echo "Manual release requires confirm=RELEASE." >&2
+              exit 1
+            fi
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.1.4" >> "$GITHUB_OUTPUT"
+            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
+
+      - name: Validate source version and notes
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          SOURCE_VERSION=$(node -p "require('./package.json').version")
+          test "$SOURCE_VERSION" = "$VERSION" || { echo "package.json=$SOURCE_VERSION but requested release=$VERSION" >&2; exit 1; }
+          test -f "docs/releases/v${VERSION}.md" || { echo "Missing docs/releases/v${VERSION}.md" >&2; exit 1; }
+
+  package:
+    needs: validate
+    uses: ./.github/workflows/package.yml
+    with:
+      ref: ${{ needs.validate.outputs.ref }}
+
+  publish:
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: prompt-arena-*
+          path: release-artifacts
+
+      - name: Normalize release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+
+          for artifact_dir in release-artifacts/prompt-arena-*; do
+            [ -d "$artifact_dir" ] || continue
+            artifact_name=$(basename "$artifact_dir")
+            case "$artifact_name" in
+              prompt-arena-windows-*) platform=windows ;;
+              prompt-arena-linux-*) platform=linux ;;
+              *) platform=unknown ;;
+            esac
+
+            while IFS= read -r -d '' file; do
+              base=$(basename "$file")
+              case "$base" in
+                checksums-sha256.txt)
+                  cp "$file" "release-upload/checksums-sha256-${platform}.txt"
+                  ;;
+                package-verification.txt)
+                  cp "$file" "release-upload/package-verification-${platform}.txt"
+                  ;;
+                msi-build-evidence.txt)
+                  cp "$file" "release-upload/msi-build-evidence-${platform}.txt"
+                  ;;
+                *.msi|*.exe|*.deb|*.AppImage)
+                  cp "$file" "release-upload/$base"
+                  ;;
+              esac
+            done < <(find "$artifact_dir" -type f -print0)
+          done
+
+          test -n "$(find release-upload -type f -print -quit)" || { echo "No releasable assets were normalized." >&2; exit 1; }
+
+      - name: Publish or refresh GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          NOTES="docs/releases/v${VERSION}.md"
+          mapfile -t FILES < <(find release-upload -maxdepth 1 -type f | sort)
+          test ${#FILES[@]} -gt 0 || { echo "No releasable artifacts found." >&2; exit 1; }
+
+          FLAGS=(--title "Prompt Arena ${TAG} Beta" --notes-file "$NOTES" --target "${{ needs.validate.outputs.ref }}")
+          if [ "$PRERELEASE" = "true" ]; then FLAGS+=(--prerelease); fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "Prompt Arena ${TAG} Beta" --notes-file "$NOTES"
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          else
+            gh release create "$TAG" "${FILES[@]}" "${FLAGS[@]}"
+          fi
