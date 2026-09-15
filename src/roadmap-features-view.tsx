@@ -28,6 +28,7 @@ import { buildPerformanceRecord, performanceEvidenceFromExecution } from "./perf
 import { compareHistoricalRuns, type HistoricalRegression } from "./historical-regression";
 import { computeEloRatings, ratingOutcomesFromArenaSummaries, type RatingSet } from "./model-ratings";
 import { generatePerturbations, scoreRobustness, type PerturbationType } from "./robustness-arena";
+import { exportReproBundle, importReproBundle } from "./repro-bundle";
 
 type SurfaceState =
   | { status: "loading" }
@@ -62,6 +63,7 @@ export function RoadmapFeaturesView() {
   const [candidateId, setCandidateId] = useState("");
   const [regression, setRegression] = useState<HistoricalRegression | null>(null);
   const [perturbations, setPerturbations] = useState<Array<ReturnType<typeof generatePerturbations>[number] & { passed: boolean | null; runId?: string; attemptId?: string }>>([]);
+  const [bundle, setBundle] = useState("");
 
   async function refresh() {
     if (!isDesktopEnvironment()) {
@@ -200,6 +202,37 @@ export function RoadmapFeaturesView() {
       setNotice(error instanceof Error ? error.message : "The robustness run could not be completed.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function exportBundle() {
+    const source = single ?? singlePayloads[0];
+    if (!source) {
+      setNotice("Run a single-model benchmark before exporting a bundle.");
+      return;
+    }
+    try {
+      const serialized = await exportReproBundle(source as unknown as Record<string, unknown>);
+      setBundle(serialized);
+      await saveRoadmapRecord({ recordId: `bundle-${source.runId}`, kind: "repro_bundle", payload: JSON.parse(serialized) as Record<string, unknown> });
+      setNotice("Secret-free repro bundle generated and integrity-manifested.");
+    } catch (error: unknown) {
+      setNotice(error instanceof Error ? error.message : "The repro bundle could not be generated.");
+    }
+  }
+
+  async function importBundle(file: File) {
+    try {
+      const availableProfiles = state.status === "ready" ? state.profiles : [];
+      const imported = await importReproBundle(await file.text(), {
+        availableRuntimes: [...new Set(availableProfiles.map((profile) => profile.runtime))],
+        availableModels: [...new Set(availableProfiles.map((profile) => profile.model))],
+      });
+      setBundle(JSON.stringify(imported.payload, null, 2));
+      const differences = imported.differences.length ? ` · ${imported.differences.join("; ")}` : "";
+      setNotice(`Repro bundle integrity verified. Original evidence was not overwritten.${differences}`);
+    } catch (error: unknown) {
+      setNotice(error instanceof Error ? error.message : "The repro bundle could not be imported.");
     }
   }
 
@@ -370,6 +403,13 @@ export function RoadmapFeaturesView() {
         <p className="field-help">Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.</p>
         <button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>Run robustness variants</button>
         {perturbations.length > 0 && <ul className="roadmap-list">{perturbations.map((variant) => <li key={variant.perturbationId}><strong>{variant.transformationType}</strong><span>{variant.provenance} · {variant.passed === null ? "Unavailable" : variant.passed ? "Pass" : "Fail"}</span></li>)}</ul>}
+      </section>
+
+      <section className="panel" aria-labelledby="repro-bundle-heading">
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #41</p><h3 id="repro-bundle-heading">Repro Bundle</h3></div><span className="section-index">41</span></div>
+        <p className="field-help">Bundles are bounded JSON with a SHA-256 manifest. Credentials and unrelated environment data are excluded; importing never overwrites source evidence.</p>
+        <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => void exportBundle()} disabled={!single && singlePayloads.length === 0}>Export bundle</button><label className="text-button">Import bundle<input type="file" accept="application/json,.json" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importBundle(file); }} /></label></div>
+        {bundle && <pre className="roadmap-bundle-preview">{bundle}</pre>}
       </section>
     </div>
   );
