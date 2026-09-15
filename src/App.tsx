@@ -4057,7 +4057,12 @@ function effectiveConfigText(config: Record<string, unknown>, key: string): stri
   const value = config[key];
   if (typeof value === "string") {
     if (key === "runtime" || key === "profileBackend") return runtimeDisplayName(value);
-    if (key === "provider") return providerLabel(value as ExternalProviderId);
+    if (key === "provider") {
+      const normalizedProvider = value.trim().toLowerCase();
+      return ["ollama", "lm_studio", "llama_cpp"].includes(normalizedProvider)
+        ? runtimeDisplayName(normalizedProvider)
+        : providerLabel(value as ExternalProviderId);
+    }
     if (key === "model") return displayName(value, "Model");
     return value;
   }
