@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { AttemptRecord, RunRecord } from "./bridge";
 import { assessRunComparability } from "./comparability";
+import { setActiveLocale } from "./i18n";
+
+afterEach(() => setActiveLocale("en"));
 
 function run(status = "completed"): RunRecord {
   return {
@@ -106,5 +109,13 @@ describe("bounded run comparability diagnostics", () => {
       "No completed attempts are available.",
       "Completed attempts do not declare a complete profile/runtime/model configuration.",
     ]);
+  });
+
+  it("keeps status comparisons stable when the UI locale is Portuguese", () => {
+    setActiveLocale("pt-BR");
+    const result = assessRunComparability(run(), [attempt({ id: "attempt-a" })]);
+
+    expect(result.status).toBe("ready");
+    expect(result.dimensions.terminalStatus).toEqual({ runTerminal: true, attemptsTerminal: true });
   });
 });

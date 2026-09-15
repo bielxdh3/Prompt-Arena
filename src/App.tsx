@@ -1,7 +1,7 @@
 import { formatMessage } from "./i18n";
 import { TechnicalDetails } from "./technical-details";
 import { HumanError, FormFeedback } from "./human-error";
-import { displayName, isMachineIdentity, numberedName, profileDisplayName } from "./display-names";
+import { containsMachineIdentity, displayName, isMachineIdentity, numberedName, profileDisplayName, runtimeDisplayName } from "./display-names";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
@@ -1039,7 +1039,7 @@ function BenchmarksView() {
                 <button className="benchmark-record-row" type="button" key={draft.draftId} onClick={() => void handleLoadDraft(draft.draftId)}>
                   <span>
                     <strong>{draft.title}</strong>
-                    <small>{draft.benchmarkId} {translate("· revision")} {draft.revision}</small>
+                    <small><TechnicalDetails label={translate("Benchmark ID")} value={`${draft.benchmarkId} · ${translate("Revision")} ${draft.revision}`} /></small>
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>
@@ -1053,7 +1053,7 @@ function BenchmarksView() {
                 <article className="benchmark-record-row version-row" key={version.versionId}>
                   <span>
                     <strong>{displayName(version.displayName ?? version.benchmarkId, "Benchmark")} / {translate("Version")} {formatLocaleNumber(version.versionNumber)}</strong>
-                    <small>{version.contentHash.slice(0, 12)}… · {translate("saved")} {formatDisplayTimestamp(version.createdAt)}</small>
+                    <small><TechnicalDetails label={translate("Content hash")} value={version.contentHash} /> · {translate("saved")} {formatDisplayTimestamp(version.createdAt)}</small>
                   </span>
                   <span className="run-status">{translate("immutable")}</span>
                 </article>
@@ -1155,7 +1155,7 @@ function BenchmarksView() {
                 >
                   <span>
                     <strong>{pack.packName}</strong>
-                    <small>{pack.versionId} · {pack.contentHash.slice(0, 12)}…</small>
+                    <small><TechnicalDetails label={translate("Benchmark version")} value={`${pack.versionId} · ${pack.contentHash}`} /></small>
                     <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? translate("Docker required · blocked") : translate("text generation")}</small>
                   </span>
                   <span aria-hidden="true">→</span>
@@ -1779,7 +1779,7 @@ function ModelsView() {
                   <article className="profile-record-row" key={source.sourceId}>
                     <span>
                       <strong>{source.label} · {modelBackendLabel(source.backend)}</strong>
-                      <small>{source.message ?? `${source.models.length} model${source.models.length === 1 ? "" : "s"} reported`}</small>
+                      <small>{source.message ? <TechnicalDetails label={translate("Source details")} value={source.message} /> : `${source.models.length} model${source.models.length === 1 ? "" : "s"} reported`}</small>
                     </span>
                     <span className={`run-status ${source.status === "error" ? "run-status-failure" : source.status === "unavailable" ? "run-status-neutral" : ""}`}>
                       {modelSourceStatusLabel(source.status)}
@@ -1806,7 +1806,7 @@ function ModelsView() {
                     <article className="profile-record-row" key={group.groupId}>
                       <span>
                         <strong>{modelDuplicateGroupLabel(group, modelState.catalog.models)}</strong>
-                        <small>{modelDuplicateEvidenceLabel(group)} · {group.modelIds.length} {translate("records")}</small>
+                        <small><TechnicalDetails label={translate("Duplicate evidence")} value={modelDuplicateEvidenceLabel(group)} /> · {group.modelIds.length} {translate("records")}</small>
                       </span>
                       <span className="run-status run-status-neutral">{translate("duplicate")}</span>
                     </article>
@@ -1840,11 +1840,11 @@ function ModelsView() {
                       {modelBackendLabel(model.backend)} · {modelRecordMetadataLabel(model)} · {modelRecordQuantizationLabel(model)}
                     </p>
                     <p className="model-meta">
-                      {model.contentHash
-                        ? `SHA-256 ${model.contentHash.slice(0, 12)}…`
-                        : model.digest ? `Digest ${model.digest.slice(0, 12)}…` : "Digest unavailable"}
-                      {model.managedPath ? ` · managed/${model.managedPath}` : ""}
-                      {model.modifiedAt ? ` · updated ${model.modifiedAt}` : ""}
+                      <TechnicalDetails value={[
+                        model.contentHash ? `SHA-256 ${model.contentHash}` : model.digest ? `Digest ${model.digest}` : translate("Unavailable"),
+                        model.managedPath ? `managed/${model.managedPath}` : "",
+                        model.modifiedAt ? `${translate("Updated")} ${model.modifiedAt}` : "",
+                      ].filter(Boolean).join(" · ")} />
                     </p>
                     <p className="model-meta">{translate("Format:")}{modelRecordMetadataValue(model, "format")} {translate("· License:")} {modelRecordMetadataValue(model, "license")} {translate("· Source:")} {modelRecordMetadataValue(model, "source")} {translate("· Location:")} {modelRecordMetadataValue(model, "location")}
                     </p>
@@ -1870,7 +1870,7 @@ function ModelsView() {
                         onClick={() => handleDownload(model)}
                         disabled={!desktop || busy || operationStarting}
                       >
-                        {operationAction === rowOperation?.operationId ? "Starting…" : translate("Download")}
+                        {operationAction === rowOperation?.operationId ? translate("Starting…") : translate("Download")}
                       </button>
                     )}
                     {availability.actions.includes("cancel") && rowOperation && (
@@ -1888,7 +1888,7 @@ function ModelsView() {
                         onClick={() => handleRemove(model)}
                         disabled={!desktop || busy || operationStarting || availability.state === "downloading"}
                       >
-                        {availability.state === "downloading" ? translate("Removal blocked") : operationAction === rowOperation?.operationId ? "Working…" : translate("Remove")}
+                        {availability.state === "downloading" ? translate("Removal blocked") : operationAction === rowOperation?.operationId ? translate("Working…") : translate("Remove")}
                       </button>
                     )}
                     <span className="field-help">{modelDownloadCapabilityLabel(model)}</span>
@@ -1916,7 +1916,7 @@ function ModelsView() {
                     <article className="profile-record-row" key={operation.operationId}>
                       <span>
                         <strong>{modelOperationKindLabel(operation.kind)} · {operation.modelName ?? operation.managedPath ?? displayName(operation.modelId, "Model")}</strong>
-                        <small>{modelBackendLabel(operation.backend)} · {modelOperationStatusLabel(operation.status)} · {modelOperationProgressLabel(operation)}{operation.message ? ` · ${operation.message}` : ""}</small>
+                        <small>{modelBackendLabel(operation.backend)} · {modelOperationStatusLabel(operation.status)} · {modelOperationProgressLabel(operation)}{operation.message ? <TechnicalDetails label={translate("Operation details")} value={operation.message} /> : null}</small>
                       </span>
                       {isActiveModelOperation(operation) ? (
                         <button className="text-button" type="button" onClick={() => void handleCancel(operation.operationId)} disabled={cancellingOperation === operation.operationId}>
@@ -1946,9 +1946,9 @@ function ModelsView() {
                   <article className="profile-record-row" key={removal.removalId}>
                     <span>
                       <strong>{displayName(removal.modelId, "Model")}</strong>
-                      <small>{removal.managedPath}{"· SHA-256"}{removal.contentHash.slice(0, 12)}… · {removal.removedAt}</small>
+                    <small><TechnicalDetails value={`${removal.managedPath} · SHA-256 ${removal.contentHash} · ${removal.removedAt}`} /></small>
                     </span>
-                    <span className="run-status run-status-neutral">{removal.outcome}</span>
+                    <span className="run-status run-status-neutral">{translate(removal.outcome)}</span>
                   </article>
                 ))}
               </div>
@@ -1982,10 +1982,12 @@ function ModelsView() {
             />
             <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
             <p className="field-help">
-              {selectedProfileModel
-                ? `Runtime: ${modelBackendLabel(selectedProfileModel.backend)} · source: ${selectedProfileModel.sourceId} · immutable model identity is preserved.`
-                : translate("Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity.")}
-              {" "} {translate("Derived immutable ID:")} <strong>{profileRevisionIdPreview(form)}</strong>
+              {selectedProfileModel ? (
+                <>
+                  {translate("Runtime")}: {modelBackendLabel(selectedProfileModel.backend)} · {translate("source")} <TechnicalDetails label={translate("Source")} value={selectedProfileModel.sourceId} /> · {translate("immutable model identity is preserved.")}
+                </>
+              ) : translate("Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity.")}
+              {" "} {translate("Derived immutable ID:")} <TechnicalDetails label={translate("Profile revision")} value={profileRevisionIdPreview(form)} />
             </p>
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>{translate("Register immutable revision")}</button>
             {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
@@ -2009,7 +2011,7 @@ function ModelsView() {
                   <article className="profile-record-row" key={profile.profileRevisionId}>
                     <span>
                       <strong>{profileDisplayName(profile)}</strong>
-                      <small>{profile.model} · {profile.runtime} {translate("· registered revision")} {profile.revision}</small>
+                      <small>{profile.model} · {runtimeDisplayName(profile.runtime)} {translate("· registered revision")} {profile.revision}</small>
                     </span>
                     <span className="run-status">{translate("immutable")}</span>
                   </article>
@@ -2868,7 +2870,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                   return (
                     <label className={`competitor-option ${checked ? "is-selected" : ""}`} key={profile.profileRevisionId}>
                       <input type="checkbox" checked={checked} disabled={busy || (!checked && selectedProfiles.length >= MAX_ARENA_COMPETITORS)} onChange={() => setSelectedProfileRevisionIds((current) => checked ? current.filter((id) => id !== profile.profileRevisionId) : [...current, profile.profileRevisionId])} />
-                      <span><strong>{profile.model}</strong><small>{profile.runtime} / {translate("Configuration")} {formatLocaleNumber(profile.revision)}</small></span>
+                      <span><strong>{profile.model}</strong><small>{runtimeDisplayName(profile.runtime)} / {translate("Configuration")} {formatLocaleNumber(profile.revision)}</small></span>
                     </label>
                   );
                 })}
@@ -3121,7 +3123,7 @@ function ArenaExecutionResult({
   onOpenRuns: () => void;
 }) {
   const status = arenaTerminalStatus(execution.attempt.status);
-  const statusLabel = status === "success" ? "Completed" : status === "cancelled" ? "Cancelled" : "Failed";
+  const statusLabel = status === "success" ? translate("Completed") : status === "cancelled" ? translate("Cancelled") : translate("Failed");
   return (
     <div className="arena-terminal" role="status">
       <div className="section-heading compact-heading">
@@ -3144,7 +3146,7 @@ function ArenaExecutionResult({
           <ul className="arena-progress-list">
             {execution.progress.map((event) => (
               <li key={`${event.sequence}-${event.kind}`}>
-                <strong>#{event.sequence} {event.kind}</strong>
+                <strong>#{event.sequence} {progressEventLabel(event.kind)}</strong>
                 {event.text ? ` · ${event.text}` : ""}
               </li>
             ))}
@@ -3635,14 +3637,15 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
 function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: AttemptRecord[] }) {
   const diagnostic = assessRunComparability(run, attempts);
   const { dimensions } = diagnostic;
+  const diagnosticAttemptIds = diagnostic.objectiveDiagnostic?.groups.flatMap((group) => group.attemptIds) ?? [];
   const terminalStatus = dimensions.terminalStatus.runTerminal && dimensions.terminalStatus.attemptsTerminal
-    ? "Terminal"
-    : "Not terminal";
+    ? translate("Terminal")
+    : translate("Not terminal");
   const configuration = dimensions.configurationConsistency === "consistent"
-    ? "Consistent"
+    ? translate("Consistent")
     : dimensions.configurationConsistency === "inconsistent"
-      ? "Inconsistent"
-      : "Unavailable";
+      ? translate("Inconsistent")
+      : translate("Unavailable");
 
   return (
     <section className="comparability-panel results-section" aria-live="polite" aria-label={translate("Comparability diagnostic")}>
@@ -3652,12 +3655,12 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
           <h3>{translate("Comparability check")}</h3>
         </div>
         <span className={`run-status ${diagnostic.status === "ready" ? "" : "run-status-neutral"}`}>
-          {diagnostic.label}
+          {translate(diagnostic.label)}
         </span>
       </div>
       <p className="field-help">{translate("This bounded single-run diagnostic is not an official ranking, cross-run comparison, regression, tournament, human score, or AI judgment.")}</p>
       <div className="results-facts">
-        <BoundaryRow label="Benchmark version identity" value={dimensions.benchmarkVersionIdentity === "declared" ? "Declared" : "Missing"} />
+        <BoundaryRow label="Benchmark version identity" value={dimensions.benchmarkVersionIdentity === "declared" ? translate("Declared") : translate("Missing")} />
         <BoundaryRow label="Terminal status" value={terminalStatus} />
         <BoundaryRow label="Profile/runtime/model" value={configuration} />
         <BoundaryRow label="Completed attempts" value={formatMessage("{completed} of {total}", { completed: dimensions.completedAttemptCount, total: dimensions.attemptCount })} />
@@ -3668,18 +3671,20 @@ function ComparabilityPanel({ run, attempts }: { run: RunRecord; attempts: Attem
       </div>
       {diagnostic.status === "not_ready" && (
         <ul className="comparability-reasons">
-          {diagnostic.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+          {diagnostic.reasons.map((reason) => <li key={reason}>{translate(reason)}</li>)}
         </ul>
       )}
       {diagnostic.status === "ready" && diagnostic.objectiveDiagnostic && (
         <div className="comparability-diagnostic">
-          <p className="eyebrow">{diagnostic.objectiveDiagnostic.label}</p>
+          <p className="eyebrow">{translate(diagnostic.objectiveDiagnostic.label)}</p>
           <p className="field-help">{translate("Exact-text pass/fail groups are shown for completed attempts only; this is diagnostic evidence, not a score.")}</p>
           <ol className="comparability-ordering">
             {diagnostic.objectiveDiagnostic.groups.map((group) => (
               <li key={`${group.rank}-${group.outcome}`}>
-                <strong> {translate("Position")} {group.rank}: {group.outcome === "passed" ? "objective pass" : "objective fail"}</strong>
-                <span>{group.relation === "tie" ? translate("Tie") : "Order"} · {group.attemptIds.join(", ")}</span>
+                <strong> {translate("Position")} {formatLocaleNumber(group.rank)}: {group.outcome === "passed" ? translate("Objective pass") : translate("Objective fail")}</strong>
+                <span>{group.relation === "tie" ? translate("Tie") : translate("Order")} · {group.attemptIds.map((attemptId, index) => (
+                  <span key={attemptId}>{index > 0 ? ", " : ""}{numberedName("Attempt", attemptId, diagnosticAttemptIds)} <TechnicalDetails label={translate("Attempt ID")} value={attemptId} /></span>
+                ))}</span>
               </li>
             ))}
           </ol>
@@ -3905,9 +3910,9 @@ function BlindEvaluationPanel({
         <div className="locked-evaluation">
           <p className="blind-review-warning">{translate("This evaluation is immutable and read-only. Response text is omitted; audit identity is shown only after lock.")}</p>
           <ul className="locked-evaluation-list">
-            {state.record.presentation.map((entry) => {
+            {state.record.presentation.map((entry, index) => {
               const score = state.record.scores.find((candidate) => candidate.token === entry.token);
-              return <li key={entry.token}><strong>{entry.label}</strong><span> {translate("Attempt")} {entry.attemptId} · {blindEvaluationScoreLabel(score?.overallScore)}</span></li>;
+              return <li key={entry.token}><strong>{entry.label}</strong><span> {translate("Attempt")} {formatLocaleNumber(index + 1)} · {blindEvaluationScoreLabel(score?.overallScore)} <TechnicalDetails label={translate("Attempt ID")} value={entry.attemptId} /></span></li>;
             })}
           </ul>
           {state.record.ranking && <p className="field-help">{translate("A complete ranking or tie-group representation is recorded.")}</p>}
@@ -3919,6 +3924,7 @@ function BlindEvaluationPanel({
 
 function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response?: AttemptResponse | null }) {
   const summary = attempt.responseSummary;
+  const terminalError = attempt.terminalError;
   const objectiveScore = objectiveVerificationEvidence(attempt.result?.score);
   const tone = attemptStatusTone(attempt.status);
   const artifacts = attempt.artifacts.length > 0
@@ -3947,7 +3953,7 @@ function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response
         {summary ? (
           <div className="results-facts">
             <BoundaryRow label="Model" value={summary.model} />
-            <BoundaryRow label="Finish reason" value={summary.finishReason ?? "Not recorded"} />
+            <BoundaryRow label="Finish reason" value={formatFinishReason(summary.finishReason)} />
             <BoundaryRow label="Response size" value={formatByteCount(summary.responseTextByteCount)} />
             <BoundaryRow label="Tool calls" value={formatCount(summary.toolCallCount)} />
             {summary.usage && (
@@ -4036,14 +4042,60 @@ function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response
         )}
         <p className="field-help">{translate("The artifact reference is read-only. The response preview above came only from the hash-verified artifact.")}</p>
       </div>
+
+      {terminalError !== null && terminalError !== undefined && (
+        <div className="results-section">
+          <p className="eyebrow">{translate("Execution error")}</p>
+          <HumanError summary="Execution failed" detail={formatTechnicalValue(terminalError)} />
+        </div>
+      )}
     </article>
   );
 }
 
 function effectiveConfigText(config: Record<string, unknown>, key: string): string {
   const value = config[key];
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "string") {
+    if (key === "runtime" || key === "profileBackend") return runtimeDisplayName(value);
+    if (key === "model") return displayName(value, "Model");
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
   return value === null || value === undefined ? "Not recorded" : "Recorded";
+}
+
+function formatFinishReason(value: string | null | undefined): string {
+  switch (value?.trim().toLowerCase()) {
+    case "stop": return translate("Completed");
+    case "length": return translate("Output limit reached");
+    case "tool_call":
+    case "tool_calls": return translate("Tool call");
+    case "cancelled":
+    case "canceled": return translate("Cancelled");
+    default: return value ? translate(value) : translate("Not recorded");
+  }
+}
+
+function formatTechnicalValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function progressEventLabel(kind: string): string {
+  switch (kind.trim().toLowerCase()) {
+    case "started": return translate("Started");
+    case "chunk": return translate("Response chunk");
+    case "progress_truncated": return translate("Progress truncated");
+    case "completed": return translate("Completed");
+    case "cancelled":
+    case "canceled": return translate("Cancelled");
+    case "failed": return translate("Failed");
+    default: return displayName(kind, "Event");
+  }
 }
 
 function StateMessage({
@@ -5088,7 +5140,7 @@ function ByokProviderCard({
     <article className={`provider-card byok-provider-card ${selected ? "is-selected" : ""}`} data-provider={provider.id}>
       <div className="provider-card-heading">
         <div>
-          <p className="eyebrow">{kindLabel}</p>
+          <p className="eyebrow">{translate(kindLabel)}</p>
           <h4>{metadata?.label ?? provider.label}</h4>
         </div>
         <span className="provider-state">{configured ? translate("Configured") : translate("Not configured")}</span>
@@ -5150,7 +5202,8 @@ function ByokEvidenceHistoryEntry({ record }: { record: ExternalGenerationEviden
         <span className="run-status run-status-neutral">{translate("immutable")}</span>
       </div>
       <div className="results-facts">
-        <BoundaryRow label="Provider" value={`${providerLabel(record.providerId)} (${record.providerId})`} />
+        <BoundaryRow label="Provider" value={providerLabel(record.providerId)} />
+        <TechnicalDetails label={translate("Provider ID")} value={record.providerId} />
         <BoundaryRow label="Requested model" value={record.requestedModel} />
         <BoundaryRow label="Provider model" value={`${record.providerModel} · ${formatIdentityConfidence(record.identityConfidence)}`} />
         <BoundaryRow label="Network disclosure" value={record.networkUsed ? "Yes · external HTTPS call consented" : "No network used"} />
@@ -5171,7 +5224,7 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
     <article className="provider-card" data-provider={provider.id}>
       <div className="provider-card-heading">
         <div>
-          <p className="eyebrow">{kindLabel}</p>
+          <p className="eyebrow">{translate(kindLabel)}</p>
           <h4>{provider.label}</h4>
         </div>
         <span className="provider-state">{translate("Unconfigured")}</span>
@@ -5188,7 +5241,7 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
 }
 
 function BoundaryRow({ label, value }: { label: string; value: string }) {
-  if (/\bID\b|hash|Profile revision|Latest run|identity/i.test(label) || isMachineIdentity(value)) {
+  if (/\bID\b|hash|Profile revision|Latest run|identity/i.test(label) || isMachineIdentity(value) || containsMachineIdentity(value)) {
     return <TechnicalDetails label={label} value={value} />;
   }
   return (

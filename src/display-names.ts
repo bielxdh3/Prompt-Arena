@@ -6,9 +6,14 @@ export function isMachineIdentity(value: unknown): boolean {
   return Boolean(name) && (
     /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(name)
     || /^[0-9a-f]{32,}$/i.test(name)
-    || /^(?:arena|run|profile|case|task|benchmark|sample|execution|attempt|result|tournament|calibration|judge|source|bundle|regression)(?:[-_:@.])/i.test(name)
+    || /^(?:arena|run|profile|case|task|benchmark|sample|execution|attempt|result|tournament|calibration|judge|source|bundle|regression|match|model|competitor|candidate|baseline|revision|version|provider|artifact|materialization|evaluation|summary|sweep|variant|objective|config|metric|rubric)(?:[-_:@.])/i.test(name)
     || /^[A-Za-z][A-Za-z0-9._-]*@\d+$/i.test(name)
   );
+}
+
+export function containsMachineIdentity(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return value.split(/[\s·/:]+/u).some((part) => isMachineIdentity(part));
 }
 
 export function displayName(value: unknown, fallback: string, ordinal?: number): string {
@@ -24,7 +29,17 @@ export function numberedName(kind: string, id: string, ids: readonly string[]): 
 }
 
 export function profileDisplayName(profile: { model: string; revision: number; runtime: string }): string {
-  return `${displayName(profile.model, "Model")} · ${translate("Configuration")} ${formatLocaleNumber(profile.revision)} · ${profile.runtime}`;
+  return `${displayName(profile.model, "Model")} · ${translate("Configuration")} ${formatLocaleNumber(profile.revision)} · ${runtimeDisplayName(profile.runtime)}`;
+}
+
+export function runtimeDisplayName(runtime: string): string {
+  switch (runtime.trim().toLowerCase()) {
+    case "ollama": return "Ollama";
+    case "lm_studio": return "LM Studio";
+    case "llama_cpp": return "llama.cpp";
+    case "local": return translate("Local runtime");
+    default: return displayName(runtime, "Runtime");
+  }
 }
 
 const METRIC_NAMES: Record<string, string> = {

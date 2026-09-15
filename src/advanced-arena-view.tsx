@@ -1,6 +1,6 @@
 import { TechnicalDetails } from "./technical-details";
 import { HumanError } from "./human-error";
-import { numberedName, displayName, isMachineIdentity } from "./display-names";
+import { containsMachineIdentity, numberedName, displayName, isMachineIdentity } from "./display-names";
 import { useEffect, useMemo, useState } from "react";
 import {
   isDesktopEnvironment,
@@ -556,7 +556,7 @@ export function AdvancedArenaView() {
                     label={translate("Tournament result")}
                     value={selectedTournamentResultId}
                     placeholder={translate("No saved result selected")}
-                    options={artifactHistory.tournamentResults.map((record) => ({ value: record.tournamentId, label: numberedName("Tournament", record.tournamentId, artifactHistory.tournamentResults.map((item) => item.tournamentId)), detail: record.mode }))}
+                    options={artifactHistory.tournamentResults.map((record) => ({ value: record.tournamentId, label: numberedName("Tournament", record.tournamentId, artifactHistory.tournamentResults.map((item) => item.tournamentId)), detail: advancedModeLabel(record.mode) }))}
                     onChange={setSelectedTournamentResultId}
                   />
                   <button className="secondary-button" type="button" disabled={!selectedTournamentResultId} onClick={reopenTournamentResult}>{translate("Reopen tournament")}</button>
@@ -680,7 +680,7 @@ export function AdvancedArenaView() {
                 <div className="advanced-selection-grid advanced-regression-controls">
                   <AdvancedSelect id="advanced-baseline" label={translate("Baseline summary")} value={baselineId} onChange={setBaselineId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select baseline")} />
                   <AdvancedSelect id="advanced-candidate" label={translate("Candidate summary")} value={candidateId} onChange={setCandidateId} options={summaryState.summaries.map((summary) => ({ value: summary.arenaId, label: numberedName("Arena", summary.arenaId, summaryState.summaries.map((item) => item.arenaId)), detail: formatAdvancedTimestamp(summary.createdAt) }))} placeholder={translate("Select candidate")} />
-                  <AdvancedSelect id="advanced-regression-competitor" label={translate("Competitor scope")} value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: displayName(competitor.competitorLabel, "Competitor"), detail: competitor.competitorId }))} placeholder={translate("All competitors")} />
+                  <AdvancedSelect id="advanced-regression-competitor" label={translate("Competitor scope")} value={regressionCompetitorId} onChange={setRegressionCompetitorId} options={regressionCompetitors.map((competitor) => ({ value: competitor.competitorId, label: displayName(competitor.competitorLabel, "Competitor"), detail: translate("Immutable competitor") }))} placeholder={translate("All competitors")} />
                 </div>
                 <label className="advanced-checkbox" htmlFor="advanced-regression-human">
                   <input id="advanced-regression-human" type="checkbox" checked={includeHumanRegression} onChange={(event) => setIncludeHumanRegression(event.currentTarget.checked)} />
@@ -747,7 +747,7 @@ export function AdvancedArenaView() {
                       return (
                         <label className={`competitor-option ${checked ? "is-selected" : ""}`} key={competitor.competitorId}>
                           <input type="checkbox" checked={checked} disabled={!checked && tournamentCompetitorIds.length >= MAX_ADVANCED_COMPETITORS} onChange={() => toggleTournamentCompetitor(competitor.competitorId)} />
-                          <span><strong>{displayName(competitor.competitorLabel, "Competitor")}</strong><small>{competitor.competitorId}</small></span>
+                          <span><strong>{displayName(competitor.competitorLabel, "Competitor")}</strong><small><TechnicalDetails label={translate("Competitor ID")} value={competitor.competitorId} /></small></span>
                         </label>
                       );
                     })}
@@ -1029,8 +1029,8 @@ function SavedTournamentDetails({ record }: { record: TournamentResultRecord }) 
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
         <AdvancedBoundary label={translate("Source Arena")} value={record.sourceArenaId} />
-        <AdvancedBoundary label={translate("Mode")} value={record.mode} />
-        <AdvancedBoundary label={translate("Metric")} value={record.metric} />
+        <AdvancedBoundary label={translate("Mode")} value={advancedModeLabel(record.mode)} />
+        <AdvancedBoundary label={translate("Metric")} value={advancedMetricLabel(record.metric)} />
         <AdvancedBoundary label={translate("Evidence samples")} value={formatLocaleNumber(record.evidenceSampleCount)} />
         <AdvancedBoundary label={translate("Content hash")} value={record.contentHash} />
       </div>
@@ -1044,7 +1044,7 @@ function TournamentOutcomeResult({ result }: { result: TournamentEvidenceResult 
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
         <AdvancedBoundary label={translate("Status")} value={result.status === "ready" ? translate("Ready") : translate("Insufficient data")} />
-        <AdvancedBoundary label={translate("Metric")} value={result.metric} />
+        <AdvancedBoundary label={translate("Metric")} value={advancedMetricLabel(result.metric)} />
         <AdvancedBoundary label={translate("Evidence samples")} value={formatLocaleNumber(result.evidenceSampleCount)} />
         <AdvancedBoundary label={translate("Resolved matches")} value={formatLocaleNumber(result.matches.filter((match) => match.outcome !== "insufficient_data").length)} />
       </div>
@@ -1086,7 +1086,7 @@ function TournamentScheduleResult({
   return (
     <div className="advanced-tournament-result" role="status">
       <div className="advanced-boundary-grid">
-        <AdvancedBoundary label={translate("Mode")} value={schedule.mode === "round_robin" ? translate("Round robin") : schedule.mode === "single_elimination" ? translate("Single elimination") : "1v1"} />
+        <AdvancedBoundary label={translate("Mode")} value={advancedModeLabel(schedule.mode)} />
         <AdvancedBoundary label={translate("Rounds")} value={formatLocaleNumber(schedule.roundCount)} />
         <AdvancedBoundary label={translate("Matches")} value={`${formatLocaleNumber(schedule.matches.length)}/${formatLocaleNumber(schedule.maxMatches)}`} />
         <AdvancedBoundary label={translate("Byes")} value={schedule.byeCompetitorIds.length === 0 ? translate("None") : schedule.byeCompetitorIds.map((competitorId) => labels.get(competitorId) ?? displayName(competitorId, "Competitor")).join(", ")} />
@@ -1155,8 +1155,28 @@ function AdvancedMetric({ label, value, detail }: { label: string; value: string
   return <article className="metric-card"><p className="eyebrow">{translate(label)}</p><p className="metric-value">{value}</p><p className="metric-detail">{translate(detail)}</p></article>;
 }
 
+function advancedModeLabel(mode: string): string {
+  switch (mode) {
+    case "round_robin": return translate("Round robin");
+    case "single_elimination": return translate("Single elimination");
+    case "blind_ranking": return translate("Blind ranking");
+    case "1v1": return "1v1";
+    default: return displayName(mode, "Mode");
+  }
+}
+
+function advancedMetricLabel(metric: string): string {
+  switch (metric) {
+    case "objective_pass_rate": return translate("Objective pass rate");
+    case "duration_ms": return translate("Duration");
+    case "tokens_per_second": return translate("Tokens / second");
+    case "human_score": return translate("Human / AI-judge score");
+    default: return displayName(metric, "Metric");
+  }
+}
+
 function AdvancedBoundary({ label, value }: { label: string; value: string }) {
-  if (/\bID\b|hash/i.test(label) || isMachineIdentity(value)) return <TechnicalDetails label={label} value={value} />;
+  if (/\bID\b|hash|task|case|tarefa|caso/i.test(label) || isMachineIdentity(value) || containsMachineIdentity(value)) return <TechnicalDetails label={label} value={value} />;
   return <div className="boundary-row"><span>{translate(label)}</span><strong>{value}</strong></div>;
 }
 
@@ -1204,5 +1224,5 @@ function assessmentLabel(assessment: ArenaRegressionComparison["metrics"][number
 
 function participantLabel(competitorId: string | null, sourceMatchId: string | undefined, labels: ReadonlyMap<string, string>): string {
   if (competitorId !== null) return displayName(labels.get(competitorId) ?? competitorId, "Competitor");
-  return sourceMatchId ? `${translate("Winner of")} ${sourceMatchId}` : translate("TBD");
+  return sourceMatchId ? `${translate("Winner of")} ${displayName(sourceMatchId, "Match")}` : translate("TBD");
 }
