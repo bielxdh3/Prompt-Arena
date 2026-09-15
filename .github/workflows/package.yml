@@ -1,6 +1,12 @@
 name: Desktop packages
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit, branch, or tag to package
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       ref:
@@ -12,6 +18,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -35,6 +45,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
@@ -51,7 +62,7 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-      - name: Audit all dependencies
+      - name: Audit all dependencies at high severity
         run: npm audit --audit-level=high
 
       - name: Frontend validation
@@ -77,11 +88,11 @@ jobs:
           cargo check --manifest-path src-tauri/Cargo.toml --all-targets
           cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
-      - name: Build mandatory Windows NSIS installer
+      - name: Build Windows NSIS installer
         if: runner.os == 'Windows'
         run: npm run tauri:build -- --bundles nsis
 
-      - name: Build mandatory Windows MSI installer
+      - name: Build Windows MSI installer
         if: runner.os == 'Windows'
         run: npm run build:windows-msi
 
@@ -128,5 +139,4 @@ jobs:
             checksums-sha256.txt
             package-verification.txt
           if-no-files-found: error
-          retention-days: 14
-
+          retention-days: 30

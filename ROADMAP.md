@@ -1,159 +1,103 @@
 # Prompt Arena roadmap
 
-This file describes the current product truth. A contract, schema, catalog, or read-only preview is not a completed
-product phase. A phase becomes `COMPLETE` only after its user-facing acceptance path works in the real Tauri app.
+This document is the current product truth. Implementation and acceptance are tracked separately: code existing in `main` does not automatically mean a feature has passed its full native/user acceptance criteria.
+
+Current canonical version: **0.1.4 beta**.
 
 ## Product invariants
 
-- Local-first, single-user, Windows and Linux only.
-- No Prompt Arena cloud service, hosted inference, account system, or telemetry.
-- Local runtimes are the default; external providers are optional BYOK and must disclose network egress.
-- Benchmark versions, profile revisions, run evidence, evaluations, and exports remain immutable and auditable.
-- Imported prompts and model output are untrusted content; Docker-required tasks never fall back to host execution.
+- Local-first, single-user desktop product.
+- Windows and Linux are supported targets; macOS is out of scope.
+- No required Prompt Arena cloud account or hosted inference service.
+- External providers are optional BYOK paths with explicit network/cost boundaries.
+- Benchmark versions, profile revisions, run evidence, evaluations, ratings, and exported evidence must remain auditable.
+- Imported prompts and model outputs are untrusted content.
+- Docker-required execution must never silently fall back to the host.
+- Missing telemetry is reported as unavailable, not fabricated as zero.
 
-## Phase status
+## Phase state
 
-### P0 — Foundation and trust boundary — COMPLETE
+| Phase | Implementation | Native / release acceptance | State |
+|---|---|---|---|
+| P0 Foundation & trust boundary | Complete | Automated boundary validation established | **COMPLETE** |
+| P1 Core multi-model Arena | Core flow, persistence, blind evaluation, result/export paths implemented | Full installed 2–3 competitor flow, live streaming/recovery and reopen/export evidence still incomplete | **IN PROGRESS** |
+| P2 Verification, packs & statistics | Official packs, verifier policies, deterministic materialization, repetition statistics implemented | Installed pack execution and Docker boundary smoke remain | **IN PROGRESS** |
+| P3 Full Model Library | Ollama, LM Studio and llama.cpp/GGUF discovery/profile boundaries implemented; managed operations exist | llama.cpp live smoke and full native manage/download/import/removal matrix remain | **IN PROGRESS** |
+| P4 Advanced Arena | comparison, rating, single-model, robustness and repro feature slices integrated | deeper acceptance/statistical completeness remains | **IN PROGRESS** |
+| P5 External BYOK | provider/cost/credential/network boundaries and adapters integrated | broader real-provider acceptance and publication security review remain | **IN PROGRESS** |
+| P6 Product polish | responsive UI, i18n, accessibility controls, themes, motion, human-readable IDs and Windows GUI launch heavily QA'd | physical changed-DPI check and final accessibility closeout remain | **IN PROGRESS** |
+| P7 Packaging & release | Windows MSI/NSIS and Linux DEB/AppImage pipelines exist; clean Windows MSI lifecycle proven in QA | signed production distribution is not yet guaranteed; beta release process is being formalized | **IN PROGRESS** |
 
-Tauri 2 + React + TypeScript + Rust shell, SQLite/artifact storage, fixed app-owned worker boundary, local-only CSP,
-Windows/Linux packaging configuration, benchmark/profile/run records, and security/boundary checks are in place.
+## Open feature acceptance issues
 
-Acceptance: the shell builds and the reviewed local trust boundary is enforced by automated checks.
+### #36 — Single-model benchmark
 
-### P1 — Core multi-model Arena — IN PROGRESS
+Implemented in `main`: single-case execution, suite execution, immutable benchmark/performance records and UI surfaces.
 
-Implemented in the current completion stack:
+Remaining acceptance:
+- prove successful user-visible generation through the current real runtime contract;
+- make suite summary/partial-failure behavior first-class;
+- verify installed-app end-to-end benchmark flow with real models.
 
-- Visual Arena builder for a published benchmark version, task, case, repetitions 1/3/5/10, and 2–8 immutable profile
-  revisions.
-- Sequential fair execution through the existing app-owned worker, isolated competitor failures, queued-work cancellation,
-  per-sample persistence, progress counts, verified response-artifact reads, side-by-side comparison, blind scoring/lock,
-  explicit post-lock human/objective ranking, repetition summary statistics, persisted aggregate Arena summaries with
-  uncertainty/tie margins, and JSON/Markdown/CSV export.
-- Objective policy helpers for exact text, numeric tolerance, bounded JSON schema/fields, classification, and literal-safe patterns.
+### #37 — Performance Lab
 
-Remaining before completion: native Tauri smoke of two and three competitors, live streaming events during execution,
-close/tray recovery semantics, and native reopen/export smoke for the persisted aggregate Arena summary and per-sample
-history.
+Implemented: runtime token counts, wall-clock/load/generation time and derived generation throughput, with explicit provenance and unavailable states.
 
-Acceptance: a normal user completes one Arena with at least two models, sees every status/result, survives one failure,
-locks a blind review, reopens history, and exports evidence without editing JSON or using a terminal.
+Remaining:
+- TTFT;
+- thinking/reasoning time;
+- VRAM/RAM sampling;
+- CPU/GPU utilization;
+- energy/power where trustworthy;
+- cold/warm sampling policy and native charts/history acceptance.
 
-### P2 — Verification, packs, and statistics — IN PROGRESS
+### #38 — Historical regression
 
-The three official packs and their declared execution/evaluation metadata are usable through the Benchmarks UI. Objective
-verifier policies now cover exact text, numeric tolerance, bounded JSON schema/required fields, classification, and
-literal-safe or bounded regex patterns; normalized policy inputs and objective result evidence are carried through run
-plans and persisted with immutable terminal results. The programming pack declares a Docker-required boundary: when
-Docker is unavailable, execution is blocked and host execution is prohibited, with no fallback runtime.
+Implemented: immutable baseline/candidate comparison, changed-condition warnings, absolute/percentage deltas and limited uncertainty handling.
 
-Deterministic official-pack materialization derives bounded SHA-256 case seeds from a selected seed and persists an
-immutable, replayable canonical materialization record. Arena repetitions now compute statistics, uncertainty, and tie
-margins; `ArenaSummary` records persist aggregate metadata and per-sample evidence and are listed/reloaded through the
-Tauri bridge. The usable UI paths are Benchmarks pack inspection/materialization, Arena execution/results/exports, and
-Runs summary history/reopen.
+Remaining:
+- repeated-run variance/statistical significance;
+- stronger baseline management/history UI;
+- complete export and native acceptance.
 
-Implementation and automated evidence is present in commits `6c1eef9`, `b9ac2b4`, and `952293a`, including TypeScript
-verifier/Arena tests, Rust orchestration, official-pack, and immutable-storage tests, plus typecheck, build, boundary,
-format, compile, and all-target native test checks. These automated checks do not replace native acceptance.
+### #39 — Persistent ratings
 
-P2 remains IN PROGRESS: native Tauri/WebView execution, reopen, and export smoke, plus Docker-boundary smoke, are still
-pending.
+Implemented: deterministic category-aware Elo v1 from eligible immutable Arena summaries, with samples and a bounded uncertainty heuristic.
 
-Acceptance: each headline pack has at least one executable/evaluable task with its declared verifier and saved repetition
-evidence; programming tasks block clearly when Docker is unavailable.
+Remaining:
+- richer rating history/version UI;
+- stronger uncertainty model / Bradley-Terry option;
+- acceptance on larger mixed evidence sets.
 
-### P3 — Full Model Library — IN PROGRESS
+### #40 — Robustness Arena
 
-Ollama discovery, start flow, immutable profile registration, hardware snapshot, and transparent fit recommendations work.
-Unified Ollama/LM Studio/llama.cpp discovery and metadata, source-aware immutable profiles preserving runtime, source,
-endpoint, path, and quantization, Ollama pull progress/cancellation, managed GGUF import/removal audit with an
-active-operation guard, duplicate/quantization handling, and explicit unsupported-capability labels are implemented and
-tested.
+Implemented: deterministic local perturbation generation, execution, score, variance and failure clusters.
 
-P3 remains IN PROGRESS: real native runtime discovery/download/import/removal acceptance and the remaining
-security/publication gates are still pending.
+Remaining:
+- stronger semantic-preservation guarantees and fixtures;
+- benchmark-version governance for published perturbations;
+- broader coding-task functional validation.
 
-Acceptance: a user discovers and manages supported local runtimes without leaving Prompt Arena for normal workflows.
+### #41 — Repro Bundle
 
-### P4 — Advanced Arena — IN PROGRESS
+Implemented: bounded secret-sanitized JSON bundle, SHA-256 integrity manifest, import verification and runtime/model/platform difference reporting.
 
-Single-run comparability diagnostics and explicit per-Arena human/objective ranking exist. Commit `734633f` implements
-and tests immutable app-owned calibration benchmark/result persistence, frozen AI-judge metadata and panel validation,
-evidence-backed tournament outcomes/standings, and Advanced Arena save/reopen/disagreement UI. Official benchmark-version
-judge integration remains pending.
+Remaining:
+- reconstruct a runnable configuration from import rather than only payload/difference inspection;
+- link reproduced runs to original evidence;
+- complete schema migration and native rerun acceptance.
 
-Planned extension — **single-model benchmark mode**:
+## Immediate priorities
 
-- Run one immutable model profile against a benchmark without requiring a second competitor or an Arena session.
-- Capture the same first-class evidence and metrics available to comparable runs, including timing, latency, throughput,
-  generated-token counts, scores/verifier outcomes, effective configuration, runtime identity, and hardware snapshot where available.
-- Persist the result as an independent historical benchmark run rather than a disposable quick test.
-- Allow compatible historical runs to be compared later across models, model/profile revisions, quantizations, runtimes,
-  parameters, hardware changes, or different dates without requiring those runs to have been executed side by side.
-- Treat comparison as an optional operation over immutable benchmark evidence: a user may inspect a singular result alone
-  forever, or assemble one or more compatible historical runs into a later comparison view.
+1. Fix/validate the real generation contract for reasoning models so successful visible text is proven through Ollama and LM Studio.
+2. Run a full installed multi-model Arena acceptance cycle with deliberate failure isolation, blind lock/reveal, history reopen and export.
+3. Validate llama.cpp/GGUF and Docker-required paths on real environments.
+4. Close the measurable gaps in #37–#41 rather than marking merged code as finished prematurely.
+5. Keep release notes, changelog, delivery matrix and GitHub issues synchronized with `main`.
+6. Move from beta prereleases to a signed production release only after release checklist gates are satisfied.
 
-P4 remains IN PROGRESS: real native Tauri acceptance and the remaining publication/security gates are still pending.
+## Version direction
 
-Acceptance: ranking, regression, tournament, and calibration workflows operate on immutable Arena evidence. A user can
-also benchmark one model by itself, inspect and persist its metrics/evidence, and later compare compatible historical
-results without rerunning them together.
-
-### P5 — External BYOK — IN PROGRESS
-
-Provider catalog and cost-safety helpers exist; no external request is silently enabled. Secure OS credential storage,
-OpenAI-compatible/OpenAI/Anthropic/Gemini adapters, network-egress confirmation, dated prices, budgets, usage, and
-provider identity evidence are implemented. Successful provider responses now persist immutable sanitized evidence with
-provider/model identity and confidence, network disclosure, usage, estimated/actual cost, budget decisions, and the
-dated price snapshot; Settings can reload this history without prompt/response text or secrets.
-
-P5 remains IN PROGRESS: real native Tauri acceptance of secure configuration, provider calls, history reload, and
-export/log review, plus the remaining security and publication gates, are still pending.
-
-Acceptance: a user with their own credential can run a paid Arena with explicit egress, estimate, ceiling, and immutable
-price/usage history; CI never calls a paid API.
-
-### P6 — Product polish — IN PROGRESS
-
-Responsive shell, accessibility focus states, reduced motion, local appearance controls, local diagnostics, dashboard
-counts/recent summaries, persisted run and Arena-summary history, verified response reads, bounded sanitized
-JSON/Markdown/CSV exports, preview-first bounded cleanup of derived history, and versioned bounded appearance
-import/export exist. Full accessibility/native review remains. Native acceptance, security review, and publication gates
-are still pending, so P6 remains IN PROGRESS.
-
-Acceptance: the primary flow reads as a model-comparison laboratory, not developer scaffolding, on supported desktop sizes.
-
-### P7 — Packaging and clean install — IN PROGRESS
-
-Tauri packages Windows NSIS + MSI and Linux `.deb` + `.AppImage` with stable installer metadata, a per-user NSIS Start
-Menu/uninstall path, a stable MSI upgrade code, and the existing app-owned `app_data_dir` persistence boundary. The
-target-specific worker sidecar hook remains deterministic. `package:artifacts` normalizes exact target names and writes
-`checksums-sha256.txt`; `verify:package` validates the manifest and performs clean-install/package/app smoke where the
-runner has the required platform tooling. The workflow records an explicit MSI outcome while keeping NSIS mandatory,
-uploads unsigned artifacts, and creates no GitHub Release.
-
-Workflow run [33213307890](https://github.com/bielxdh3/Prompt-Arena/actions/runs/33213307890) passed frontend/Rust
-validation, the mandatory Windows NSIS build, Windows checksum normalization and clean-install/start/restart/
-silent-uninstall smoke, and Linux DEB/AppImage builds, checksum normalization, and package/app smoke. MSI was
-attempted but unavailable, with zero MSI artifacts. This CI evidence does not replace final native/manual desktop
-acceptance, so P7 remains IN PROGRESS while MSI remains unavailable if technically viable and that acceptance remains
-separate.
-
-The BL4 native diagnostic for this revision proved only Vite/Tauri startup; its harness did not exercise native UI,
-bridge, app-owned sidecar, restart, or reopen flows. P1–P6 therefore remain IN PROGRESS pending their separate native
-acceptance and review gates.
-
-Acceptance: Windows clean-install/start/restart/uninstall smoke and Linux package/launch smoke pass, with exact artifact
-names/checksums and no Node/Rust/terminal requirement for end users.
-
-## Publication boundaries
-
-This stack may be pushed and opened as draft PRs and may run the packaging workflow. It must not force-push, merge,
-create a release tag, publish a final GitHub Release, deploy, or create/rotate secrets without a later explicit approval.
-
-## Final closeout gate
-
-The final verdict remains `PROMPT_ARENA_INCOMPLETE` until P1–P7 acceptance evidence exists. BL4 `app_server` provenance
-is now attested for a bounded review attempt, but that attempt was marked failed and did not replace native acceptance.
-Green unit tests or a local package alone never change the verdict.
+- **0.1.x** — beta hardening, acceptance evidence, packaging/release discipline.
+- **0.2.0** — target for materially complete single-model/performance/regression/ratings/robustness/repro workflows.
+- **1.0.0** — reserved for a production-ready desktop product with validated supported-runtime paths, stable evidence schema/migrations, release signing policy, and documented support/security commitments.
