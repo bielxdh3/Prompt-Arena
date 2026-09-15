@@ -22,6 +22,13 @@ describe("static UI parity contracts", () => {
     expect(styles).toContain('.app-shell[data-reduced-motion="true"] *');
     expect(styles).toContain('.app-shell[data-reduced-motion="true"] *::before');
     expect(styles).toContain("--motion-scale-effective: 0");
+    expect(styles).toMatch(/\.app-shell\s*\{[\s\S]*?--orbit-outer-duration:\s*max\(/s);
+    expect(styles).toMatch(/\.app-shell\s*\{[\s\S]*?--orbit-middle-duration:\s*max\(/s);
+    expect(styles.match(/--orbit-outer-duration:\s*max\(/g)?.length ?? 0).toBe(1);
+    expect(styles.match(/--orbit-middle-duration:\s*max\(/g)?.length ?? 0).toBe(1);
+    expect(styles).toMatch(/\.orbit-outer\s*\{[\s\S]*?animation:\s*orbit-ring-outer[^;]*linear infinite;/s);
+    expect(styles).toMatch(/\.orbit-middle\s*\{[\s\S]*?animation:\s*orbit-ring-middle[^;]*linear infinite;/s);
+    expect(styles).not.toMatch(/\.orbit-middle\s*\{[^}]*animation:[^;]*reverse/s);
     expect(styles).toContain("@keyframes orbit-ring-outer");
     expect(styles).toContain("@keyframes orbit-ring-middle");
     expect(styles).toContain(".hero-orbit .orbit");
