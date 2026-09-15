@@ -1305,6 +1305,7 @@ const HUMAN_UX_MESSAGES = {
   "{input} input / {output} output per million tokens": "{input} de entrada / {output} de saída por milhão de tokens",
   "The action could not be completed. Review the details and try again.": "Não foi possível concluir a ação. Confira os detalhes e tente novamente.",
   "Sample failed": "A amostra falhou",
+  "{available} of {required} available": "{available} de {required} disponíveis",
   "Source details": "Detalhes da fonte",
   "Operation details": "Detalhes da operação",
   "Duplicate evidence": "Evidência de duplicidade",
