@@ -47,8 +47,6 @@
   --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
   --orbit-outer-period: 3.2s;
   --orbit-middle-period: 2.4s;
-  --orbit-outer-duration: max(0.01s, calc(var(--orbit-outer-period) * max(0.01, var(--motion-scale-effective))));
-  --orbit-middle-duration: max(0.01s, calc(var(--orbit-middle-period) * max(0.01, var(--motion-scale-effective))));
   --z-popover: 20;
   --motion-ease-standard: cubic-bezier(0.2, 0.7, 0.2, 1);
   --motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
@@ -173,6 +171,8 @@
   --motion-disclosure: calc(var(--motion-disclosure-base) * var(--motion-scale-effective));
   --motion-expand: var(--motion-disclosure);
   --motion-stagger: calc(var(--motion-stagger-base) * var(--motion-scale-effective));
+  --orbit-outer-duration: max(0.01s, calc(var(--orbit-outer-period) * max(0.01, var(--motion-scale-effective))));
+  --orbit-middle-duration: max(0.01s, calc(var(--orbit-middle-period) * max(0.01, var(--motion-scale-effective))));
   --motion-distance: clamp(0px, calc(12px * var(--motion-scale-effective)), 24px);
 }
 
@@ -873,7 +873,7 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
 .orbit-middle {
   width: 232px;
   height: 250px;
-  animation: orbit-ring-middle var(--orbit-middle-duration) linear infinite reverse;
+  animation: orbit-ring-middle var(--orbit-middle-duration) linear infinite;
 }
 
 @keyframes orbit-ring-outer {
