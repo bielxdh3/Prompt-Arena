@@ -1,7 +1,7 @@
 import { formatMessage } from "./i18n";
 import { TechnicalDetails } from "./technical-details";
 import { HumanError, FormFeedback } from "./human-error";
-import { displayName, numberedName, profileDisplayName } from "./display-names";
+import { displayName, isMachineIdentity, numberedName, profileDisplayName } from "./display-names";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
@@ -213,6 +213,7 @@ import {
   modelDownloadCapabilityLabel,
   modelEmptyCopy,
   modelOperationProgressLabel,
+  modelOperationKindLabel,
   modelOperationStatusLabel,
   modelPreviewCopy,
   modelRecordMetadataLabel,
@@ -1914,7 +1915,7 @@ function ModelsView() {
                   {[...modelState.operations].reverse().map((operation) => (
                     <article className="profile-record-row" key={operation.operationId}>
                       <span>
-                        <strong>{operation.kind} · {operation.modelName ?? operation.managedPath ?? operation.modelId ?? "model"}</strong>
+                        <strong>{modelOperationKindLabel(operation.kind)} · {operation.modelName ?? operation.managedPath ?? displayName(operation.modelId, "Model")}</strong>
                         <small>{modelBackendLabel(operation.backend)} · {modelOperationStatusLabel(operation.status)} · {modelOperationProgressLabel(operation)}{operation.message ? ` · ${operation.message}` : ""}</small>
                       </span>
                       {isActiveModelOperation(operation) ? (
@@ -2938,7 +2939,7 @@ function ArenaExecutionMonitor({
         <div className="arena-live-current">
           <p className="eyebrow">{translate("Current sample")}</p>
           <strong>{blind ? "" : `${arenaTelemetryLabel(active, false)} · `} {translate("Sample")} {activeDisplay.currentSampleNumber ?? active.sampleIndex + 1}/{activeDisplay.totalSamples}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · ${translate("Repetition")} ${formatLocaleNumber(activeDisplay.repetitionNumber)}/${formatLocaleNumber(activeDisplay.repetitionsPerCompetitor)}` : ""}</strong>
-          <span>{active.status} · {blind ? translate("Elapsed hidden during blind execution") : formatArenaMs(active.elapsedMs)}</span>
+          <span>{attemptStatusLabel(active.status)} · {blind ? translate("Elapsed hidden during blind execution") : formatArenaMs(active.elapsedMs)}</span>
           {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
         </div>
       )}
@@ -2952,7 +2953,7 @@ function ArenaExecutionMonitor({
           const latestError = visibleArenaTelemetryError(latest.error, blind);
           return <div className="arena-live-row" role="row" key={first.competitorId}>
             <strong role="cell">{arenaTelemetryLabel(first, blind)}</strong>
-            <span role="cell">{latest.status}</span>
+            <span role="cell">{attemptStatusLabel(latest.status)}</span>
             <span role="cell"> {translate("Completed")} {samples.filter((sample) => sample.status === "completed").length}/{samples.length} {translate("samples")}</span>
             <span role="cell">{blind ? translate("Timing hidden") : `Competitor total ${formatArenaMs(rowDisplay.competitorElapsedMs)} · Arena total ${formatArenaMs(rowDisplay.arenaElapsedMs)}`}</span>
             <span role="cell">{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
@@ -3081,8 +3082,8 @@ function ArenaResultsSurface({
       ) : (
         <>
           <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Comparison")}</p><h4>{translate("Responses by competitor")}</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>{translate("Blind evaluate")}</button><button className="text-button" type="button" onClick={onOpenRuns}>{translate("Open history →")}</button></div></div>
-          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Competitor")}</p><h4>{first.competitorLabel}</h4></div><span className="field-help">{items.length} {translate("sample")}{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution ? attemptStatusLabel(item.execution.attempt.status) : translate(item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("Objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? <HumanError summary="Sample failed" detail={item.error} /> : null}</li>; })}</ul></article>; })}</div>
-          {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {entry.competitorLabel}</strong><span>{entry.metric === "human_average_score" ? formatMessage("{score}/5 average", { score: formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }) : formatMessage("{rate}% objective pass rate", { rate: Math.round(entry.value * 100) })}{" · "}{formatMessage("{count} samples", { count: entry.sampleSize })}</span></li>)}</ol></div>}
+          <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Competitor")}</p><h4>{displayName(first.competitorLabel, "Competitor")}</h4></div><span className="field-help">{items.length} {translate("sample")}{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution ? attemptStatusLabel(item.execution.attempt.status) : translate(item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("Objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? <HumanError summary="Sample failed" detail={item.error} /> : null}</li>; })}</ul></article>; })}</div>
+          {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {displayName(entry.competitorLabel, "Competitor")}</strong><span>{entry.metric === "human_average_score" ? formatMessage("{score}/5 average", { score: formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }) : formatMessage("{rate}% objective pass rate", { rate: Math.round(entry.value * 100) })}{" · "}{formatMessage("{count} samples", { count: entry.sampleSize })}</span></li>)}</ol></div>}
           {revealed && lockState === "locked" && <p className="field-help" role="status">{translate("Blind scores are locked in immutable per-run evaluation records. Responses are now identified.")}</p>}
            <div className="export-actions" role="group" aria-label={translate("Current Arena evidence exports")}><button className="secondary-button" type="button" onClick={() => download("json")}>{translate("Export JSON")}</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>{translate("Export Markdown")}</button><button className="secondary-button" type="button" onClick={() => download("csv")}>{translate("Export CSV")}</button></div>
            {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
@@ -3405,7 +3406,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
             )}
           </>
         )}
-        {state.status === "ready" && <ArenaSummaryHistory summaries={state.summaries} />}
+        {state.status === "ready" && <ArenaSummaryHistory summaries={state.summaries} versions={state.versions} />}
       </section>
     </div>
   );
@@ -3417,13 +3418,14 @@ type ArenaSummaryDetailState =
   | { status: "ready"; record: ArenaSummaryRecord }
   | { status: "error"; message: string };
 
-function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] }) {
+function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryRecord[]; versions: BenchmarkVersionSummary[] }) {
   const [selectedArenaId, setSelectedArenaId] = useState("");
   const [detail, setDetail] = useState<ArenaSummaryDetailState>({ status: "idle" });
   const summaryRequestRef = useRef(0);
   const orderedSummaries = [...summaries].sort((left, right) => (
     right.createdAt.localeCompare(left.createdAt) || right.arenaId.localeCompare(left.arenaId)
   ));
+  const versionById = new Map(versions.map((version) => [version.versionId, version]));
 
   useEffect(() => {
     if (!summaries.some((summary) => summary.arenaId === selectedArenaId)) {
@@ -3480,7 +3482,7 @@ function ArenaSummaryHistory({ summaries }: { summaries: ArenaSummaryRecord[] })
               >
                 <span>
                   <strong>{translate("Arena")} / {formatDisplayTimestamp(summary.createdAt)}</strong>
-                  <small>{summary.benchmarkVersionId} · {formatLocaleNumber(summary.evidence.length)}  {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)}</small>
+                  <small>{displayName(versionById.get(summary.benchmarkVersionId)?.displayName, "Benchmark")} · {formatLocaleNumber(summary.evidence.length)}  {translate("samples")} · {translate("saved")} {formatDisplayTimestamp(summary.createdAt)} <TechnicalDetails label={translate("Benchmark version")} value={summary.benchmarkVersionId} /></small>
                 </span>
                 <span aria-hidden="true">→</span>
               </button>
@@ -3610,9 +3612,9 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
               <tbody>
                 {record.evidence.map((evidence, index) => (
                   <tr key={`${evidence.runId}-${evidence.repetition}-${index}`}>
-                    <th scope="row">{evidence.competitorLabel}</th>
+                    <th scope="row">{displayName(evidence.competitorLabel, "Competitor")}</th>
                     <td>#{evidence.repetition}</td>
-                    <td>{evidence.status}</td>
+                    <td>{attemptStatusLabel(evidence.status)}</td>
                     <td>{numberedName("Run", evidence.runId, record.evidence.map((item) => item.runId))}<TechnicalDetails value={`${evidence.runId} / ${evidence.attemptId ?? ""}`} /></td>
                     <td>{evidence.durationMs === null ? translate("Not recorded") : `${evidence.durationMs.toFixed(0)} ms`}</td>
                     <td>{evidence.tokensPerSecond === null || evidence.tokensPerSecond === undefined ? translate("Not recorded") : evidence.tokensPerSecond.toFixed(2)}</td>
@@ -5186,7 +5188,7 @@ function ProviderStatusCard({ provider }: { provider: ProviderCatalogEntry }) {
 }
 
 function BoundaryRow({ label, value }: { label: string; value: string }) {
-  if (/\bID\b|hash|Profile revision|Latest run|identity/i.test(label) || /[0-9a-f]{8}-[0-9a-f]{4}-/i.test(value)) {
+  if (/\bID\b|hash|Profile revision|Latest run|identity/i.test(label) || isMachineIdentity(value)) {
     return <TechnicalDetails label={label} value={value} />;
   }
   return (

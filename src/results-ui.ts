@@ -24,20 +24,20 @@ export function blindReviewHidesAttemptEvidence(status: string): boolean {
 export function blindEvaluationStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {
     case "prepared":
-      return "Ready for blind review";
+      return translate("Ready for blind review");
     case "locked":
-      return "Locked and read-only";
+      return translate("Locked and read-only");
     case "empty":
-      return "No eligible responses";
+      return translate("No eligible responses");
     default:
-      return "Evaluation unavailable";
+      return translate("Evaluation unavailable");
   }
 }
 
 export function blindEvaluationScoreLabel(score: number | null | undefined): string {
   return score !== null && score !== undefined && Number.isInteger(score) && score >= 1 && score <= 5
     ? `${score}/5`
-    : "Not scored";
+    : translate("Not scored");
 }
 
 export function updateBlindEvaluationScore(
