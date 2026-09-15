@@ -92,6 +92,42 @@ jobs:
           pattern: prompt-arena-*
           path: release-artifacts
 
+      - name: Normalize release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+
+          for artifact_dir in release-artifacts/prompt-arena-*; do
+            [ -d "$artifact_dir" ] || continue
+            artifact_name=$(basename "$artifact_dir")
+            case "$artifact_name" in
+              prompt-arena-windows-*) platform=windows ;;
+              prompt-arena-linux-*) platform=linux ;;
+              *) platform=unknown ;;
+            esac
+
+            while IFS= read -r -d '' file; do
+              base=$(basename "$file")
+              case "$base" in
+                checksums-sha256.txt)
+                  cp "$file" "release-upload/checksums-sha256-${platform}.txt"
+                  ;;
+                package-verification.txt)
+                  cp "$file" "release-upload/package-verification-${platform}.txt"
+                  ;;
+                msi-build-evidence.txt)
+                  cp "$file" "release-upload/msi-build-evidence-${platform}.txt"
+                  ;;
+                *.msi|*.exe|*.deb|*.AppImage)
+                  cp "$file" "release-upload/$base"
+                  ;;
+              esac
+            done < <(find "$artifact_dir" -type f -print0)
+          done
+
+          test -n "$(find release-upload -type f -print -quit)" || { echo "No releasable assets were normalized." >&2; exit 1; }
+
       - name: Publish or refresh GitHub release
         shell: bash
         env:
@@ -102,7 +138,7 @@ jobs:
           set -euo pipefail
           TAG="v${VERSION}"
           NOTES="docs/releases/v${VERSION}.md"
-          mapfile -t FILES < <(find release-artifacts -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name 'checksums-sha256.txt' -o -name 'package-verification.txt' -o -name 'msi-build-evidence.txt' \) | sort)
+          mapfile -t FILES < <(find release-upload -maxdepth 1 -type f | sort)
           test ${#FILES[@]} -gt 0 || { echo "No releasable artifacts found." >&2; exit 1; }
 
           FLAGS=(--title "Prompt Arena ${TAG} Beta" --notes-file "$NOTES" --target "${{ needs.validate.outputs.ref }}")
