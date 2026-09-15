@@ -29,6 +29,8 @@ import { compareHistoricalRuns, type HistoricalRegression } from "./historical-r
 import { computeEloRatings, ratingOutcomesFromArenaSummaries, type RatingSet } from "./model-ratings";
 import { generatePerturbations, scoreRobustness, type PerturbationType } from "./robustness-arena";
 import { exportReproBundle, importReproBundle } from "./repro-bundle";
+import { AccessibleListbox } from "./accessible-listbox";
+import { formatLocaleNumber, translate } from "./i18n";
 
 type SurfaceState =
   | { status: "loading" }
@@ -143,28 +145,28 @@ export function RoadmapFeaturesView() {
 
   async function persistRatings() {
     if (!ratings) {
-      setNotice("No eligible head-to-head evidence.");
+      setNotice(translate("No eligible head-to-head evidence"));
       return;
     }
     try {
       await saveRoadmapRecord({ recordId: `ratings-${ratings.createdAt}`, kind: "model_ratings", payload: ratings as unknown as Record<string, unknown> });
-      setNotice("Ratings saved immutably.");
+      setNotice(translate("Ratings saved immutably."));
       await refresh();
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "Ratings could not be saved.");
+      setNotice(error instanceof Error ? error.message : translate("Ratings could not be saved."));
     }
   }
 
   async function generateRobustness() {
     if (!version || !document || !profileId) {
-      setNotice("Choose a benchmark and immutable model profile first.");
+      setNotice(translate("Choose a benchmark and immutable model profile first."));
       return;
     }
     const task = document.tasks.find((item) => item.taskId === taskId);
     const sourceCase = task?.cases.find((item) => item.caseId === caseId);
     const profile = state.status === "ready" ? state.profiles.find((item) => item.profileRevisionId === profileId) : undefined;
     if (!task || !sourceCase || !profile) {
-      setNotice("The selected immutable task, case, or profile is unavailable.");
+      setNotice(translate("The selected immutable task, case, or profile is unavailable."));
       return;
     }
     const sourcePrompt = [task.prompt, sourceCase.prompt ?? null].filter(Boolean).join("\n\n");
@@ -196,10 +198,10 @@ export function RoadmapFeaturesView() {
       await saveRoadmapRecord({ recordId: `robustness-${version.summary.versionId}-${taskId}-${caseId}`, kind: "robustness_arena", payload: result as unknown as Record<string, unknown> });
       setSingle(basePayload);
       setPerturbations(outcomes);
-      setNotice("Robustness variants executed with the same immutable profile and expected-answer contract.");
+      setNotice(translate("Robustness variants executed with the same immutable profile."));
       await refresh();
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "The robustness run could not be completed.");
+      setNotice(error instanceof Error ? error.message : translate("The robustness run could not be completed."));
     } finally {
       setBusy(false);
     }
@@ -208,16 +210,16 @@ export function RoadmapFeaturesView() {
   async function exportBundle() {
     const source = single ?? singlePayloads[0];
     if (!source) {
-      setNotice("Run a single-model benchmark before exporting a bundle.");
+      setNotice(translate("Run a single-model benchmark before exporting a bundle."));
       return;
     }
     try {
       const serialized = await exportReproBundle(source as unknown as Record<string, unknown>);
       setBundle(serialized);
       await saveRoadmapRecord({ recordId: `bundle-${source.runId}`, kind: "repro_bundle", payload: JSON.parse(serialized) as Record<string, unknown> });
-      setNotice("Secret-free repro bundle generated and integrity-manifested.");
+      setNotice(translate("Secret-free repro bundle generated and integrity-manifested."));
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "The repro bundle could not be generated.");
+      setNotice(error instanceof Error ? error.message : translate("The repro bundle could not be generated."));
     }
   }
 
@@ -230,9 +232,9 @@ export function RoadmapFeaturesView() {
       });
       setBundle(JSON.stringify(imported.payload, null, 2));
       const differences = imported.differences.length ? ` · ${imported.differences.join("; ")}` : "";
-      setNotice(`Repro bundle integrity verified. Original evidence was not overwritten.${differences}`);
+      setNotice(`${translate("Repro bundle integrity verified. Original evidence was not overwritten.")}${differences}`);
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "The repro bundle could not be imported.");
+      setNotice(error instanceof Error ? error.message : translate("The repro bundle could not be imported."));
     }
   }
 
@@ -240,21 +242,21 @@ export function RoadmapFeaturesView() {
     const baseline = singlePayloads.find((payload) => payload.runId === baselineId);
     const candidate = singlePayloads.find((payload) => payload.runId === candidateId);
     if (!baseline || !candidate || baseline.runId === candidate.runId) {
-      setNotice("Select two different immutable runs.");
+      setNotice(translate("Select two different immutable runs."));
       return;
     }
     const result = compareHistoricalRuns(baseline, candidate);
     setRegression(result);
     try {
       await saveRoadmapRecord({ recordId: `regression-${baseline.runId}-${candidate.runId}`, kind: "historical_regression", payload: result as unknown as Record<string, unknown> });
-      setNotice("Historical comparison saved immutably.");
+      setNotice(translate("Historical comparison saved immutably."));
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "The comparison was calculated but could not be saved.");
+      setNotice(error instanceof Error ? error.message : translate("The comparison was calculated but could not be saved."));
     }
   }
 
   async function saveSingle(execution: PersistedExecution, profile: ProfileRevision, selectedTaskId: string, selectedCaseId: string) {
-    if (!version) throw new Error("Select an immutable benchmark version first.");
+    if (!version) throw new Error(translate("Select an immutable benchmark version first."));
     const payload = buildSingleModelBenchmarkPayload({
       run: asRunRecord(execution),
       attempt: asAttemptRecord(execution),
@@ -273,12 +275,12 @@ export function RoadmapFeaturesView() {
 
   async function runSingle() {
     if (!version || !document || !profileId || !taskId || !caseId) {
-      setNotice("Choose a benchmark, model, task, and case first.");
+      setNotice(translate("Choose a benchmark, model, task, and case first."));
       return;
     }
     const profile = state.status === "ready" ? state.profiles.find((item) => item.profileRevisionId === profileId) : undefined;
     if (!profile) {
-      setNotice("The selected immutable profile is unavailable.");
+      setNotice(translate("The selected immutable profile is unavailable."));
       return;
     }
     setBusy(true);
@@ -293,7 +295,7 @@ export function RoadmapFeaturesView() {
         metadata: { mode: "single_model_benchmark", featureVersion: 1 },
       }));
       await saveSingle(execution, profile, taskId, caseId);
-      setNotice("Single-model evidence saved immutably.");
+      setNotice(translate("Single-model evidence saved immutably."));
       await refresh();
     } catch (error: unknown) {
       setNotice(error instanceof Error ? error.message : "The single-model benchmark could not be completed.");
@@ -304,17 +306,17 @@ export function RoadmapFeaturesView() {
 
   async function runSuite() {
     if (!version || !document || !profileId) {
-      setNotice("Choose a benchmark and immutable model profile first.");
+      setNotice(translate("Choose a benchmark and immutable model profile first."));
       return;
     }
     const profile = state.status === "ready" ? state.profiles.find((item) => item.profileRevisionId === profileId) : undefined;
     if (!profile) {
-      setNotice("The selected immutable profile is unavailable.");
+      setNotice(translate("The selected immutable profile is unavailable."));
       return;
     }
     const challenges = document.tasks.flatMap((task) => task.cases.map((benchmarkCase) => ({ taskId: task.taskId, caseId: benchmarkCase.caseId })));
     if (challenges.length === 0) {
-      setNotice("The selected benchmark has no executable challenges.");
+      setNotice(translate("The selected benchmark has no executable challenges."));
       return;
     }
     setBusy(true);
@@ -339,76 +341,76 @@ export function RoadmapFeaturesView() {
         await saveSingle(execution, profile, challenge.taskId, challenge.caseId);
         completed += 1;
       }
-      setNotice(`Benchmark suite saved immutably: ${completed}/${challenges.length}${skipped ? ` · ${skipped} unavailable cases skipped` : ""}`);
+      setNotice(`${translate("Benchmark suite saved immutably")} : ${completed}/${challenges.length}${skipped ? ` · ${skipped} ${translate("unavailable cases skipped")}` : ""}`);
       await refresh();
     } catch (error: unknown) {
-      setNotice(error instanceof Error ? error.message : "The benchmark suite could not be completed.");
+      setNotice(error instanceof Error ? error.message : translate("The benchmark suite could not be completed."));
     } finally {
       setBusy(false);
     }
   }
 
-  if (state.status === "preview") return <section className="panel roadmap-features-view"><p className="eyebrow">Insights</p><h2>Roadmap features are desktop-only</h2><p>Browser preview never invents benchmark runs or evidence. Open the desktop app to use local single-model execution.</p></section>;
-  if (state.status === "loading") return <section className="panel"><StateMessage title="Loading roadmap evidence" description="Reading immutable local model records." /></section>;
-  if (state.status === "error") return <section className="panel"><StateMessage title="Roadmap evidence unavailable" description={state.message} error /></section>;
+  if (state.status === "preview") return <section className="panel roadmap-features-view"><p className="eyebrow">{translate("Insights")}</p><h2>{translate("Roadmap features are desktop-only")}</h2><p>{translate("Browser preview never invents benchmark runs, telemetry, ratings, or bundles. Open the desktop app to use local evidence.")}</p></section>;
+  if (state.status === "loading") return <section className="panel"><StateMessage title={translate("Loading roadmap evidence")} description={translate("Reading immutable local model records.")} /></section>;
+  if (state.status === "error") return <section className="panel"><StateMessage title={translate("Roadmap evidence unavailable")} description={state.message} error /></section>;
 
   return (
     <div className="view-stack roadmap-features-view">
       <section className="panel page-intro">
-        <p className="eyebrow">Insights</p>
-        <h2>Single-model evidence without a competitor matrix.</h2>
-        <p>Run one immutable model/profile against one case, or process every case in the selected benchmark. Every saved record keeps the source run, objective result, and measured runtime fields together.</p>
+        <p className="eyebrow">{translate("Insights")}</p>
+        <h2>{translate("Single-model evidence without a competitor matrix.")}</h2>
+        <p>{translate("Run one immutable model/profile against one case, or process every case in the selected benchmark. Every saved record keeps the source run, objective result, and measured runtime fields together.")}</p>
         {notice && <p className="field-help" role="status">{notice}</p>}
       </section>
 
       <section className="panel" aria-labelledby="single-model-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #36</p><h3 id="single-model-heading">Single-model benchmark</h3></div><span className="section-index">36</span></div>
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #36</p><h3 id="single-model-heading">{translate("Single-model benchmark")}</h3></div><span className="section-index">36</span></div>
         <div className="arena-selection-grid">
-          <FieldSelect id="insights-version" label="Benchmark version" value={versionId} options={state.versions.map((option) => ({ value: option.versionId, label: option.label }))} onChange={setVersionId} />
-          <FieldSelect id="insights-profile" label="Immutable model profile" value={profileId} options={state.profiles.map((profile) => ({ value: profile.profileRevisionId, label: `${profile.profileRevisionId} · ${profile.model}` }))} onChange={setProfileId} />
-          <FieldSelect id="insights-task" label="Task" value={taskId} options={taskChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setTaskId} />
-          <FieldSelect id="insights-case" label="Case" value={caseId} options={caseChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setCaseId} />
+          <FieldSelect id="insights-version" label={translate("Benchmark version")} value={versionId} options={state.versions.map((option) => ({ value: option.versionId, label: option.label }))} onChange={setVersionId} />
+          <FieldSelect id="insights-profile" label={translate("Immutable model profile")} value={profileId} options={state.profiles.map((profile) => ({ value: profile.profileRevisionId, label: `${profile.profileRevisionId} · ${profile.model}` }))} onChange={setProfileId} />
+          <FieldSelect id="insights-task" label={translate("Task")} value={taskId} options={taskChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setTaskId} />
+          <FieldSelect id="insights-case" label={translate("Case")} value={caseId} options={caseChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setCaseId} />
         </div>
-        <div className="arena-actions"><button className="primary-button" type="button" onClick={() => void runSingle()} disabled={busy}>{busy ? "Running…" : "Run single benchmark"}</button><button className="secondary-button" type="button" onClick={() => void runSuite()} disabled={busy}>Run full benchmark suite</button></div>
+        <div className="arena-actions"><button className="primary-button" type="button" onClick={() => void runSingle()} disabled={busy}>{busy ? translate("Running…") : translate("Run single benchmark")}</button><button className="secondary-button" type="button" onClick={() => void runSuite()} disabled={busy}>{translate("Run full benchmark suite")}</button></div>
         {single && <EvidenceSummary payload={single} />}
       </section>
 
       <section className="panel" aria-labelledby="single-history-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Immutable source records</p><h3 id="single-history-heading">Saved single-model runs</h3></div><span className="run-status run-status-neutral">{singlePayloads.length}</span></div>
-        {singlePayloads.length === 0 ? <StateMessage title="No single-model records yet" description="Run a bounded case to create the first immutable evidence record." /> : <div className="roadmap-table"><table><thead><tr><th>Run</th><th>Model</th><th>Task / case</th><th>Objective</th></tr></thead><tbody>{singlePayloads.map((payload) => <tr key={payload.runId}><td>{payload.runId}</td><td>{String(payload.profileRevision.model ?? "Unavailable")}</td><td>{payload.taskId} / {payload.caseId}</td><td>{payload.objective?.passed === true ? "Pass" : payload.objective?.passed === false ? "Fail" : "Unavailable"}</td></tr>)}</tbody></table></div>}
+        <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Immutable source records")}</p><h3 id="single-history-heading">{translate("Saved single-model runs")}</h3></div><span className="run-status run-status-neutral">{formatLocaleNumber(singlePayloads.length)}</span></div>
+        {singlePayloads.length === 0 ? <StateMessage title={translate("No single-model records yet")} description={translate("Run a bounded case to create the first immutable evidence record.")} /> : <div className="roadmap-table"><table><thead><tr><th>{translate("Run")}</th><th>{translate("Model")}</th><th>{translate("Task / case")}</th><th>{translate("Objective")}</th></tr></thead><tbody>{singlePayloads.map((payload) => <tr key={payload.runId}><td>{payload.runId}</td><td>{String(payload.profileRevision.model ?? translate("Unavailable"))}</td><td>{payload.taskId} / {payload.caseId}</td><td>{payload.objective?.passed === true ? translate("Pass") : payload.objective?.passed === false ? translate("Fail") : translate("Unavailable")}</td></tr>)}</tbody></table></div>}
       </section>
 
       <section className="panel" aria-labelledby="performance-lab-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #37</p><h3 id="performance-lab-heading">Performance Lab</h3></div><span className="section-index">37</span></div>
-        <p className="field-help">Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.</p>
-        {single ? <MetricTable payload={single} /> : <StateMessage title="No performance evidence yet" description="Run a single-model benchmark to populate this local table." />}
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #37</p><h3 id="performance-lab-heading">{translate("Performance Lab")}</h3></div><span className="section-index">37</span></div>
+        <p className="field-help">{translate("Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.")}</p>
+        {single ? <MetricTable payload={single} /> : <StateMessage title={translate("No performance evidence yet")} description={translate("Run a single-model benchmark to populate this local table.")} />}
       </section>
 
       <section className="panel" aria-labelledby="historical-regression-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #38</p><h3 id="historical-regression-heading">Historical regression</h3></div><span className="section-index">38</span></div>
-        <p className="field-help">Compare immutable source runs while surfacing changed model, runtime, benchmark, seed, hardware, or prompt conditions.</p>
-        <div className="arena-selection-grid"><FieldSelect id="insights-baseline" label="Baseline run" value={baselineId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setBaselineId} /><FieldSelect id="insights-candidate" label="Candidate run" value={candidateId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setCandidateId} /></div>
-        <button className="secondary-button" type="button" onClick={() => void calculateRegression()} disabled={singlePayloads.length < 2}>Compare immutable runs</button>
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #38</p><h3 id="historical-regression-heading">{translate("Historical regression")}</h3></div><span className="section-index">38</span></div>
+        <p className="field-help">{translate("Compare immutable source runs while surfacing changed model, runtime, benchmark, seed, hardware, or prompt conditions.")}</p>
+        <div className="arena-selection-grid"><FieldSelect id="insights-baseline" label={translate("Baseline run")} value={baselineId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setBaselineId} /><FieldSelect id="insights-candidate" label={translate("Candidate run")} value={candidateId} options={singlePayloads.map((payload) => ({ value: payload.runId, label: payload.runId }))} onChange={setCandidateId} /></div>
+        <button className="secondary-button" type="button" onClick={() => void calculateRegression()} disabled={singlePayloads.length < 2}>{translate("Compare immutable runs")}</button>
         {regression && <RegressionTable comparison={regression} />}
       </section>
 
       <section className="panel" aria-labelledby="model-ratings-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #39</p><h3 id="model-ratings-heading">Persistent model ratings</h3></div><span className="section-index">39</span></div>
-        <p className="field-help">Ratings use only comparable immutable Arena outcomes, are deterministic for the same evidence, and retain category and uncertainty.</p>
-        {ratings ? <><div className="roadmap-table"><table><thead><tr><th>Model</th><th>Category</th><th>Rating</th><th>Samples</th><th>Uncertainty</th></tr></thead><tbody>{ratings.ratings.map((rating) => <tr key={`${rating.category ?? ""}:${rating.competitorId}`}><td>{rating.competitorId}</td><td>{rating.category ?? "All"}</td><td>{rating.rating.toFixed(2)}</td><td>{rating.sampleCount}</td><td>±{rating.uncertainty.toFixed(2)}</td></tr>)}</tbody></table></div><button className="secondary-button" type="button" onClick={() => void persistRatings()}>Persist ratings</button></> : <StateMessage title="No eligible head-to-head evidence" description="Ratings remain empty until comparable immutable Arena outcomes exist." />}
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #39</p><h3 id="model-ratings-heading">{translate("Persistent model ratings")}</h3></div><span className="section-index">39</span></div>
+        <p className="field-help">{translate("Ratings use only comparable immutable Arena outcomes, are deterministic for the same evidence, and retain category and uncertainty.")}</p>
+        {ratings ? <><div className="roadmap-table"><table><thead><tr><th>{translate("Model")}</th><th>{translate("Category")}</th><th>{translate("Rating")}</th><th>{translate("Samples")}</th><th>{translate("Uncertainty")}</th></tr></thead><tbody>{ratings.ratings.map((rating) => <tr key={`${rating.category ?? ""}:${rating.competitorId}`}><td>{rating.competitorId}</td><td>{rating.category ?? translate("All")}</td><td>{rating.rating.toFixed(2)}</td><td>{formatLocaleNumber(rating.sampleCount)}</td><td>±{rating.uncertainty.toFixed(2)}</td></tr>)}</tbody></table></div><button className="secondary-button" type="button" onClick={() => void persistRatings()}>{translate("Persist ratings")}</button></> : <StateMessage title={translate("No eligible head-to-head evidence")} description={translate("Ratings remain empty until comparable immutable Arena outcomes exist.")} />}
       </section>
 
       <section className="panel" aria-labelledby="robustness-arena-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #40</p><h3 id="robustness-arena-heading">Robustness Arena</h3></div><span className="section-index">40</span></div>
-        <p className="field-help">Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.</p>
-        <button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>Run robustness variants</button>
-        {perturbations.length > 0 && <ul className="roadmap-list">{perturbations.map((variant) => <li key={variant.perturbationId}><strong>{variant.transformationType}</strong><span>{variant.provenance} · {variant.passed === null ? "Unavailable" : variant.passed ? "Pass" : "Fail"}</span></li>)}</ul>}
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #40</p><h3 id="robustness-arena-heading">{translate("Robustness Arena")}</h3></div><span className="section-index">40</span></div>
+        <p className="field-help">{translate("Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.")}</p>
+        <button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>{translate("Run robustness variants")}</button>
+        {perturbations.length > 0 && <ul className="roadmap-list">{perturbations.map((variant) => <li key={variant.perturbationId}><strong>{variant.transformationType}</strong><span>{variant.provenance} · {variant.passed === null ? translate("Unavailable") : variant.passed ? translate("Pass") : translate("Fail")}</span></li>)}</ul>}
       </section>
 
       <section className="panel" aria-labelledby="repro-bundle-heading">
-        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #41</p><h3 id="repro-bundle-heading">Repro Bundle</h3></div><span className="section-index">41</span></div>
-        <p className="field-help">Bundles are bounded JSON with a SHA-256 manifest. Credentials and unrelated environment data are excluded; importing never overwrites source evidence.</p>
-        <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => void exportBundle()} disabled={!single && singlePayloads.length === 0}>Export bundle</button><label className="text-button">Import bundle<input type="file" accept="application/json,.json" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importBundle(file); }} /></label></div>
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #41</p><h3 id="repro-bundle-heading">{translate("Repro Bundle")}</h3></div><span className="section-index">41</span></div>
+        <p className="field-help">{translate("Bundles are bounded JSON with a SHA-256 manifest. Credentials and unrelated environment data are excluded; importing never overwrites source evidence.")}</p>
+        <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => void exportBundle()} disabled={!single && singlePayloads.length === 0}>{translate("Export bundle")}</button><label className="text-button">{translate("Import bundle")}<input type="file" accept="application/json,.json" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void importBundle(file); }} /></label></div>
         {bundle && <pre className="roadmap-bundle-preview">{bundle}</pre>}
       </section>
     </div>
@@ -416,25 +418,25 @@ export function RoadmapFeaturesView() {
 }
 
 function FieldSelect({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
-  return <label className="arena-select-control" htmlFor={id}><span className="field-label">{label}</span><select className="font-select" id={id} value={value} onChange={(event) => onChange(event.currentTarget.value)}><option value="">Select…</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder={translate("Select…")} onChange={onChange} />;
 }
 
 function EvidenceSummary({ payload }: { payload: SingleModelBenchmarkPayload }) {
-  return <div className="metric-grid"><RoadmapMetricCard label="Run" value={payload.runId} detail={`${payload.benchmarkVersionId} · ${payload.taskId}/${payload.caseId}`} /><RoadmapMetricCard label="Model" value={String(payload.profileRevision.model ?? "Unavailable")} detail={String(payload.profileRevision.runtime ?? "Runtime unavailable")} /><RoadmapMetricCard label="Objective" value={payload.objective?.passed === true ? "Pass" : payload.objective?.passed === false ? "Fail" : "Unavailable"} detail="Immutable verifier evidence" /></div>;
+  return <div className="metric-grid"><RoadmapMetricCard label={translate("Run")} value={payload.runId} detail={`${payload.benchmarkVersionId} · ${payload.taskId}/${payload.caseId}`} /><RoadmapMetricCard label={translate("Model")} value={String(payload.profileRevision.model ?? translate("Unavailable"))} detail={String(payload.profileRevision.runtime ?? translate("Runtime unavailable"))} /><RoadmapMetricCard label={translate("Objective")} value={payload.objective?.passed === true ? translate("Pass") : payload.objective?.passed === false ? translate("Fail") : translate("Unavailable")} detail={translate("Immutable verifier evidence")} /></div>;
 }
 
 function MetricTable({ payload }: { payload: SingleModelBenchmarkPayload }) {
-  return <div className="roadmap-table"><table><thead><tr><th>Metric</th><th>Value</th><th>Evidence</th></tr></thead><tbody>{Object.entries(payload.performance.metrics).map(([name, metric]) => <tr key={name}><td>{name}</td><td>{metric.value === null ? "Unavailable" : String(metric.value)}</td><td>{metric.unit} · {metric.source} · {metric.confidence} · {metric.temperature}</td></tr>)}</tbody></table></div>;
+  return <div className="roadmap-table"><table><thead><tr><th>{translate("Metric")}</th><th>{translate("Value")}</th><th>{translate("Evidence")}</th></tr></thead><tbody>{Object.entries(payload.performance.metrics).map(([name, metric]) => <tr key={name}><td>{name}</td><td>{metric.value === null ? translate("Unavailable") : String(metric.value)}</td><td>{metric.unit} · {metric.source} · {metric.confidence} · {metric.temperature}</td></tr>)}</tbody></table></div>;
 }
 
 function RegressionTable({ comparison }: { comparison: HistoricalRegression }) {
-  return <div className="roadmap-table"><p className="field-help">{comparison.compatibility.compatible ? "Conditions are compatible." : `Changed conditions: ${comparison.compatibility.changedDimensions.join(", ")}`}</p><table><thead><tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Delta</th></tr></thead><tbody>{comparison.metrics.map((metric) => <tr key={metric.metric}><td>{metric.metric}</td><td>{metric.baseline === null ? "—" : String(metric.baseline)}</td><td>{metric.candidate === null ? "—" : String(metric.candidate)}</td><td>{metric.absoluteDelta === null ? "Insufficient data" : `${metric.absoluteDelta > 0 ? "+" : ""}${metric.absoluteDelta} · ${metric.status}`}</td></tr>)}</tbody></table></div>;
+  return <div className="roadmap-table"><p className="field-help">{comparison.compatibility.compatible ? translate("Conditions are compatible.") : `${translate("Changed conditions")}: ${comparison.compatibility.changedDimensions.join(", ")}`}</p><table><thead><tr><th>{translate("Metric")}</th><th>{translate("Baseline")}</th><th>{translate("Candidate")}</th><th>{translate("Delta")}</th></tr></thead><tbody>{comparison.metrics.map((metric) => <tr key={metric.metric}><td>{metric.metric}</td><td>{metric.baseline === null ? "—" : String(metric.baseline)}</td><td>{metric.candidate === null ? "—" : String(metric.candidate)}</td><td>{metric.absoluteDelta === null ? translate("Insufficient data") : `${metric.absoluteDelta > 0 ? "+" : ""}${metric.absoluteDelta} · ${translate(metric.status)}`}</td></tr>)}</tbody></table></div>;
 }
 
 function RoadmapMetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <article className="metric-card"><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
+  return <article className="metric-card"><span>{translate(label)}</span><strong>{value}</strong><small>{translate(detail)}</small></article>;
 }
 
 function StateMessage({ title, description, error = false }: { title: string; description: string; error?: boolean }) {
-  return <div className={`state-message ${error ? "is-error" : ""}`} role={error ? "alert" : undefined}><strong>{title}</strong><p>{description}</p></div>;
+  return <div className={`state-message ${error ? "is-error" : ""}`} role={error ? "alert" : undefined}><strong>{translate(title)}</strong><p>{translate(description)}</p></div>;
 }
