@@ -22,7 +22,7 @@ import {
   singleModelRecord,
   type SingleModelBenchmarkPayload,
 } from "./single-model-benchmark";
-import type { PerformanceEvidence } from "./performance-lab";
+import { buildPerformanceRecord, performanceEvidenceFromExecution } from "./performance-lab";
 
 type SurfaceState =
   | { status: "loading" }
@@ -32,34 +32,6 @@ type SurfaceState =
 
 function newId(prefix: string): string {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Date.now().toString(36)}`;
-}
-
-function performanceEvidenceFromExecution(execution: PersistedExecution): PerformanceEvidence {
-  const summary = execution.attempt.responseSummary;
-  const timing = summary?.timing;
-  const usage = summary?.usage;
-  const ms = (value: number | null | undefined): number | null => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value / 1_000_000 : null;
-  const metric = (value: number | null, unit: string) => ({
-    value,
-    unit,
-    source: "runtime response summary",
-    samplingMethod: value === null ? "unavailable" as const : "runtime" as const,
-    samplingIntervalMs: null,
-    state: value === null ? "unavailable" as const : "observed" as const,
-    confidence: value === null ? "unavailable" as const : "high" as const,
-    temperature: "unknown" as const,
-  });
-  return {
-    schemaVersion: 1,
-    temperature: "unknown",
-    metrics: {
-      totalDuration: metric(ms(timing?.totalDurationNs), "ms"),
-      loadDuration: metric(ms(timing?.loadDurationNs), "ms"),
-      generationDuration: metric(ms(timing?.evalDurationNs), "ms"),
-      promptTokens: metric(typeof usage?.promptTokens === "number" ? usage.promptTokens : null, "tokens"),
-      completionTokens: metric(typeof usage?.completionTokens === "number" ? usage.completionTokens : null, "tokens"),
-    },
-  };
 }
 
 function asRunRecord(execution: PersistedExecution): RunRecord {
@@ -92,7 +64,7 @@ export function RoadmapFeaturesView() {
       const [versions, profiles, records] = await Promise.all([
         readBenchmarkVersions(),
         readProfileRevisions(),
-        readRoadmapRecords("single_model_benchmark"),
+        readRoadmapRecords(),
       ]);
       setState({
         status: "ready",
@@ -147,7 +119,7 @@ export function RoadmapFeaturesView() {
   }, [document, taskId]);
 
   const singlePayloads = useMemo(() => state.status === "ready"
-    ? state.records.map((record) => record.payload as unknown as SingleModelBenchmarkPayload)
+    ? state.records.filter((record) => record.kind === "single_model_benchmark").map((record) => record.payload as unknown as SingleModelBenchmarkPayload)
     : [], [state]);
 
   async function saveSingle(execution: PersistedExecution, profile: ProfileRevision, selectedTaskId: string, selectedCaseId: string) {
@@ -164,6 +136,7 @@ export function RoadmapFeaturesView() {
       hardware: null,
     });
     await saveRoadmapRecord(singleModelRecord(payload));
+    await saveRoadmapRecord(buildPerformanceRecord(payload));
     setSingle(payload);
   }
 
@@ -273,6 +246,12 @@ export function RoadmapFeaturesView() {
         <div className="section-heading compact-heading"><div><p className="eyebrow">Immutable source records</p><h3 id="single-history-heading">Saved single-model runs</h3></div><span className="run-status run-status-neutral">{singlePayloads.length}</span></div>
         {singlePayloads.length === 0 ? <StateMessage title="No single-model records yet" description="Run a bounded case to create the first immutable evidence record." /> : <div className="roadmap-table"><table><thead><tr><th>Run</th><th>Model</th><th>Task / case</th><th>Objective</th></tr></thead><tbody>{singlePayloads.map((payload) => <tr key={payload.runId}><td>{payload.runId}</td><td>{String(payload.profileRevision.model ?? "Unavailable")}</td><td>{payload.taskId} / {payload.caseId}</td><td>{payload.objective?.passed === true ? "Pass" : payload.objective?.passed === false ? "Fail" : "Unavailable"}</td></tr>)}</tbody></table></div>}
       </section>
+
+      <section className="panel" aria-labelledby="performance-lab-heading">
+        <div className="section-heading compact-heading"><div><p className="eyebrow">Issue #37</p><h3 id="performance-lab-heading">Performance Lab</h3></div><span className="section-index">37</span></div>
+        <p className="field-help">Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.</p>
+        {single ? <MetricTable payload={single} /> : <StateMessage title="No performance evidence yet" description="Run a single-model benchmark to populate this local table." />}
+      </section>
     </div>
   );
 }
@@ -283,6 +262,10 @@ function FieldSelect({ id, label, value, options, onChange }: { id: string; labe
 
 function EvidenceSummary({ payload }: { payload: SingleModelBenchmarkPayload }) {
   return <div className="metric-grid"><RoadmapMetricCard label="Run" value={payload.runId} detail={`${payload.benchmarkVersionId} · ${payload.taskId}/${payload.caseId}`} /><RoadmapMetricCard label="Model" value={String(payload.profileRevision.model ?? "Unavailable")} detail={String(payload.profileRevision.runtime ?? "Runtime unavailable")} /><RoadmapMetricCard label="Objective" value={payload.objective?.passed === true ? "Pass" : payload.objective?.passed === false ? "Fail" : "Unavailable"} detail="Immutable verifier evidence" /></div>;
+}
+
+function MetricTable({ payload }: { payload: SingleModelBenchmarkPayload }) {
+  return <div className="roadmap-table"><table><thead><tr><th>Metric</th><th>Value</th><th>Evidence</th></tr></thead><tbody>{Object.entries(payload.performance.metrics).map(([name, metric]) => <tr key={name}><td>{name}</td><td>{metric.value === null ? "Unavailable" : String(metric.value)}</td><td>{metric.unit} · {metric.source} · {metric.confidence} · {metric.temperature}</td></tr>)}</tbody></table></div>;
 }
 
 function RoadmapMetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
