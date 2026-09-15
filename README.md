@@ -2,114 +2,199 @@
 
 # Prompt Arena
 
-**Local-first desktop benchmarking for reproducible AI model evaluation.**
+### Reproducible AI model benchmarking, built for your machine.
 
-[![Release](https://img.shields.io/github/v/release/bielxdh3/Prompt-Arena?include_prereleases&sort=semver&label=release)](https://github.com/bielxdh3/Prompt-Arena/releases/latest)
+**Local-first · Auditable · Multi-runtime · Native desktop**
+
+[![Release](https://img.shields.io/github/v/release/bielxdh3/Prompt-Arena?include_prereleases&sort=semver&label=release)](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4)
 [![CI](https://github.com/bielxdh3/Prompt-Arena/actions/workflows/ci.yml/badge.svg)](https://github.com/bielxdh3/Prompt-Arena/actions/workflows/ci.yml)
 [![Status](https://img.shields.io/badge/status-beta-orange)](#project-status)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#downloads)
 [![Desktop](https://img.shields.io/badge/desktop-Tauri%202-FFC131)](#technology)
 
-Prompt Arena runs model benchmarks, preserves immutable execution evidence, compares results, and keeps the primary workflow on your machine.
+Compare models without turning benchmark runs into disposable chat sessions. Prompt Arena preserves the benchmark version, model profile, effective runtime configuration, outputs, hashes, evaluation evidence, and history needed to inspect what actually happened.
 
-[**Download v0.1.4 Beta**](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](docs/SECURITY.md)
+[**⬇ Download v0.1.4 Beta**](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](docs/SECURITY.md)
 
 </div>
 
 > [!IMPORTANT]
-> Prompt Arena 0.1.4 is a **beta**. Windows has the deepest native QA coverage. Some acceptance work remains around multi-model end-to-end execution, advanced telemetry, llama.cpp live validation, Docker/coding boundaries, and release signing. The current product truth lives in [ROADMAP.md](ROADMAP.md) and [docs/DELIVERY_MATRIX.md](docs/DELIVERY_MATRIX.md).
+> Prompt Arena 0.1.4 is a **beta**. Windows has the deepest native QA coverage. Remaining acceptance gaps are tracked openly in [ROADMAP.md](ROADMAP.md) and [docs/DELIVERY_MATRIX.md](docs/DELIVERY_MATRIX.md).
 
 ## Downloads
 
-| Platform | Recommended package | Alternative |
-|---|---|---|
-| **Windows x64** | [MSI installer](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/Prompt-Arena-0.1.4-windows-x64.msi) | [NSIS `.exe`](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-windows-nsis.exe) |
-| **Linux x64** | [AppImage](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-linux-appimage.AppImage) | [Debian `.deb`](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-linux-deb.deb) |
+| Platform | Recommended | Alternative |
+|:--|:--|:--|
+| **Windows x64** | **[MSI installer](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/Prompt-Arena-0.1.4-windows-x64.msi)** | [NSIS `.exe`](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-windows-nsis.exe) |
+| **Linux x64** | **[AppImage](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-linux-appimage.AppImage)** | [Debian `.deb`](https://github.com/bielxdh3/Prompt-Arena/releases/download/v0.1.4/prompt-arena-0.1.4-linux-deb.deb) |
 
-Checksums and package-verification evidence are published beside every installer in the [GitHub Release](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4).
+Checksums and package-verification evidence ship beside every installer in the [GitHub Release](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4).
 
 > [!WARNING]
 > Current beta packages are **unsigned** unless a release explicitly says otherwise.
 
+## Why Prompt Arena
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🧪 Reproducible benchmarks
+Versioned benchmarks, immutable model profiles and deterministic run configuration keep comparisons inspectable instead of silently changing between runs.
+
+</td>
+<td width="50%" valign="top">
+
+### 🖥️ Local-first execution
+Ollama, LM Studio and llama.cpp/GGUF stay behind explicit local runtime boundaries. External BYOK providers are optional and visibly separated.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🔎 Evidence, not screenshots
+Attempts, outputs, hashes, effective configuration and evaluation evidence are persisted so a result can be audited later.
+
+</td>
+<td width="50%" valign="top">
+
+### ⚔️ Compare more than one way
+Arena comparison, single-model benchmarking, historical regression, Elo-style ratings, robustness runs and reproduction bundles live in one desktop workspace.
+
+</td>
+</tr>
+</table>
+
 ## The idea at a glance
 
-```mermaid
-flowchart TD
-    U[You<br/>benchmarks · models · runs · evaluations]
-    UI[Prompt Arena UI<br/>Arena · Benchmarks · Models · Runs]
-    CORE[Rust / Tauri desktop core<br/>validation · persistence · evidence · trust boundary]
-    DB[(SQLite metadata<br/>+ immutable artifacts)]
-    WORKER[One-shot worker<br/>bounded execution]
-    LOCAL[Local model runtime<br/>Ollama · LM Studio · llama.cpp]
-    BYOK[Optional BYOK provider<br/>explicit network / cost boundary]
-
-    U --> UI
-    UI -->|typed Tauri commands| CORE
-    CORE --> DB
-    CORE -->|one bounded process| WORKER
-    WORKER -->|loopback| LOCAL
-    WORKER -. explicit external boundary .-> BYOK
+```text
+                         ┌─────────────────────────┐
+                         │           You           │
+                         │ benchmarks · models     │
+                         │ runs · evaluations      │
+                         └────────────┬────────────┘
+                                      │
+                         ┌────────────▼────────────┐
+                         │     Prompt Arena UI     │
+                         │ Arena · Benchmarks      │
+                         │ Models · Runs · History │
+                         └────────────┬────────────┘
+                                      │ typed Tauri commands
+                    ┌─────────────────▼──────────────────┐
+                    │         Rust / Tauri core          │
+                    │ validation · persistence · evidence│
+                    │ orchestration · trust boundaries   │
+                    └────────────┬──────────────┬─────────┘
+                                 │              │
+                      persistent │              │ bounded process
+                                 │              │
+                    ┌────────────▼───────┐  ┌───▼──────────────────┐
+                    │ SQLite metadata    │  │ One-shot worker       │
+                    │ + immutable files  │  │ start · run · exit    │
+                    └────────────────────┘  └───┬───────────┬──────┘
+                                               │           │
+                                        loopback│           │ explicit network/cost boundary
+                                               │           │
+                         ┌─────────────────────▼──┐   ┌────▼──────────────┐
+                         │ Local model runtimes   │   │ Optional BYOK     │
+                         │ Ollama · LM Studio     │   │ provider adapters │
+                         │ llama.cpp / GGUF       │   └───────────────────┘
+                         └────────────────────────┘
 ```
 
 The desktop core owns persistence and trust boundaries. Model output, imported benchmark content, and provider responses are treated as untrusted data.
 
 ## How a benchmark round works
 
-A benchmark round starts from versioned inputs and resolves them into a deterministic execution plan before a model is called.
+A round starts from **versioned inputs**, not an ad-hoc chat. The benchmark and immutable model profile are resolved into a concrete run plan before the model is called.
 
-```mermaid
-flowchart TD
-    B[Published benchmark<br/>version · task · case]
-    M[Immutable model profile<br/>model · parameters · revision]
-    PLAN[Deterministic run configuration<br/>prompt · case · runtime settings]
-    CORE[Prompt Arena desktop core<br/>validate · persist · create run evidence]
-    WORKER[One-shot worker<br/>start · run · exit]
-    RUNTIME[Local runtime / BYOK<br/>bounded provider call]
-    EVIDENCE[Immutable execution evidence<br/>attempt · result · artifacts · hashes · effective config]
-    OBJ[Objective verification<br/>when deterministic]
-    BLIND[Blind human review<br/>when judgment is appropriate]
-    OUT[History · comparison · regression · export]
-
-    B --> PLAN
-    M --> PLAN
-    PLAN --> CORE
-    CORE --> WORKER
-    WORKER --> RUNTIME
-    RUNTIME --> EVIDENCE
-    EVIDENCE --> OBJ
-    EVIDENCE --> BLIND
-    OBJ --> OUT
-    BLIND --> OUT
+```text
+        Published benchmark                    Immutable model profile
+     version · task · case                  model · params · revision
+               │                                      │
+               └──────────────────┬───────────────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────┐
+                    │ Deterministic RunPlan   │
+                    │ prompt · case · runtime │
+                    │ seed · effective config │
+                    └────────────┬────────────┘
+                                 │
+                                 ▼
+                    ┌─────────────────────────┐
+                    │ Prompt Arena desktop    │
+                    │ validate · persist      │
+                    │ create run evidence     │
+                    └────────────┬────────────┘
+                                 │ one bounded job
+                                 ▼
+                    ┌─────────────────────────┐
+                    │ One-shot worker         │
+                    │ starts · runs · exits   │
+                    └────────────┬────────────┘
+                                 │
+                                 ▼
+                    ┌─────────────────────────┐
+                    │ Local runtime / BYOK    │
+                    │ bounded provider call   │
+                    └────────────┬────────────┘
+                                 │
+                                 ▼
+              ┌───────────────────────────────────┐
+              │ Immutable execution evidence      │
+              │ attempt · result · artifacts      │
+              │ hashes · timings · effective cfg  │
+              └────────────────┬──────────────────┘
+                               │
+                   ┌───────────┴───────────┐
+                   │                       │
+                   ▼                       ▼
+        ┌─────────────────────┐  ┌─────────────────────┐
+        │ Objective verifier  │  │ Blind human review  │
+        │ deterministic cases │  │ judgment cases      │
+        └──────────┬──────────┘  └──────────┬──────────┘
+                   │                       │
+                   └───────────┬───────────┘
+                               ▼
+                    ┌─────────────────────────┐
+                    │ History · comparison    │
+                    │ regression · ratings    │
+                    │ export · repro bundle   │
+                    └─────────────────────────┘
 ```
 
-The point is not merely to get an answer from a model. The point is to keep enough evidence to inspect **what ran, with which configuration, against which benchmark version, and how the result was evaluated**.
+The goal is not only to get an answer. It is to keep enough evidence to answer: **what ran, with which configuration, against which benchmark version, and how was the result evaluated?**
 
-## What Prompt Arena does
+## What it can do
 
-- runs versioned benchmark tasks against immutable model profiles;
-- compares 2–8 competitors in Arena workflows;
-- runs a single model against benchmark cases or suites;
-- preserves runs, attempts, outputs, effective configuration, hashes, and evaluation evidence;
-- supports deterministic objective verification and blind human review;
-- discovers local models through Ollama, LM Studio, and llama.cpp/GGUF boundaries;
-- compares historical runs and calculates deterministic Elo-style ratings;
-- runs bounded robustness perturbations;
-- exports/imports integrity-checked, secret-sanitized reproduction bundles;
-- optionally uses external BYOK provider adapters behind explicit network/cost boundaries;
-- packages native desktop builds for Windows and Linux.
+- compare **2–8 models** in Arena workflows;
+- benchmark one model against individual cases or suites;
+- preserve runs, attempts, outputs, configuration, hashes and evaluation evidence;
+- use deterministic objective verification and blind human review;
+- discover local models through **Ollama, LM Studio and llama.cpp/GGUF**;
+- compare historical runs and calculate deterministic Elo-style ratings;
+- run bounded robustness perturbations;
+- export/import integrity-checked, secret-sanitized reproduction bundles;
+- use optional BYOK provider adapters behind explicit network/cost boundaries;
+- package native desktop builds for Windows and Linux.
 
 ## Project status
 
-Current canonical version: **0.1.4 Beta**.
+**Current canonical release: `v0.1.4 Beta`.**
 
-The integrated desktop product is on `main`, the release pipeline is operational, and v0.1.4 packages are published for Windows and Linux. Product gaps are tracked in the roadmap and issue tracker rather than hidden behind a “finished” label.
+The integrated desktop product is on `main`, the release pipeline is operational, and public packages are available for Windows and Linux. The project is intentionally **not** presented as production-complete while acceptance gaps remain.
+
+<details>
+<summary><strong>Current implementation / acceptance matrix</strong></summary>
 
 | Area | Current state |
 |---|---|
 | Foundation / trust boundary | **Complete** |
 | Core multi-model Arena | Implemented; native end-to-end acceptance still open |
 | Official packs / verification | Implemented; Docker boundary smoke still open |
-| Model Library | Ollama + LM Studio + llama.cpp/GGUF paths implemented; llama.cpp live smoke open |
+| Model Library | Ollama + LM Studio + llama.cpp/GGUF implemented; llama.cpp live smoke open |
 | Single-model benchmark | Implemented and persisted; live generation-contract acceptance open |
 | Performance Lab | Timing/token metrics present; TTFT/system telemetry incomplete |
 | Historical comparison | Implemented; statistical depth still limited |
@@ -120,29 +205,33 @@ The integrated desktop product is on `main`, the release pipeline is operational
 | Windows packaging | MSI + NSIS published; signing not yet guaranteed |
 | Linux packaging | AppImage + DEB published |
 
+</details>
+
+Open product work is tracked in the [issue tracker](https://github.com/bielxdh3/Prompt-Arena/issues) and [ROADMAP.md](ROADMAP.md).
+
 ## Technology
 
 | Layer | Technology |
 |---|---|
-| Desktop shell | Tauri 2 + Rust |
-| UI | React 19 + TypeScript |
+| Desktop shell | **Tauri 2 + Rust** |
+| UI | **React 19 + TypeScript** |
 | Build | Vite 6 |
 | Persistence | SQLite + app-owned immutable artifacts |
 | Worker | bounded Rust sidecar process |
-| Local runtimes | Ollama, LM Studio, llama.cpp/GGUF |
-| Validation | Vitest, Cargo tests, repository boundary checks, native package smoke |
+| Local runtimes | Ollama · LM Studio · llama.cpp/GGUF |
+| Validation | Vitest · Cargo tests · boundary checks · native package smoke |
 
 ## Platform support
 
 | Platform | Status | Packages |
 |---|---|---|
-| Windows x64 | Primary beta target | MSI, NSIS |
-| Linux x64 | Supported beta build target | `.deb`, `.AppImage` |
+| **Windows x64** | Primary beta target | MSI · NSIS |
+| **Linux x64** | Supported beta build target | `.deb` · `.AppImage` |
 | macOS | Out of scope | — |
 
 ## Run from source
 
-Requirements: Node.js 22+, Rust stable, npm, and a supported local runtime when model execution is desired.
+Requirements: Node.js 22+, Rust stable, npm, and a supported runtime when model execution is desired.
 
 ```bash
 git clone https://github.com/bielxdh3/Prompt-Arena.git
@@ -155,8 +244,6 @@ Browser preview is available with `npm run dev`, but it is intentionally not equ
 
 ## Validation
 
-Frontend/repository checks:
-
 ```bash
 npm run check:version
 npm run check:boundaries
@@ -165,11 +252,7 @@ npm run typecheck
 npm test
 npm run build
 npm audit --omit=dev --audit-level=high
-```
 
-Rust checks:
-
-```bash
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
