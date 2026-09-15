@@ -27,11 +27,20 @@ Base: P7 `d81f79194f941a1e9b396b919e2f794d154f5342`. Dedicated branch: `cdx/huma
 - Windows PE inspection: packaged application declares subsystem 2 (GUI).
 - MSI packaging succeeds using the repository's existing duplicate-worker WiX correction; WiX ICE warnings remain.
 
+## Latest package and native handoff
+
+- Source: `86ba38f8` (implementation commit); Linux and Windows CI passed for this commit.
+- QA MSI: `Prompt Arena_0.1.4.5_x64_en-US.msi`.
+- MSI SHA-256: `5ad91b54921080e89c074187aed5343c24b2d81024e0888d0164a6617fd9c494`.
+- Executable SHA-256: `d6ef0b6a6a375a048b42280232d1e782129c65c8bee5192139e7d2429a07cf0a`.
+- The owner authorized resuming Computer Use and elevated installation. The subsequent UAC elevation terminated with Windows reporting that the operation was cancelled by the user; no elevated installation log was created. Do not retry elevation automatically or count this as installation success.
+- Single-model simulated failure was verified in the browser: localized summary shown first, original fixture diagnostic preserved inside collapsed technical details.
+
 ## Remaining gates
 
 - Finish the product-wide dynamic-language/display audit and rendered checks outside the repaired Insights path.
 - Complete motion 0/100/200, reduced-motion, edge-dropdown, and keyboard rendered verification.
-- Regenerate the final installer after all implementation changes and record exact source SHA and SHA-256.
+- Regenerate the installer again if further implementation changes are made; the current package provenance is recorded below.
 - Installed Windows launch/close/reopen, navigation, languages, themes, motion, long-name layouts, error presentation, and uninstall are not passed.
 - Installation currently fails with Windows Installer Error 1730: removing the earlier per-machine installation requires Administrator. The installation was preserved.
 - Computer Use was stopped by the owner's physical Escape key. Do not count the observed older installed application as the repaired binary: its hash differed.
