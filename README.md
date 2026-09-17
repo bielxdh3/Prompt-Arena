@@ -81,22 +81,22 @@ Arena comparison, single-model benchmarking, historical regression, Elo-style ra
                          │ Models · Runs · History │
                          └────────────┬────────────┘
                                       │ typed Tauri commands
-                    ┌─────────────────▼──────────────────┐
-                    │         Rust / Tauri core          │
-                    │ validation · persistence · evidence│
-                    │ orchestration · trust boundaries   │
+                    ┌─────────────────▼───────────────────┐
+                    │         Rust / Tauri core           │
+                    │ validation · persistence · evidence │
+                    │ orchestration · trust boundaries    │
                     └────────────┬──────────────┬─────────┘
                                  │              │
                       persistent │              │ bounded process
                                  │              │
                     ┌────────────▼───────┐  ┌───▼──────────────────┐
-                    │ SQLite metadata    │  │ One-shot worker       │
-                    │ + immutable files  │  │ start · run · exit    │
+                    │ SQLite metadata    │  │ One-shot worker      │
+                    │ + immutable files  │  │ start · run · exit   │
                     └────────────────────┘  └───┬───────────┬──────┘
-                                               │           │
+                                                │           │
                                         loopback│           │ explicit network/cost boundary
-                                               │           │
-                         ┌─────────────────────▼──┐   ┌────▼──────────────┐
+                                                │           │
+                         ┌──────────────────────▼─┐   ┌─────▼─────────────┐
                          │ Local model runtimes   │   │ Optional BYOK     │
                          │ Ollama · LM Studio     │   │ provider adapters │
                          │ llama.cpp / GGUF       │   └───────────────────┘
@@ -154,7 +154,7 @@ A round starts from **versioned inputs**, not an ad-hoc chat. The benchmark and 
         ┌─────────────────────┐  ┌─────────────────────┐
         │ Objective verifier  │  │ Blind human review  │
         │ deterministic cases │  │ judgment cases      │
-        └──────────┬──────────┘  └──────────┬──────────┘
+        └──────────┬──────────┘  └─────────┬───────────┘
                    │                       │
                    └───────────┬───────────┘
                                ▼
