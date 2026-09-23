@@ -1,36 +1,52 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /
+  - package-ecosystem: "npm"
+    directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 1
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "America/Porto_Velho"
+    open-pull-requests-limit: 5
     groups:
-      npm-dependencies:
+      minor-and-patch:
+        applies-to: "version-updates"
         patterns:
           - "*"
-    labels: []
+        update-types:
+          - "minor"
+          - "patch"
 
-  - package-ecosystem: cargo
-    directory: /src-tauri
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 1
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "America/Porto_Velho"
+    open-pull-requests-limit: 5
     groups:
-      cargo-dependencies:
+      minor-and-patch:
+        applies-to: "version-updates"
         patterns:
           - "*"
-    labels: []
+        update-types:
+          - "minor"
+          - "patch"
 
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: monthly
-    open-pull-requests-limit: 1
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "America/Porto_Velho"
+    open-pull-requests-limit: 5
     groups:
-      github-actions-dependencies:
+      minor-and-patch:
+        applies-to: "version-updates"
         patterns:
           - "*"
-    labels: []
+        update-types:
+          - "minor"
+          - "patch"
