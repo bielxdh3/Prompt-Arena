@@ -54,7 +54,7 @@ Prompt Arena treats benchmark versions, profile revisions, run evidence, evaluat
 
 ## Security
 
-Do not disclose vulnerabilities, credentials, private prompts, API keys or exploit details in public issues. Follow `docs/SECURITY.md`.
+Do not disclose vulnerabilities, credentials, private prompts, API keys or exploit details in public issues. Follow `SECURITY.md`.
 
 ## License
 

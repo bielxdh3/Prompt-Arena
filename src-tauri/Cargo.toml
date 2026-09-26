@@ -3,6 +3,7 @@ name = "prompt-arena"
 version = "0.1.4"
 description = "Local-first desktop workspace for Prompt Arena"
 authors = ["Prompt Arena contributors"]
+license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.77"
 build = "build.rs"
