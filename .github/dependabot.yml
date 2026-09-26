@@ -8,6 +8,10 @@ updates:
       time: "10:00"
       timezone: "America/Porto_Velho"
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "typescript"
+        versions:
+          - ">=7.0.0"
     groups:
       minor-and-patch:
         applies-to: "version-updates"
