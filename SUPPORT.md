@@ -12,7 +12,7 @@ Use the feature-request form and explain the user problem, not only a proposed i
 
 ## Security
 
-Do not report vulnerabilities or credentials in a public issue. Follow `docs/SECURITY.md` and use GitHub private vulnerability reporting when available.
+Do not report vulnerabilities or credentials in a public issue. Follow `SECURITY.md` and use GitHub private vulnerability reporting when available.
 
 ## Runtime-specific problems
 
