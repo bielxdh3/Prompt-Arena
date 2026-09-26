@@ -11,10 +11,11 @@
 [![Status](https://img.shields.io/badge/status-beta-orange)](#project-status)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4)](#downloads)
 [![Desktop](https://img.shields.io/badge/desktop-Tauri%202-FFC131)](#technology)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 Compare models without turning benchmark runs into disposable chat sessions. Prompt Arena preserves the benchmark version, model profile, effective runtime configuration, outputs, hashes, evaluation evidence, and history needed to inspect what actually happened.
 
-[**⬇ Download v0.1.4 Beta**](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](docs/SECURITY.md)
+[**⬇ Download v0.1.4 Beta**](https://github.com/bielxdh3/Prompt-Arena/releases/tag/v0.1.4) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -275,7 +276,7 @@ See [docs/RELEASING.md](docs/RELEASING.md), [docs/RELEASE_CHECKLIST.md](docs/REL
 - browser preview cannot silently substitute for desktop evidence;
 - Prompt Arena does not intentionally include product telemetry.
 
-Read [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/SECURITY.md](docs/SECURITY.md).
+Read [docs/PRIVACY.md](docs/PRIVACY.md), the [security policy](SECURITY.md), and the detailed [security model](docs/SECURITY.md).
 
 ## Repository map
 
@@ -292,6 +293,9 @@ Prompt-Arena/
 ├── CONTRIBUTING.md          contribution workflow
 ├── GOVERNANCE.md            project decision model
 ├── ROADMAP.md               current product truth
+├── SECURITY.md              vulnerability reporting policy
+├── LICENSE                  Apache License 2.0
+├── NOTICE                   attribution notice
 └── README.md
 ```
 
@@ -299,8 +303,10 @@ Prompt-Arena/
 
 Contributions are welcome through focused issues and pull requests. Read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [GOVERNANCE.md](GOVERNANCE.md) first.
 
-Security-sensitive reports should follow [docs/SECURITY.md](docs/SECURITY.md), not a public issue.
+Security-sensitive reports should follow [SECURITY.md](SECURITY.md), not a public issue.
 
 ## License
 
-The repository is currently **source-available, all rights reserved**. See [LICENSE](LICENSE). No open-source license grant is implied by public source visibility.
+Prompt Arena is released under the [Apache License 2.0](LICENSE). You may use, modify, redistribute, embed, and sell the software, including in commercial or closed-source products, subject to the Apache-2.0 terms. Redistributions must preserve applicable license, copyright, and attribution notices, including the project [NOTICE](NOTICE) where required.
+
+**Copyright 2026 bielxdh3.**
