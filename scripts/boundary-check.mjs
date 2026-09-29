@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -241,29 +242,10 @@ export function findObviousKeyMaterial(entries) {
 }
 
 function trackedPaths(repositoryRoot) {
-  const gitPath = path.join(repositoryRoot, ".git");
-  const gitDirectory = fs.statSync(gitPath).isDirectory()
-    ? gitPath
-    : path.resolve(repositoryRoot, fs.readFileSync(gitPath, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1] ?? "");
-  const index = fs.readFileSync(path.join(gitDirectory, "index"));
-  if (index.toString("ascii", 0, 4) !== "DIRC" || index.readUInt32BE(4) !== 2) {
-    throw new Error("unsupported Git index");
-  }
-  const entryCount = index.readUInt32BE(8);
-  const paths = [];
-  let offset = 12;
-  for (let entry = 0; entry < entryCount; entry += 1) {
-    const entryStart = offset;
-    if (offset + 62 > index.length) throw new Error("invalid Git index");
-    const flags = index.readUInt16BE(offset + 60);
-    offset += 62 + ((flags & 0x4000) !== 0 ? 2 : 0);
-    const terminator = index.indexOf(0, offset);
-    if (terminator < 0) throw new Error("invalid Git index path");
-    paths.push(index.toString("utf8", offset, terminator));
-    offset = terminator + 1;
-    while ((offset - entryStart) % 8 !== 0) offset += 1;
-  }
-  return paths;
+  return execFileSync("git", ["-C", repositoryRoot, "ls-files", "-z"], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  }).split("\0").filter(Boolean);
 }
 
 function readText(repositoryRoot, relativePath) {
