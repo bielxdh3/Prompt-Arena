@@ -13,6 +13,7 @@ import {
   readPackageVersion,
   verifyChecksumManifest,
 } from "./package-artifacts.mjs";
+import { writeRegularFileSync } from "./safe-files.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SMOKE_WAIT_MS = 2_500;
@@ -257,8 +258,7 @@ function ensureEvidenceParent(evidencePath) {
 
 function writeEvidence(evidencePath, lines) {
   ensureEvidenceParent(evidencePath);
-  if (fs.existsSync(evidencePath) && fs.lstatSync(evidencePath).isSymbolicLink()) throw new Error(`evidence path is a symlink: ${evidencePath}`);
-  fs.writeFileSync(evidencePath, `${lines.join("\n")}\n`, "utf8");
+  writeRegularFileSync(evidencePath, `${lines.join("\n")}\n`);
 }
 
 function parseCliArgs(argv) {
