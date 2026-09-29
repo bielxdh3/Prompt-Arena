@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readRegularFileSync, writeRegularFileSync } from "./safe-files.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/u;
@@ -56,9 +57,7 @@ export function readPackageVersion(repositoryRoot = REPOSITORY_ROOT) {
 }
 
 export function sha256File(filePath) {
-  const metadata = fs.lstatSync(filePath);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`checksum input is not a regular file: ${filePath}`);
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  return crypto.createHash("sha256").update(readRegularFileSync(filePath)).digest("hex");
 }
 
 function safeManifestName(name) {
@@ -112,7 +111,7 @@ export function parseChecksumManifest(contents) {
 
 export function verifyChecksumManifest(manifestPath, artifactDirectory) {
   const root = path.resolve(artifactDirectory);
-  const entries = parseChecksumManifest(fs.readFileSync(manifestPath, "utf8"));
+  const entries = parseChecksumManifest(readRegularFileSync(manifestPath, "utf8"));
   const names = new Set();
   for (const entry of entries) {
     if (names.has(entry.name)) throw new Error(`checksum manifest contains a duplicate filename: ${entry.name}`);
@@ -188,7 +187,7 @@ export function preparePackageArtifacts(options = {}) {
     const target = path.join(outputDirectory, selection.name);
     if (selection.source) {
       removeExpectedOutput(target);
-      fs.copyFileSync(selection.source, target);
+      fs.copyFileSync(selection.source, target, fs.constants.COPYFILE_EXCL);
       artifacts.push({ name: selection.name, path: target, sha256: sha256File(target) });
     } else {
       removeExpectedOutput(target);
@@ -199,11 +198,7 @@ export function preparePackageArtifacts(options = {}) {
   artifacts.sort((left, right) => (left.name === right.name ? 0 : left.name < right.name ? -1 : 1));
   const manifestDirectory = path.dirname(manifestPath);
   ensureDirectory(manifestDirectory);
-  if (fs.existsSync(manifestPath)) {
-    const metadata = fs.lstatSync(manifestPath);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`checksum manifest path is not a regular file: ${manifestPath}`);
-  }
-  fs.writeFileSync(manifestPath, renderChecksumManifest(artifacts), "utf8");
+  writeRegularFileSync(manifestPath, renderChecksumManifest(artifacts));
   return { platform, version, artifacts, manifestPath, missingOptional };
 }
 
@@ -245,4 +240,3 @@ if (isMainModule()) {
     process.exitCode = 1;
   }
 }
-
