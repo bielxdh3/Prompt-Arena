@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { assertSynchronizedVersion, incrementPatchVersion, writeSynchronizedVersion } from "./version-contract.mjs";
+import { readRegularFileSync, writeRegularFileSync } from "./safe-files.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_DIRECTORY = path.join(REPOSITORY_ROOT, "downloadable-artifacts");
@@ -29,7 +30,7 @@ function run(command, args) {
 }
 
 function sha256File(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  return crypto.createHash("sha256").update(readRegularFileSync(filePath)).digest("hex");
 }
 
 function msiSource() {
@@ -112,9 +113,9 @@ if (isMainModule()) {
     const sourcePath = msiSource();
     fs.mkdirSync(DOWNLOAD_DIRECTORY, { recursive: true });
     if (fs.existsSync(artifactPath) || fs.existsSync(checksumPath)) throw new Error(`release artifact already exists: ${filename}`);
-    fs.copyFileSync(sourcePath, artifactPath);
+    fs.copyFileSync(sourcePath, artifactPath, fs.constants.COPYFILE_EXCL);
     const sha256 = sha256File(artifactPath);
-    fs.writeFileSync(checksumPath, `${sha256}  ${filename}\n`, "utf8");
+    writeRegularFileSync(checksumPath, `${sha256}  ${filename}\n`, { exclusive: true });
     updateReadme(version, filename, sha256, sourceCommit);
 
     run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "check:version"]);
@@ -140,4 +141,3 @@ if (isMainModule()) {
     process.exitCode = 1;
   }
 }
-
