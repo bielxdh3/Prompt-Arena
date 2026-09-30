@@ -269,6 +269,7 @@ describe("model library profile boundary", () => {
       profileId: " local-default ",
       revision: "2",
       model: "llama3.2:latest",
+      reasoningEffort: "default",
     });
     expect(stableProfileRevisionId("local-default", 2)).toBe("local-default@2");
     expect(revision).toMatchObject({
@@ -283,7 +284,7 @@ describe("model library profile boundary", () => {
   });
 
   it("constructs source-aware immutable profiles for discovered runtimes", () => {
-    const form = { profileId: "discovered", revision: "3", model: "ignored" };
+    const form = { profileId: "discovered", revision: "3", model: "ignored", reasoningEffort: "default" as const };
     const discovered = [
       modelRecord({ modelId: "ollama-q4", sourceId: "ollama-source", backend: "ollama" }),
       modelRecord({ modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" }),
@@ -295,6 +296,22 @@ describe("model library profile boundary", () => {
       { profileRevisionId: "discovered@3", model: "local-model", runtime: "lm_studio", modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" },
       { profileRevisionId: "discovered@3", model: "local-model", runtime: "llama_cpp", modelId: "gguf-q5", sourceId: "gguf-source", backend: "llama_cpp", path: "models/model-q5.gguf", quantizationLevel: "Q5_K_M" },
     ]);
+  });
+
+  it("persists off reasoning in the immutable profile parameters and defaults to runtime behavior", () => {
+    expect(EMPTY_PROFILE_FORM.reasoningEffort).toBe("default");
+    expect(profileRevisionFromForm({
+      profileId: "runtime-default",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "default",
+    }).parameters).toEqual({});
+    expect(profileRevisionFromForm({
+      profileId: "reasoning-off",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "none",
+    }).parameters).toEqual({ reasoningEffort: "none" });
   });
 
   it("labels supported and unsupported model actions explicitly", () => {
@@ -319,11 +336,13 @@ describe("model library profile boundary", () => {
       profileId: "profile",
       revision: "1.5",
       model: "model",
+      reasoningEffort: "default",
     })).toThrow();
     expect(() => profileRevisionFromForm({
       profileId: "profile",
       revision: "1",
       model: "x".repeat(257),
+      reasoningEffort: "default",
     })).toThrow();
     expect(profileRevisionIdPreview({ ...EMPTY_PROFILE_FORM, profileId: "profile" })).toBe("profile@1");
   });

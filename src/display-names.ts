@@ -43,7 +43,7 @@ export function runtimeDisplayName(runtime: string): string {
 }
 
 const METRIC_NAMES: Record<string, string> = {
-  ttftMs: "Time to first token", promptTokens: "Prompt tokens", completionTokens: "Completion tokens",
+  ttftMs: "Time to first token", promptTokens: "Prompt tokens", promptTokensPerSecond: "Prompt tokens/s", completionTokens: "Completion tokens",
   totalTokens: "Total tokens", generationTokensPerSecond: "Tokens/s", wallClockMs: "Total duration",
   loadTimeMs: "Load duration", generationTimeMs: "Generation time", thinkingTimeMs: "Thinking time",
   vramAverageBytes: "Average VRAM", vramPeakBytes: "Peak VRAM", ramAverageBytes: "Average RAM",

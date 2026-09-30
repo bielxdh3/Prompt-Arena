@@ -301,6 +301,8 @@ pub struct ModelRemovalEvidence {
 pub struct Run {
     pub run_id: String,
     pub benchmark_version_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub profile_revision_ids: Vec<String>,
     pub status: String,
     pub started_at: String,
@@ -315,6 +317,8 @@ pub struct Run {
 pub struct Attempt {
     pub attempt_id: String,
     pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub profile_revision_id: String,
     pub case_id: String,
     pub status: String,
@@ -841,8 +845,8 @@ fn validate_text(value: &str) -> Result<(), ValidationError> {
 mod tests {
     use super::{
         canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
-        validate_benchmark_document, ValidationError, BENCHMARK_SCHEMA, BENCHMARK_SCHEMA_VERSION,
-        MAX_BENCHMARK_DOCUMENT_BYTES,
+        validate_benchmark_document, Attempt, Run, ValidationError, BENCHMARK_SCHEMA,
+        BENCHMARK_SCHEMA_VERSION, MAX_BENCHMARK_DOCUMENT_BYTES,
     };
     use serde_json::{json, Value};
 
@@ -981,5 +985,66 @@ mod tests {
             stable_profile_revision_id("profile", 3).unwrap(),
             "profile@3"
         );
+    }
+
+    #[test]
+    fn run_and_attempt_task_identity_remains_backward_compatible() {
+        let old_run: Run = serde_json::from_value(json!({
+            "runId": "run-1",
+            "benchmarkVersionId": "logic@1",
+            "profileRevisionIds": ["profile@1"],
+            "status": "completed",
+            "startedAt": "100",
+            "attemptIds": [],
+            "environment": {}
+        }))
+        .unwrap();
+        let old_attempt: Attempt = serde_json::from_value(json!({
+            "attemptId": "attempt-1",
+            "runId": "run-1",
+            "profileRevisionId": "profile@1",
+            "caseId": "case-1",
+            "status": "completed",
+            "effectiveConfig": {},
+            "result": null,
+            "artifacts": []
+        }))
+        .unwrap();
+        assert_eq!(old_run.task_id, None);
+        assert_eq!(old_attempt.task_id, None);
+        assert!(serde_json::to_value(&old_run)
+            .unwrap()
+            .get("taskId")
+            .is_none());
+        assert!(serde_json::to_value(&old_attempt)
+            .unwrap()
+            .get("taskId")
+            .is_none());
+
+        let current_run: Run = serde_json::from_value(json!({
+            "runId": "run-2",
+            "benchmarkVersionId": "logic@1",
+            "taskId": "task-1",
+            "profileRevisionIds": ["profile@1"],
+            "status": "completed",
+            "startedAt": "100",
+            "attemptIds": [],
+            "environment": {}
+        }))
+        .unwrap();
+        let current_attempt: Attempt = serde_json::from_value(json!({
+            "attemptId": "attempt-2",
+            "runId": "run-2",
+            "taskId": "task-1",
+            "profileRevisionId": "profile@1",
+            "caseId": "case-1",
+            "status": "completed",
+            "effectiveConfig": {},
+            "result": null,
+            "artifacts": []
+        }))
+        .unwrap();
+        assert_eq!(current_run.task_id.as_deref(), Some("task-1"));
+        assert_eq!(current_attempt.task_id.as_deref(), Some("task-1"));
     }
 }

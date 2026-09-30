@@ -4,10 +4,12 @@ import type {
   GenerationParameters,
   OllamaConfig,
   ProfileRevision,
+  PromptVariant,
   RunPlan,
 } from "./bridge";
 import { normalizeObjectivePolicy, type ObjectiveVerifierPolicy } from "./objective-verifiers";
 import { validateLoopbackEndpoint } from "./model-library";
+import { derivePromptVariantPrompt } from "./robustness-arena";
 
 const DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434";
 const LOCAL_PROFILE_RUNTIMES = new Set(["ollama", "lm_studio", "llama_cpp"]);
@@ -37,8 +39,8 @@ export type BuildRunPlanInput = {
   taskId: string;
   caseId: string;
   profileRevision: ProfileRevision;
-  /** Optional deterministic prompt variant used by the Robustness Arena. */
-  promptOverride?: string;
+  /** Optional typed transform request; its effective prompt is deterministic. */
+  promptVariant?: PromptVariant;
   metadata?: Record<string, unknown>;
 };
 
@@ -118,16 +120,21 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
   const casePrompt = optionalPrompt(benchmarkCase.prompt, "Case prompt", MAX_RUN_PLAN_BYTES);
   const verifierPolicy = objectiveVerifierPolicy(benchmarkCase);
   const objectiveExpectation = verifierPolicy?.kind === "exact_text" ? objectiveExpectationValue(verifierPolicy.expected) : null;
-  const executionBoundary = executionBoundaryValue(documentRecord, task, benchmarkCase);
+  const executionBoundary = executionBoundaryValue(documentRecord, benchmarkVersion, task, benchmarkCase);
 
   const profile = normalizeProfile(input.profileRevision);
-  const prompt = input.promptOverride === undefined
-    ? combinePrompts([taskPrompt, casePrompt])
-    : requiredPrompt(input.promptOverride, "Prompt override");
+  const basePrompt = combinePrompts([taskPrompt, casePrompt]);
+  const promptVariant = input.promptVariant === undefined
+    ? undefined
+    : normalizePromptVariant(input.promptVariant, summaryVersionId);
+  const prompt = promptVariant
+    ? derivePromptVariantPrompt(basePrompt, promptVariant)
+    : basePrompt;
   const systemPrompt = combineOptionalPrompts([profile.systemPrompt, taskSystemPrompt]);
   const plan: RunPlan = {
     runId,
     benchmarkVersionId: summaryVersionId,
+    taskId,
     caseId,
     profileRevision: profile,
     generation: {
@@ -146,6 +153,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
     runtimeConfig: runtimeConfig(profile),
     objectiveExpectation,
     verifierPolicy,
+    ...(promptVariant ? { promptVariant } : {}),
     executionBoundary,
     metadata: boundedJsonRecord(input.metadata ?? {}, "Run metadata", MAX_RUN_PLAN_BYTES),
   };
@@ -153,6 +161,35 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
     throw new Error("Run plan exceeds the one-shot request size limit.");
   }
   return plan;
+}
+
+function normalizePromptVariant(value: unknown, sourceTaskVersion: string): PromptVariant {
+  const request = record(value, "Prompt variant");
+  if (request.version !== "2") throw new Error("Prompt variant version is unsupported.");
+  if (request.sourceTaskVersion !== sourceTaskVersion) {
+    throw new Error("Prompt variant source does not match the benchmark version.");
+  }
+  const transformationType = request.transformationType;
+  if (
+    transformationType !== "paraphrase"
+    && transformationType !== "instruction_reorder"
+    && transformationType !== "variable_rename"
+    && transformationType !== "formatting_variation"
+    && transformationType !== "concise_wording"
+    && transformationType !== "verbose_wording"
+    && transformationType !== "irrelevant_noise"
+  ) {
+    throw new Error("Prompt variant transformation is unsupported.");
+  }
+  if (!Number.isSafeInteger(request.seed) || (request.seed as number) < 0 || (request.seed as number) > 0xffff_ffff) {
+    throw new Error("Prompt variant seed is outside the supported range.");
+  }
+  return {
+    version: "2",
+    transformationType,
+    seed: request.seed as number,
+    sourceTaskVersion,
+  };
 }
 
 function defaultOllamaConfig(): OllamaConfig {
@@ -225,6 +262,7 @@ function generationParameters(parameters: Record<string, unknown>): GenerationPa
     "topK",
     "maxTokens",
     "repeatPenalty",
+    "reasoningEffort",
   ]);
   for (const key of Object.keys(parameters)) {
     if (!supported.has(key)) {
@@ -239,7 +277,14 @@ function generationParameters(parameters: Record<string, unknown>): GenerationPa
     repeatPenalty: finiteNumber(parameters.repeatPenalty, "repeatPenalty", (value) => value >= 0),
     presencePenalty: null,
     frequencyPenalty: null,
+    reasoningEffort: normalizeReasoningEffort(parameters.reasoningEffort),
   };
+}
+
+function normalizeReasoningEffort(value: unknown): "none" | null {
+  if (value === undefined || value === null) return null;
+  if (value === "none") return value;
+  throw new Error("Profile parameter reasoningEffort is invalid.");
 }
 
 function finiteNumber(
@@ -318,16 +363,70 @@ function objectiveVerifierPolicy(benchmarkCase: Record<string, unknown>): Object
 
 function executionBoundaryValue(
   document: Record<string, unknown>,
+  version: Record<string, unknown>,
   task: Record<string, unknown>,
   benchmarkCase: Record<string, unknown>,
 ): ExecutionBoundary {
-  const execution = isRecord(document.execution) ? document.execution : null;
-  const raw = benchmarkCase.executionBoundary ?? task.executionBoundary ?? document.executionBoundary ?? execution?.executionBoundary;
-  if (raw === "docker_required") {
+  let boundary: "text_generation" | "docker_required" | undefined;
+  let sandboxRequired: boolean | undefined;
+  let sandboxUnavailable: boolean | undefined;
+  let notes: string | undefined;
+  let hasPolicy = false;
+  const invalid = (): never => { throw new Error("Benchmark execution policy is malformed or contradictory."); };
+  const setOnce = <T>(previous: T | undefined, value: T): T => {
+    if (previous !== undefined && previous !== value) invalid();
+    return value;
+  };
+  const readFields = (scope: Record<string, unknown>) => {
+    const rawBoundary = scope.executionBoundary;
+    if (rawBoundary !== undefined) {
+      hasPolicy = true;
+      if (rawBoundary !== "text_generation" && rawBoundary !== "docker_required") invalid();
+      boundary = setOnce(boundary, rawBoundary as "text_generation" | "docker_required");
+    }
+    const rawSandboxRequired = scope.requiresSandbox;
+    if (rawSandboxRequired !== undefined) {
+      hasPolicy = true;
+      if (typeof rawSandboxRequired !== "boolean") invalid();
+      sandboxRequired = setOnce(sandboxRequired, rawSandboxRequired as boolean);
+    }
+    if (scope.sandboxStatus !== undefined) {
+      hasPolicy = true;
+      if (scope.sandboxStatus !== "not_required" && scope.sandboxStatus !== "unavailable") invalid();
+      sandboxUnavailable = setOnce(sandboxUnavailable, scope.sandboxStatus === "unavailable");
+    }
+  };
+  for (const scope of [document, version, task, benchmarkCase]) {
+    readFields(scope);
+    const rawExecution = scope.execution;
+    if (rawExecution !== undefined) {
+      const execution = isRecord(rawExecution) ? rawExecution : invalid();
+      if (!(["executionBoundary", "requiresSandbox", "sandboxStatus"] as const).some((key) => key in execution)) invalid();
+      readFields(execution);
+      const rawNotes = execution.notes;
+      if (rawNotes !== undefined) {
+        if (typeof rawNotes !== "string") invalid();
+        notes ??= rawNotes as string;
+      }
+    }
+  }
+  if (!hasPolicy) return { kind: "text_generation", status: "available", reason: null };
+
+  const dockerBoundary = boundary === "docker_required";
+  const textBoundary = boundary === "text_generation";
+  const unavailable = sandboxUnavailable === true;
+  const notRequired = sandboxUnavailable === false;
+  const dockerRequired = dockerBoundary || sandboxRequired === true;
+  if ((dockerRequired && sandboxRequired === false)
+    || (dockerRequired && (textBoundary || notRequired))
+    || (unavailable && sandboxRequired !== true)
+    || (unavailable && textBoundary)) invalid();
+
+  if (dockerRequired || unavailable) {
     return {
       kind: "docker_required",
       status: "unavailable",
-      reason: typeof execution?.notes === "string" ? execution.notes : "Docker execution is unavailable; host execution is prohibited.",
+      reason: notes?.trim() ? notes : "Docker execution is unavailable; host execution is prohibited.",
     };
   }
   return { kind: "text_generation", status: "available", reason: null };

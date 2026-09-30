@@ -42,6 +42,7 @@
     "tasks": [
       {
         "taskId": "review-null-contract",
+        "categoryId": "code-review",
         "name": "Review a null-handling contract",
             "prompt": "Review the stated behavior as a senior engineer, then use the Docker-required sandbox only for the declared bounded check. Identify the main correctness risk and propose the smallest safe contract-level fix.",
         "cases": [
@@ -64,6 +65,7 @@
       },
       {
         "taskId": "design-error-contract",
+        "categoryId": "api-design",
         "name": "Design a stable error contract",
             "prompt": "Give a concise API design answer that is explicit about caller behavior, machine-readable fields, and compatibility. The declared executable check, when available, runs only in Docker.",
         "cases": [

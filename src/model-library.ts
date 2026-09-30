@@ -47,12 +47,14 @@ export type ProfileFormState = {
   profileId: string;
   revision: string;
   model: string;
+  reasoningEffort: "default" | "none";
 };
 
 export const EMPTY_PROFILE_FORM: ProfileFormState = {
   profileId: "",
   revision: "1",
   model: "",
+  reasoningEffort: "default",
 };
 
 function byteLength(value: string): number {
@@ -110,7 +112,7 @@ function profileRevisionBase(form: ProfileFormState): ProfileRevision {
     revision,
     model,
     runtime: PROFILE_RUNTIME,
-    parameters: {},
+    parameters: form.reasoningEffort === "none" ? { reasoningEffort: "none" } : {},
     systemPrompt: null,
   };
 }

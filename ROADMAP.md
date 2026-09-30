@@ -36,42 +36,41 @@ Implemented in `main`: single-case execution, suite execution, immutable benchma
 
 Remaining acceptance:
 - prove successful user-visible generation through the current real runtime contract;
-- make suite summary/partial-failure behavior first-class;
+- verify partial-failure summaries against real installed-app execution;
 - verify installed-app end-to-end benchmark flow with real models.
 
 ### #37 — Performance Lab
 
-Implemented: runtime token counts, wall-clock/load/generation time and derived generation throughput, with explicit provenance and unavailable states.
+Implemented: runtime token counts, wall-clock/load/generation time, streamed first-visible-text TTFT, and derived generation throughput. Prompt/prefill tokens per second is derived only when the runtime reports both prompt-token count and prompt-evaluation duration. Provenance and unavailable states are explicit.
 
 Remaining:
-- TTFT;
 - thinking/reasoning time;
 - VRAM/RAM sampling;
 - CPU/GPU utilization;
 - energy/power where trustworthy;
-- cold/warm sampling policy and native charts/history acceptance.
+- cold/warm sampling policy, aggregate hardware telemetry, and native charts/history acceptance.
 
 ### #38 — Historical regression
 
-Implemented: immutable baseline/candidate comparison, changed-condition warnings, absolute/percentage deltas and limited uncertainty handling.
+Implemented in this branch: immutable comparisons can use saved single-model records or Arena summaries; comparisons label source kind, changed conditions, absolute/percentage deltas, and can export the derived result with source IDs and content hashes. Repeated single-model runs use Welch pointwise 95% confidence intervals for continuous metrics and conservative Bonferroni-combined Wilson intervals for binary quality, require at least five samples per group, reject overlapping or inconsistent samples, and report missing control dimensions and profile-group differences.
 
 Remaining:
-- repeated-run variance/statistical significance;
-- stronger baseline management/history UI;
-- complete export and native acceptance.
+- family-wise correction across metrics, calibrated hardware/runtime comparability, and stronger baseline-management UX;
+- native desktop acceptance for the full history, repeated-comparison, and export flow.
 
 ### #39 — Persistent ratings
 
-Implemented: deterministic category-aware Elo v1 from eligible immutable Arena summaries, with samples and a bounded uncertainty heuristic.
+Implemented in this branch: deterministic global and taxonomy-specific Elo v1 and regularized Bradley–Terry v1 snapshots from eligible immutable Arena outcomes. New Arena summaries retain a task category only when it matches the stored benchmark's category tree; older and uncategorized summaries contribute to the global population only. Bradley–Terry comparison groups are separated by connected component, with Laplace normal-approximation standard errors. Those errors assume independent pair outcomes and may be miscalibrated when several pair outcomes come from the same Arena evidence.
 
 Remaining:
-- richer rating history/version UI;
-- stronger uncertainty model / Bradley-Terry option;
+- broader history filtering/version selection and calibrated uncertainty for correlated evidence;
 - acceptance on larger mixed evidence sets.
 
 ### #40 — Robustness Arena
 
-Implemented: deterministic local perturbation generation, execution, score, variance and failure clusters.
+Implemented: versioned deterministic perturbation generation, no-op variants marked unavailable after effective-plan
+validation, same-profile execution with per-variant failure isolation, immutable base/variant run links, and visible
+score, variance and failure clusters.
 
 Remaining:
 - stronger semantic-preservation guarantees and fixtures;
@@ -80,11 +79,12 @@ Remaining:
 
 ### #41 — Repro Bundle
 
-Implemented: bounded secret-sanitized JSON bundle, SHA-256 integrity manifest, import verification and runtime/model/platform difference reporting.
+Implemented: bounded secret-sanitized JSON file export, SHA-256 checksum and byte-count validation, import comparison,
+and reruns reconstructed only from locally stored immutable benchmark/profile identities. Reproduced runs link to a
+source only when that exact local run matches; other imported source IDs remain labeled unverified external references.
 
 Remaining:
-- reconstruct a runnable configuration from import rather than only payload/difference inspection;
-- link reproduced runs to original evidence;
+- authenticate external bundle provenance; the self-contained checksum detects changes but does not verify who created the bundle;
 - complete schema migration and native rerun acceptance.
 
 ## Immediate priorities

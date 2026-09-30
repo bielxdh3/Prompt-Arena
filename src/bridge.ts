@@ -153,6 +153,7 @@ export type StorageRetentionResult = {
 export type RunRecord = {
   runId: string;
   benchmarkVersionId: string;
+  taskId?: string;
   profileRevisionIds: string[];
   status: string;
   startedAt: string;
@@ -172,6 +173,7 @@ export type TimingMetrics = {
   loadDurationNs: number | null;
   promptEvalDurationNs: number | null;
   evalDurationNs: number | null;
+  ttftDurationNs?: number | null;
 };
 
 export type ResponseSummary = {
@@ -336,6 +338,8 @@ export type ArenaSummaryPayload = {
   caseId: string;
   repetitions: number;
   packId: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
   materializationSeed: number | null;
   arenaWallTimeMs?: number | null;
   summary: Record<string, unknown>;
@@ -467,6 +471,7 @@ export type SavedTournamentResult = { record: TournamentResultRecord; saveOutcom
 
 export type RoadmapFeatureKind =
   | "single_model_benchmark"
+  | "single_model_suite"
   | "performance_lab"
   | "historical_regression"
   | "model_ratings"
@@ -527,6 +532,12 @@ export type ChatMessage = {
   toolCallId: string | null;
 };
 
+export type ReasoningEffort = "none";
+
+export type ProfileParameters = Record<string, unknown> & {
+  reasoningEffort?: ReasoningEffort | null;
+};
+
 export type GenerationParameters = {
   temperature: number | null;
   topP: number | null;
@@ -535,6 +546,7 @@ export type GenerationParameters = {
   repeatPenalty: number | null;
   presencePenalty: number | null;
   frequencyPenalty: number | null;
+  reasoningEffort: ReasoningEffort | null;
 };
 
 export type GenerationRequest = {
@@ -561,14 +573,32 @@ export type OllamaConfig = {
 export type RunPlan = {
   runId: string;
   benchmarkVersionId: string;
+  taskId: string;
   caseId: string;
   profileRevision: ProfileRevision;
   generation: GenerationRequest;
   runtimeConfig: OllamaConfig;
   objectiveExpectation: string | null;
   verifierPolicy: ObjectiveVerifierPolicy | null;
+  promptVariant?: PromptVariant;
   executionBoundary: ExecutionBoundary;
   metadata: Record<string, unknown>;
+};
+
+export type PromptTransformationType =
+  | "paraphrase"
+  | "instruction_reorder"
+  | "variable_rename"
+  | "formatting_variation"
+  | "concise_wording"
+  | "verbose_wording"
+  | "irrelevant_noise";
+
+export type PromptVariant = {
+  version: "2";
+  transformationType: PromptTransformationType;
+  seed: number;
+  sourceTaskVersion: string;
 };
 
 export type ExecutionBoundary = {
@@ -580,6 +610,7 @@ export type ExecutionBoundary = {
 export type AttemptRecord = {
   attemptId: string;
   runId: string;
+  taskId?: string;
   profileRevisionId: string;
   caseId: string;
   status: string;
@@ -619,7 +650,7 @@ export type ProfileRevision = {
   revision: number;
   model: string;
   runtime: string;
-  parameters: Record<string, unknown>;
+  parameters: ProfileParameters;
   systemPrompt: string | null;
   [key: string]: unknown;
 };
