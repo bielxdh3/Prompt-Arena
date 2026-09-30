@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod docker_evaluator;
 pub mod domain;
 pub mod evaluation;
 pub mod external_providers;
@@ -57,6 +58,7 @@ pub fn run() -> tauri::Result<()> {
             commands::register_profile_revision,
             commands::list_profile_revisions,
             commands::discover_local_models,
+            commands::read_live_profile_model_identity,
             commands::import_managed_gguf_model,
             commands::start_model_operation,
             commands::list_model_operations,

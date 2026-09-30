@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::{
     domain::{
         sha256_hex, stable_profile_revision_id, stable_version_id, ArtifactRef, Attempt,
-        BenchmarkCase, BenchmarkTask, ExecutionBoundary, ExecutionBoundaryKind,
+        BenchmarkCase, BenchmarkTask, DockerVerifierId, ExecutionBoundary, ExecutionBoundaryKind,
         ExecutionBoundaryStatus, ImmutableResultReference, ObjectiveVerificationEvidence,
         ObjectiveVerifierEvidencePolicy, ObjectiveVerifierKind, ObjectiveVerifierPolicy,
         ProfileRevision, Run,
@@ -16,7 +16,7 @@ use crate::{
     runtime::{
         CancellationToken, GenerationChunk, GenerationParameters, GenerationRequest,
         GenerationResponse, ReasoningEffort, ResponseFormat, ResponseSummary, RuntimeError,
-        RuntimeProvider, ToolPolicy,
+        RuntimeProvider, ToolPolicy, MAX_CONTEXT_WINDOW_TOKENS, MAX_OUTPUT_TOKENS,
     },
     storage::{SaveOutcome, StorageError, StorageService},
 };
@@ -49,6 +49,10 @@ pub struct RunPlan {
     pub prompt_variant: Option<PromptVariant>,
     #[serde(default)]
     pub execution_boundary: ExecutionBoundary,
+    /// Set only from the authoritative stored case metadata by the Tauri
+    /// command. The renderer does not choose verifier contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_verifier_id: Option<DockerVerifierId>,
     #[serde(default)]
     pub metadata: BTreeMap<String, Value>,
 }
@@ -292,16 +296,22 @@ impl RunPlan {
                 "prompt variant source does not match the benchmark version".to_owned(),
             ));
         }
-        if matches!(
-            self.execution_boundary.status,
-            ExecutionBoundaryStatus::Unavailable
-        ) || matches!(
-            self.execution_boundary.kind,
-            ExecutionBoundaryKind::DockerRequired
-        ) {
+        let docker_required = self.execution_boundary.kind == ExecutionBoundaryKind::DockerRequired;
+        let invalid_boundary = if docker_required {
+            self.execution_boundary.status != ExecutionBoundaryStatus::Required
+                || self.docker_verifier_id.is_none()
+                || self.verifier_policy.is_some()
+                || self.objective_expectation.is_some()
+        } else {
+            self.execution_boundary.status != ExecutionBoundaryStatus::Available
+                || self.docker_verifier_id.is_some()
+        };
+        if self.execution_boundary.status == ExecutionBoundaryStatus::Unavailable
+            || invalid_boundary
+        {
             return Err(OrchestrationError::ExecutionBlocked(
                 self.execution_boundary.reason.clone().unwrap_or_else(|| {
-                    "Docker execution is unavailable; host execution is prohibited".to_owned()
+                    "the required execution boundary or verifier contract is unavailable; host execution is prohibited".to_owned()
                 }),
             ));
         }
@@ -332,6 +342,7 @@ fn validate_profile_generation_settings(
         "topP",
         "topK",
         "maxTokens",
+        "contextWindowTokens",
         "repeatPenalty",
         "reasoningEffort",
     ];
@@ -396,11 +407,29 @@ fn validate_profile_generation_settings(
             ));
         }
     };
+    let context_window_tokens = integer_parameter("contextWindowTokens", "contextWindowTokens")?;
+    let max_tokens = integer_parameter("maxTokens", "maxTokens")?;
+    if max_tokens.is_some_and(|value| value > MAX_OUTPUT_TOKENS) {
+        return Err(OrchestrationError::InvalidPlan(
+            "maxTokens exceeds the local inference output limit".to_owned(),
+        ));
+    }
+    if context_window_tokens.is_some_and(|value| value > MAX_CONTEXT_WINDOW_TOKENS) {
+        return Err(OrchestrationError::InvalidPlan(
+            "contextWindowTokens exceeds the local inference context limit".to_owned(),
+        ));
+    }
+    if context_window_tokens.is_some() && profile.runtime != "ollama" {
+        return Err(OrchestrationError::InvalidPlan(
+            "contextWindowTokens is supported only by the Ollama runtime".to_owned(),
+        ));
+    }
     let expected = GenerationParameters {
         temperature: float_parameter("temperature", "temperature", |value| value >= 0.0)?,
         top_p: float_parameter("topP", "topP", |value| (0.0..=1.0).contains(&value))?,
         top_k: integer_parameter("topK", "topK")?,
-        max_tokens: integer_parameter("maxTokens", "maxTokens")?,
+        max_tokens,
+        context_window_tokens,
         repeat_penalty: float_parameter("repeatPenalty", "repeatPenalty", |value| value >= 0.0)?,
         presence_penalty: None,
         frequency_penalty: None,
@@ -539,7 +568,51 @@ pub fn bind_authoritative_execution_boundary(
         &task.extra,
         &matching_cases[0].extra,
     )?;
+    plan.docker_verifier_id = derive_docker_verifier_id(&matching_cases[0].extra)?;
+    match &plan.execution_boundary.kind {
+        ExecutionBoundaryKind::DockerRequired if plan.docker_verifier_id.is_none() => {
+            return Err(OrchestrationError::ExecutionBlocked(
+                "Docker-required case has no implementation-owned verifier contract; host execution is prohibited".to_owned(),
+            ));
+        }
+        ExecutionBoundaryKind::TextGeneration if plan.docker_verifier_id.is_some() => {
+            return Err(OrchestrationError::InvalidPlan(
+                "a text-generation case cannot select a Docker verifier contract".to_owned(),
+            ));
+        }
+        _ => {}
+    }
     plan.validate()
+}
+
+fn derive_docker_verifier_id(
+    case: &BTreeMap<String, Value>,
+) -> Result<Option<DockerVerifierId>, OrchestrationError> {
+    let Some(contract) = case.get("dockerVerifierContract") else {
+        return Ok(None);
+    };
+    let Some(contract) = contract.as_object() else {
+        return Err(OrchestrationError::ExecutionBlocked(
+            "stored Docker verifier contract is malformed; host execution is prohibited".to_owned(),
+        ));
+    };
+    if contract.len() != 2 || contract.get("version").and_then(Value::as_u64) != Some(1) {
+        return Err(OrchestrationError::ExecutionBlocked(
+            "stored Docker verifier contract version is unsupported; host execution is prohibited"
+                .to_owned(),
+        ));
+    }
+    let id = contract.get("id").cloned().ok_or_else(|| {
+        OrchestrationError::ExecutionBlocked(
+            "stored Docker verifier contract has no identifier; host execution is prohibited"
+                .to_owned(),
+        )
+    })?;
+    serde_json::from_value(id).map(Some).map_err(|_| {
+        OrchestrationError::ExecutionBlocked(
+            "stored Docker verifier identifier is not implementation-allowlisted; host execution is prohibited".to_owned(),
+        )
+    })
 }
 
 fn derive_authoritative_system_prompt(
@@ -827,9 +900,16 @@ fn derive_execution_boundary(
     struct Signals {
         boundary: Option<ExecutionBoundaryKind>,
         sandbox_required: Option<bool>,
-        sandbox_unavailable: Option<bool>,
+        sandbox_status: Option<SandboxStatus>,
         notes: Option<String>,
         has_policy: bool,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SandboxStatus {
+        NotRequired,
+        Required,
+        Unavailable,
     }
 
     fn malformed_metadata() -> OrchestrationError {
@@ -871,12 +951,13 @@ fn derive_execution_boundary(
         }
         if let Some(value) = sandbox_status {
             signals.has_policy = true;
-            let unavailable = match value.as_str() {
-                Some("not_required") => false,
-                Some("unavailable") => true,
+            let status = match value.as_str() {
+                Some("not_required") => SandboxStatus::NotRequired,
+                Some("required") => SandboxStatus::Required,
+                Some("unavailable") => SandboxStatus::Unavailable,
                 _ => return Err(malformed_metadata()),
             };
-            set_once(&mut signals.sandbox_unavailable, unavailable)?;
+            set_once(&mut signals.sandbox_status, status)?;
         }
         Ok(())
     }
@@ -926,9 +1007,11 @@ fn derive_execution_boundary(
 
     let docker_boundary = signals.boundary == Some(ExecutionBoundaryKind::DockerRequired);
     let text_boundary = signals.boundary == Some(ExecutionBoundaryKind::TextGeneration);
-    let sandbox_unavailable = signals.sandbox_unavailable == Some(true);
-    let sandbox_not_required = signals.sandbox_unavailable == Some(false);
-    let docker_required = docker_boundary || signals.sandbox_required == Some(true);
+    let sandbox_unavailable = signals.sandbox_status == Some(SandboxStatus::Unavailable);
+    let sandbox_not_required = signals.sandbox_status == Some(SandboxStatus::NotRequired);
+    let docker_required = docker_boundary
+        || signals.sandbox_required == Some(true)
+        || signals.sandbox_status == Some(SandboxStatus::Required);
 
     if (docker_required && signals.sandbox_required == Some(false))
         || (docker_required && (text_boundary || sandbox_not_required))
@@ -943,11 +1026,16 @@ fn derive_execution_boundary(
             .notes
             .filter(|notes| !notes.trim().is_empty())
             .unwrap_or_else(|| {
-                "Docker execution is unavailable; host execution is prohibited".to_owned()
+                "Docker-backed text verification is required; host execution is prohibited"
+                    .to_owned()
             });
         return Ok(ExecutionBoundary {
             kind: ExecutionBoundaryKind::DockerRequired,
-            status: ExecutionBoundaryStatus::Unavailable,
+            status: if sandbox_unavailable {
+                ExecutionBoundaryStatus::Unavailable
+            } else {
+                ExecutionBoundaryStatus::Required
+            },
             reason: Some(reason),
         });
     }
@@ -971,6 +1059,11 @@ pub fn execute_once(
     cancellation: &CancellationToken,
 ) -> Result<TerminalOutcome, OrchestrationError> {
     plan.validate()?;
+    if plan.execution_boundary.kind == ExecutionBoundaryKind::DockerRequired {
+        return Err(OrchestrationError::ExecutionBlocked(
+            "the one-shot worker cannot execute Docker-required plans; use the app-owned evaluator command".to_owned(),
+        ));
+    }
     let provider = registry.provider_for(plan)?;
     execute_once_with_provider(plan, provider.as_ref(), cancellation)
 }
@@ -2232,21 +2325,21 @@ mod tests {
     use super::{
         bind_authoritative_execution_boundary, build_attempt, effective_config_snapshot,
         execute_once, execute_once_with_provider, objective_verification, persist_terminal_outcome,
-        stable_attempt_id, OrchestrationError, ProgressKind, RunPlan, RuntimeRegistry,
-        TerminalOutcome, MAX_OBJECTIVE_EXPECTATION_BYTES, MAX_PROGRESS_EVENTS,
-        MAX_RESPONSE_SUMMARY_BYTES,
+        stable_attempt_id, validate_profile_generation_settings, OrchestrationError, ProgressKind,
+        RunPlan, RuntimeRegistry, TerminalOutcome, MAX_OBJECTIVE_EXPECTATION_BYTES,
+        MAX_PROGRESS_EVENTS, MAX_RESPONSE_SUMMARY_BYTES,
     };
     use crate::{
         domain::{
-            ExecutionBoundary, ExecutionBoundaryKind, ObjectiveVerifierKind,
-            ObjectiveVerifierPolicy, ProfileRevision,
+            DockerVerifierId, ExecutionBoundary, ExecutionBoundaryKind, ExecutionBoundaryStatus,
+            ObjectiveVerifierKind, ObjectiveVerifierPolicy, ProfileRevision,
         },
         ollama::OllamaConfig,
         runtime::{
             CancellationToken, Capability, ChatMessage, GenerationChunk, GenerationParameter,
             GenerationRequest, GenerationResponse, MessageRole, ModelInfo, ResponseFormat,
             RuntimeCapabilities, RuntimeError, RuntimeHealth, RuntimeProvider, TimingMetrics,
-            ToolDefinition, ToolPolicy, UsageMetrics,
+            ToolDefinition, ToolPolicy, UsageMetrics, MAX_CONTEXT_WINDOW_TOKENS, MAX_OUTPUT_TOKENS,
         },
         storage::{StorageError, StorageService, MAX_ARTIFACT_BYTES},
     };
@@ -2357,6 +2450,7 @@ mod tests {
             verifier_policy: None,
             prompt_variant: None,
             execution_boundary: ExecutionBoundary::default(),
+            docker_verifier_id: None,
             metadata: BTreeMap::new(),
         }
     }
@@ -2439,6 +2533,95 @@ mod tests {
             missing_boundary.execution_boundary.kind,
             ExecutionBoundaryKind::DockerRequired
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn docker_verifier_is_bound_only_from_the_stored_allowlisted_case_contract() {
+        let mut document = benchmark_document();
+        let case = &mut document["benchmarkVersion"]["tasks"][0]["cases"][0];
+        case["executionBoundary"] = json!("docker_required");
+        case["dockerVerifierContract"] = json!({
+            "version": 1,
+            "id": "missing_user_text_v1"
+        });
+        // These imported fields are intentionally hostile-looking. No value
+        // other than the typed verifier ID/version is read by the backend.
+        case["image"] = json!("attacker/image:latest");
+        case["command"] = json!(["cmd", "/c", "echo unsafe"]);
+        case["tests"] = json!(["../../outside.py"]);
+        let (storage, root) = storage_with_benchmark(document, Some(plan().profile_revision));
+
+        let mut submitted = plan();
+        submitted.docker_verifier_id = Some(DockerVerifierId::MissingResourceTextV1);
+        bind_authoritative_execution_boundary(&mut submitted, &storage)
+            .expect("the saved allowlisted contract binds successfully");
+        assert_eq!(
+            submitted.execution_boundary.kind,
+            ExecutionBoundaryKind::DockerRequired
+        );
+        assert_eq!(
+            submitted.execution_boundary.status,
+            ExecutionBoundaryStatus::Required
+        );
+        assert_eq!(
+            submitted.docker_verifier_id,
+            Some(DockerVerifierId::MissingUserTextV1)
+        );
+        assert!(submitted.verifier_policy.is_none());
+        assert!(submitted.objective_expectation.is_none());
+
+        let mut forged_contract = benchmark_document();
+        let case = &mut forged_contract["benchmarkVersion"]["tasks"][0]["cases"][0];
+        case["executionBoundary"] = json!("docker_required");
+        case["dockerVerifierContract"] = json!({
+            "version": 1,
+            "id": "missing_user_text_v1",
+            "command": ["sh", "-c", "unsafe"]
+        });
+        let (bad_storage, bad_root) =
+            storage_with_benchmark(forged_contract, Some(plan().profile_revision));
+        assert!(matches!(
+            bind_authoritative_execution_boundary(&mut plan(), &bad_storage),
+            Err(OrchestrationError::ExecutionBlocked(_))
+        ));
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(bad_root);
+    }
+
+    #[test]
+    fn fixed_function_verifier_binds_from_the_stored_software_engineering_v3_case() {
+        let mut document = benchmark_document();
+        document["benchmark"]["benchmarkId"] = json!("software-engineering");
+        document["benchmarkVersion"]["versionId"] = json!("software-engineering@3");
+        document["benchmarkVersion"]["versionNumber"] = json!(3);
+        document["benchmarkVersion"]["tasks"][0]["taskId"] = json!("implement-user-lookup");
+        document["benchmarkVersion"]["tasks"][0]["cases"][0]["caseId"] = json!("exact-user-lookup");
+        document["benchmarkVersion"]["tasks"][0]["cases"][0]["executionBoundary"] =
+            json!("docker_required");
+        document["benchmarkVersion"]["tasks"][0]["cases"][0]["dockerVerifierContract"] =
+            json!({ "version": 1, "id": "fixed_function_python_v1" });
+        let (storage, root) = storage_with_benchmark(document, Some(plan().profile_revision));
+
+        let mut submitted = plan();
+        submitted.benchmark_version_id = "software-engineering@3".to_owned();
+        submitted.task_id = "implement-user-lookup".to_owned();
+        submitted.case_id = "exact-user-lookup".to_owned();
+        bind_authoritative_execution_boundary(&mut submitted, &storage)
+            .expect("version 3 binds the fixed function verifier");
+
+        assert_eq!(
+            submitted.docker_verifier_id,
+            Some(DockerVerifierId::FixedFunctionPythonV1)
+        );
+        assert_eq!(
+            submitted.execution_boundary.kind,
+            ExecutionBoundaryKind::DockerRequired
+        );
+        assert!(submitted.verifier_policy.is_none());
+        assert!(submitted.objective_expectation.is_none());
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2774,6 +2957,10 @@ mod tests {
             .insert("temperature".to_owned(), json!(0.7));
         profile.parameters.insert("topP".to_owned(), json!(0.9));
         profile.parameters.insert("topK".to_owned(), json!(40));
+        profile.runtime = "ollama".to_owned();
+        profile
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(8192));
         let (storage, root) = storage_with_benchmark(benchmark_document(), Some(profile.clone()));
 
         let mut valid = plan();
@@ -2781,6 +2968,7 @@ mod tests {
         valid.generation.parameters.temperature = Some(0.7);
         valid.generation.parameters.top_p = Some(0.9);
         valid.generation.parameters.top_k = Some(40);
+        valid.generation.parameters.context_window_tokens = Some(8192);
         bind_authoritative_execution_boundary(&mut valid, &storage)
             .expect("the normal profile-derived generation parameter projection is accepted");
 
@@ -2791,6 +2979,34 @@ mod tests {
             Err(OrchestrationError::InvalidPlan(_))
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_generation_limits_reject_oversized_output_and_context() {
+        for (name, value) in [
+            ("maxTokens", MAX_OUTPUT_TOKENS + 1),
+            ("contextWindowTokens", MAX_CONTEXT_WINDOW_TOKENS + 1),
+        ] {
+            let mut profile = plan().profile_revision;
+            if name == "contextWindowTokens" {
+                profile.runtime = "ollama".to_owned();
+            }
+            profile.parameters.insert(name.to_owned(), json!(value));
+            let mut generation = GenerationRequest {
+                model: "local-model".to_owned(),
+                prompt: Some("Prompt".to_owned()),
+                ..GenerationRequest::default()
+            };
+            if name == "maxTokens" {
+                generation.parameters.max_tokens = Some(value);
+            } else {
+                generation.parameters.context_window_tokens = Some(value);
+            }
+            assert!(matches!(
+                validate_profile_generation_settings(&profile, &generation),
+                Err(OrchestrationError::InvalidPlan(_))
+            ));
+        }
     }
 
     #[test]

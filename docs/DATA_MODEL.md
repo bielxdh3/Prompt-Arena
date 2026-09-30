@@ -59,13 +59,20 @@ records.
 both enforce the complete serialized profile request limit of 256 KiB. Model/runtime text and system-prompt bounds
 are also checked before the record is canonicalized and content-hashed. Replaying the same identity and content is
 idempotent (`AlreadyPresent`); replaying the identity with changed content is an immutable conflict. Profile listing
-is a typed read ordered by `created_at, record_id`, so the result is deterministic without mutating history.
+is a typed read ordered by `created_at, record_id`, so the result is deterministic without mutating history. Optional
+`maxTokens` and `contextWindowTokens` profile parameters are bounded to 32,768; the same caps are enforced when a
+profile is stored, bound into a run plan, and validated at the runtime boundary. An unset value keeps the runtime
+default, and the cap does not guarantee that a model or the available hardware can satisfy the request. Context
+overrides are accepted only for Ollama.
 
 The Models surface calls fixed or explicitly selected loopback endpoints for Ollama, LM Studio, and llama.cpp.
 Discovery accepts at most 512 model records, validates each normalized record's bounded text fields, caps each serialized
 metadata map at 256 KiB, and sorts the returned records by name and digest. Ollama pull and managed GGUF import/removal
 operations are persisted with progress/audit evidence. GGUF import is catalog/file management only and does not launch
-a llama.cpp runtime. Unavailable transport/runtime states and malformed responses are typed errors. BYOK provider
+a `llama.cpp` runtime. Discovered immutable profile revisions retain model/source/runtime identity, quantization, and
+the provider-reported model digest; a SHA-256 model-content hash is retained only when the backend provides one.
+Unavailable digest/hash values remain unavailable and do not prove the underlying model bytes are identical. Unavailable
+transport/runtime states and malformed responses are typed errors. BYOK provider
 credentials and external endpoints use a separate boundary described below.
 
 Browser preview has no profile/model persistence boundary: it displays unsaved fields and explicit preview states,
@@ -158,18 +165,25 @@ AI judge, multi-rater workflow, cross-run ranking, rubric authoring, or broader 
 
 ## Phase 12 bounded official packs
 
-The repository bundles three read-only benchmark-v1 source documents under `packs/official`. They are not rows in
+The repository bundles four read-only benchmark-v1 source documents under `packs/official`. They are not rows in
 `benchmark_drafts` or `benchmark_versions`, and catalog reads do not mutate SQLite, Attempts, Results, artifacts, or
 installed historical records. The Rust catalog uses `include_str!` for fixed source paths, validates the complete document
 with `validate_benchmark_document`, and returns the validator's canonical JSON plus its stable SHA-256 content hash.
 
 Each document carries an explicit top-level `execution` metadata object preserved by benchmark-v1's unknown-field policy.
 It declares the typed text-generation capability/status, evaluation mode, sandbox status, and human-readable requirement.
-The programming/software-engineering pack explicitly declares `executionBoundary: docker_required`,
-`requiresSandbox: true`, and `sandboxStatus: unavailable` for its programming cases. Those cases remain blocked until a
-Docker-backed evaluator exists; the current worker performs text generation only and never falls back to host execution.
-The math pack uses normalized exact-text expectations where appropriate. The writing pack uses `expected: null` and
-explicit human criteria for instruction following, clarity, evidence discipline, and usefulness.
+The programming/software-engineering@2 pack explicitly declares `executionBoundary: docker_required`,
+`requiresSandbox: true`, and `sandboxStatus: required` for its two prose-check cases. The separate
+software-engineering@3 pack adds one fixed Python function challenge. Each case binds an implementation-owned
+`dockerVerifierContract` with exactly a supported version and allowlisted ID. For text contracts, the app runs its
+one-shot worker with a backend-created text-only plan, then checks the bounded response using the fixed Docker verifier.
+The @2 checks use lexical phrase requirements, so a matching phrase does not prove semantic behavior.
+For the @3 function contract, the fixed Rust-owned harness accepts one named function in a restricted Python AST subset
+and runs it against fixed hidden cases. The temporary plan cannot choose an image, command, test, or verifier. Docker
+unavailable, timeout, invalid output, output-limit, and cleanup outcomes are persisted separately from pass/fail evidence;
+no host fallback occurs. The @3 challenge does not provide a general-purpose code runner or coding-verifier integration
+with robustness perturbations. The math pack uses normalized exact-text expectations where appropriate. The writing pack
+uses `expected: null` and explicit human criteria for instruction following, clarity, evidence discipline, and usefulness.
 
 `list_official_packs` returns deterministic summaries ordered by pack ID. `get_official_pack` returns the validated full
 canonical document for a known pack ID and `None` for an unknown ID. The desktop Benchmarks surface renders the metadata
@@ -201,9 +215,10 @@ Runs mounts this diagnostic only after the existing blind-evaluation gate permit
 attempt IDs and identity/metrics/objective evidence remain suppressed. Browser preview invokes no run/attempt command and
 invents no comparability result. Insights persists historical comparisons over saved single-model runs and Arena
 summaries plus deterministic Elo v1 or regularized Bradley–Terry v1 rating snapshots. Repeated single-model comparisons
-retain source run IDs, sample counts, pointwise 95% intervals, changed and unverified conditions, and explicit statistical
-assumptions. Tournament policy, AI judging, calibrated uncertainty for correlated evidence, and family-wise interval
-correction remain future work.
+retain source run IDs, sample counts, family-wise intervals targeting at least 95% coverage across seven metrics, changed
+and unverified conditions, and explicit statistical assumptions. Bradley–Terry records distinguish cluster-robust,
+prior-only, and legacy Laplace uncertainty methods; none is represented as a calibrated confidence interval. Tournament
+policy, AI judging, and calibrated uncertainty intervals remain future work.
 
 ## Phase 15 bounded appearance state
 
@@ -244,9 +259,10 @@ Historical semantic records must be append-only. A changed benchmark is a new ve
 `RunPlan` binds one benchmark version, task/case, immutable profile revision, generation request, and loopback-only local
 runtime configuration. The Tauri command reloads the immutable benchmark and exactly matching stored profile snapshot,
 then derives the canonical prompt, system prompt, typed robustness transform, verifier policy/expected answer, and
-Docker-required policy before invoking the worker. It also validates the full supported generation-parameter projection
-from the profile, fixes seed/stops/tools/format to the local policy, and records the accepted profile-derived parameters
-in attempt effective configuration. An Ollama profile without an explicit endpoint is restricted to the canonical
+Docker-required policy before invoking the worker. For allowlisted Docker text contracts, it constructs a temporary
+text-only generation plan and evaluates the generated response after the worker returns. It also validates the full
+supported generation-parameter projection from the profile, fixes seed/stops/tools/format to the local policy, and
+records the accepted profile-derived parameters in attempt effective configuration. An Ollama profile without an explicit endpoint is restricted to the canonical
 `127.0.0.1:11434` default; explicit saved loopback endpoints must match exactly after normalization. Renderer-supplied
 prompt, profile, generation settings, verifier, transform, or boundary fields are not execution authority. The desktop execution command sends the validated plan to a fixed-name one-shot
 worker. The worker returns one
@@ -288,16 +304,20 @@ New Arena summaries include an optional category ID/name pair only when the sele
 the published benchmark's category tree. The Rust storage boundary validates the pair and omits absent optional fields,
 so legacy summary content hashes and replay behavior remain unchanged. Elo v1 emits separate global and category
 populations from objective pass-rate matches. Its `400 / sqrt(samples)` uncertainty is a rough heuristic, not a calibrated
-probability interval. Bradley–Terry v1 fits regularized logit abilities per connected comparison component and emits
-Laplace normal-approximation standard errors. These standard errors assume independent pair outcomes; pair outcomes
-derived from shared Arena evidence can be correlated. Uncategorized and legacy summaries contribute to global ratings only.
+probability interval. Bradley–Terry v1 fits regularized logit abilities per connected comparison component. Outcomes
+sharing an Arena-summary content hash are grouped for CR1 cluster-robust standard errors; one-cluster components report
+prior-only standard deviations, and legacy outcomes with no source cluster retain Laplace standard errors. These standard
+errors or standard deviations are not calibrated confidence intervals. Uncategorized and legacy summaries contribute to
+global ratings only. Newly persisted rating snapshots also retain the exact contributing Arena summary IDs and content
+hashes; legacy snapshots without that source population remain readable.
 
 Single-run `historical_regression` payloads retain source kinds and IDs, changed-condition flags, absolute/percentage
 deltas, and available metric uncertainty. Repeated-run payloads retain distinct baseline/candidate run ID lists, per-metric
-counts/means/spreads, pointwise 95% Welch intervals for continuous metrics, and Bonferroni-combined Wilson intervals for
-binary quality. A minimum of five samples per group is required; fixed controls must agree, missing controls remain
-unverified, and profile differences are reported as group associations. Intervals are pointwise across metrics, without
-family-wise correction. Derived comparison exports include the result plus source IDs/content hashes and do not copy raw
+counts/means/spreads, Bonferroni-adjusted Welch intervals for continuous metrics, and conservatively combined Wilson
+intervals for binary quality. The per-metric confidence level is adjusted across all seven reported metrics for at least
+95% family-wise coverage. A minimum of five samples per group is required; fixed controls must agree, missing controls
+remain unverified, and profile differences are reported as group associations. Legacy pointwise records retain their
+original method labels. Derived comparison exports include the result plus source IDs/content hashes and do not copy raw
 source evidence.
 Robustness snapshots retain the source task/case/profile, base run/attempt IDs, each transformed prompt's source and
 version, terminal execution status, variant run/attempt IDs, and evidence-save errors. Version 2 operators are checked
@@ -305,8 +325,25 @@ against the effective RunPlan prompt; transformations that do not change it are 
 retains the original benchmark verifier and expected-answer contract; semantic equivalence remains unverified and is
 called out in the UI.
 
-Repro Bundle export produces a bounded JSON file with canonical-body SHA-256 and byte-count metadata. Import checks both,
-but the self-contained checksum does not authenticate the creator. Credential-keyed fields are filtered, while the
-profile system prompt is retained for replay and may contain private text; review a bundle before sharing it. A rerun uses locally stored benchmark/profile
-records; an imported source run is linked only when its run, version, task, case and profile identities match local
-evidence. Otherwise, the source ID remains an explicitly unverified external reference.
+Repro Bundle v3 export produces a bounded JSON file with canonical-body SHA-256 and byte-count metadata plus the exact
+UTF-8 bytes of the full canonical benchmark document, base64-chunked so renderer sanitization and JavaScript number
+formatting cannot alter the Rust-canonical representation. The final serialized envelope, including integrity metadata,
+must fit the same 8 MiB limit accepted by import. Bundles carry model identity fields when available and explicit
+seed/runtime controls. Import
+checks the source envelope's byte count and digest before returning it; v1/v2 envelope migrations preserve the nested
+payload and add no identity proof. The benchmark snapshot's canonical content hash and exact version/task/case must match
+before a run request is accepted. Legacy single-model payloads without the v2 identity snapshot remain read-only. The
+self-contained checksum does not authenticate the creator. Credential-keyed fields are filtered, while the profile
+system prompt is retained for replay and may contain private text; review a bundle before sharing it. A rerun requires
+the locally registered full profile and a matching model digest. On explicit Re-run, the app makes a bounded read-only
+Ollama tags/version check against the profile's saved loopback endpoint before and after generation; after generation,
+it also requires `/api/ps` to report exactly one loaded model with a digest matching the current tag. These checks do not
+persist catalog rows; a changed or mismatched model digest blocks the reproduced-run record. They are best-effort checks
+and do not atomically pin a digest to the generation request. Adapters that cannot report a current
+model digest, including the current LM Studio and llama.cpp paths, remain read-only. Provider-reported digests are not
+attestation that a server loaded particular weight bytes, and a missing source runtime-version value remains disclosed
+as unavailable. A missing benchmark may be validated, saved, reread, and rechecked only after the user explicitly
+selects Re-run. Unsupported seed application blocks rerun. Rust accepts a `reproducedFromRunId` link only when it
+resolves to an earlier stored single-model benchmark record and the benchmark version/content hash, task, case, and
+complete profile revision match. Ref-only external references remain unverified, and this local check does not
+authenticate the creator of an imported bundle.

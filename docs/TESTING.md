@@ -65,7 +65,8 @@ The tests exercise the local SQLite service and immutable artifact writer using 
 one-shot orchestration contract including response-summary and objective-verification replay/conflict/bounds, the Phase 05
 draft boundary, the Phase 06 profile/discovery slice, the bounded model-library hardware baseline/recommendation helper,
 the bounded Arena helper and objective RunPlan contract, the bounded single-run comparability diagnostic, the blind
-evaluation artifact/presentation/lock boundary, the official source-pack catalog, the read-only results helpers, the
+evaluation artifact/presentation/lock boundary, Repro Bundle exact-byte/size and migration checks, the read-only live
+Ollama identity and loaded-model digest probe, the official source-pack catalog, the read-only results helpers, the
 bounded local appearance normalizer, and the normalized
   runtime/Ollama adapter through a local mock server, plus external-provider catalog/cost logic and mock-backed credential,
   transport, consent, and request tests on supported Windows builds. There is no desktop integration test
@@ -73,10 +74,35 @@ that launches the Tauri app and worker together, no broader run authoring/contro
 lifecycle, unified model search/download/duplicate flow, empirical hardware history,
   full desktop integration for saved-run/Arena regression, repeated-sample and export UX, tournament policy, AI-judge comparability, full model download/catalog/deletion flow,
   live paid-provider execution acceptance (Linux BYOK remains unsupported),
-Docker-backed coding sandbox, desktop integration for the official-pack UI, or production-data migration test. Those
-checks belong with the phases that implement each behavior; the current tests
-verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full
-desktop UI integration.
+execution of model-generated programs, desktop integration for the official-pack UI, or production-data migration test.
+The Docker evaluator's focused Rust tests exercise the complete fixed argv, response-on-stdin boundary, endpoint allowlist,
+missing daemon/image, candidate pass/fail, bounded/hostile output, timeout, create-timeout cleanup, cleanup-failure,
+restricted-function syntax, fixed hidden cases, and invalid test-evidence states. The ignored live text-contract test
+runs the pinned image against both prose contracts plus a failing response. The ignored fixed-function test checks a
+passing function, an incorrect function, and a rejected import. Both tests require the exact pre-pulled image and a
+supported local Docker daemon; they do not verify installed-app UI integration or user-triggered evaluator cancellation.
+An earlier live fixed-function smoke was reported on 2026-09-30 for all three cases, but that evidence is not bound to
+the current candidate SHA and does not establish live Docker acceptance for this branch. The challenge runs only the one
+AST-restricted function and is not a general-purpose model-code execution path.
+
+For the live Docker check, inspect the exact pinned image first:
+
+```powershell
+docker image inspect docker.io/library/python:3.13-alpine3.22@sha256:e81548ac35b07a3bd4805f275107592ef458b1e893c0e04d45aedaa19416cca5
+```
+
+If the exact image is missing, pull it explicitly:
+
+```powershell
+docker pull docker.io/library/python:3.13-alpine3.22@sha256:e81548ac35b07a3bd4805f275107592ef458b1e893c0e04d45aedaa19416cca5
+```
+
+Then run only the ignored integration test:
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml docker_evaluator::tests::live_pinned_image_evaluates_official_response_text_contracts -- --ignored --exact
+cargo test --manifest-path src-tauri/Cargo.toml docker_evaluator::tests::live_pinned_image_executes_only_the_fixed_python_function_contract -- --ignored --exact
+```
 
 The Phase 17 boundary checker is tested with deterministic in-memory workflow, Tauri exact-CSP, capability-permission,
 ignore-rule, and generated-key fixtures. It does not print file contents. Remote pull-request CI remains the authoritative
@@ -90,7 +116,8 @@ snapshot source/confidence/unavailable states, recommendation thresholds and exp
 the Arena view’s loading, bridge-error, malformed-document, empty, deterministic preview, busy, terminal success/
 failure/cancelled, attempt/progress, history-navigation, and browser no-write states; and the Runs view’s loading,
 bridge-error, empty, run selection, attempt loading/error/empty, summary, effective-configuration, artifact/hash,
-objective status/hash/count evidence, blind-review suppression of attempt evidence before lock, post-lock audit identity,
-bounded score/ranking controls, official-pack metadata/document inspection, sandbox-unavailable copy, no AI/cross-run
+objective status/hash/count evidence, blind-review suppression of attempt evidence before lock, randomized anonymous
+cards, aggregate-only live progress and score-save retry, post-lock audit identity, bounded score/ranking controls,
+keyboard access to horizontally scrolling evidence tables, official-pack metadata/document inspection, sandbox-unavailable copy, no AI/cross-run
 evaluation claims, and browser no-write states in both browser preview
 and the Windows/Linux desktop shell.

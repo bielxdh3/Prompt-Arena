@@ -9,7 +9,7 @@ use crate::{
     domain::{
         ModelBackend, ModelCatalog, ModelDiscoveryRequest, ModelDuplicateGroup, ModelImportRequest,
         ModelOperation, ModelOperationKind, ModelOperationStatus, ModelRecord,
-        ModelRemovalEvidence, ModelSource, ModelSourceConfig, ModelSourceStatus,
+        ModelRemovalEvidence, ModelSource, ModelSourceConfig, ModelSourceStatus, ProfileRevision,
     },
     ollama::{OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
@@ -37,6 +37,20 @@ pub enum ModelLibraryError {
     GgufImport(String),
     Runtime(RuntimeError),
     Storage(StorageError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveProfileModelIdentity {
+    pub model_id: String,
+    pub source_id: String,
+    pub backend: ModelBackend,
+    pub model: String,
+    pub runtime: String,
+    pub digest: Option<String>,
+    pub content_hash: Option<String>,
+    pub quantization_level: Option<String>,
+    pub runtime_version: Option<String>,
 }
 
 impl std::fmt::Display for ModelLibraryError {
@@ -225,6 +239,125 @@ pub fn discover_local_models(
         duplicate_groups: group_duplicate_models(&models),
         sources,
         models,
+    })
+}
+
+/// Reads the current Ollama tag identity for an immutable local profile without persisting catalog rows.
+/// Other providers do not expose a trustworthy artifact digest through their current adapter, so they fail closed.
+pub fn read_live_profile_model_identity(
+    storage: &StorageService,
+    profile_revision_id: &str,
+    require_loaded_model_digest: bool,
+) -> Result<LiveProfileModelIdentity, ModelLibraryError> {
+    validate_bounded_text(profile_revision_id, 128, "profile revision ID")?;
+    let profile = storage
+        .list_profile_revisions()?
+        .into_iter()
+        .find(|profile| profile.profile_revision_id == profile_revision_id)
+        .ok_or_else(|| {
+            ModelLibraryError::InvalidRequest("local profile revision was not found".to_owned())
+        })?;
+    live_ollama_profile_identity(&profile, require_loaded_model_digest)
+}
+
+fn live_ollama_profile_identity(
+    profile: &ProfileRevision,
+    require_loaded_model_digest: bool,
+) -> Result<LiveProfileModelIdentity, ModelLibraryError> {
+    let extra_string = |key: &str| {
+        profile
+            .extra
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let backend: ModelBackend =
+        serde_json::from_value(profile.extra.get("backend").cloned().ok_or_else(|| {
+            ModelLibraryError::InvalidRequest("profile has no model backend identity".to_owned())
+        })?)
+        .map_err(|_| {
+            ModelLibraryError::InvalidRequest(
+                "profile model backend identity is invalid".to_owned(),
+            )
+        })?;
+    if backend != ModelBackend::Ollama || profile.runtime != "ollama" {
+        return Err(ModelLibraryError::InvalidRequest(
+            "the configured provider cannot report a live model artifact digest".to_owned(),
+        ));
+    }
+    let source_id = extra_string("sourceId").ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("profile has no model source identity".to_owned())
+    })?;
+    let stored_model_id = extra_string("modelId").ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("profile has no model record identity".to_owned())
+    })?;
+    validate_bounded_text(&stored_model_id, 128, "model record ID")?;
+    let endpoint = extra_string("endpoint").ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("profile has no local Ollama endpoint".to_owned())
+    })?;
+    let config = ModelSourceConfig {
+        backend: backend.clone(),
+        label: None,
+        endpoint: Some(endpoint.clone()),
+        path: None,
+    };
+    let validated_source_id = stable_model_source_id(&config)?;
+    if validated_source_id != source_id {
+        return Err(ModelLibraryError::InvalidRequest(
+            "profile model source identity no longer matches its endpoint".to_owned(),
+        ));
+    }
+    let provider = local_provider(&endpoint)?;
+    let runtime_version = provider.health()?.version.filter(|version| {
+        !version.is_empty() && version.len() <= 128 && !version.chars().any(char::is_control)
+    });
+    let mut matching_models = provider
+        .list_models()?
+        .into_iter()
+        .filter(|model| model.name == profile.model);
+    let model = matching_models.next().ok_or_else(|| {
+        ModelLibraryError::InvalidRequest(
+            "the profile model is not currently listed by Ollama".to_owned(),
+        )
+    })?;
+    if matching_models.next().is_some() {
+        return Err(ModelLibraryError::InvalidRequest(
+            "Ollama returned multiple entries for the profile model".to_owned(),
+        ));
+    }
+    let current = model_record_from_info(&source_id, &provider, backend.clone(), model)?;
+    if require_loaded_model_digest {
+        let mut running_models = provider
+            .list_running_models()?
+            .into_iter()
+            .filter(|running_model| running_model.name == profile.model);
+        let running_model = running_models.next().ok_or_else(|| {
+            ModelLibraryError::InvalidRequest(
+                "Ollama did not report the profile model as loaded after generation".to_owned(),
+            )
+        })?;
+        if running_models.next().is_some() {
+            return Err(ModelLibraryError::InvalidRequest(
+                "Ollama reported multiple loaded entries for the profile model".to_owned(),
+            ));
+        }
+        if current.digest.is_none() || running_model.digest != current.digest {
+            return Err(ModelLibraryError::InvalidRequest(
+                "the loaded model digest does not match the current Ollama tag digest".to_owned(),
+            ));
+        }
+    }
+    Ok(LiveProfileModelIdentity {
+        model_id: current.model_id,
+        source_id,
+        backend,
+        model: current.name,
+        runtime: profile.runtime.clone(),
+        digest: current.digest,
+        content_hash: current.content_hash,
+        quantization_level: current.quantization_level,
+        runtime_version,
     })
 }
 
@@ -1589,7 +1722,58 @@ mod tests {
         }
     }
 
-    fn read_request_headers(stream: &mut TcpStream) {
+    struct IdentityServer {
+        endpoint: String,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl IdentityServer {
+        fn start(tag_digest: &'static str, running_digest: &'static str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = thread::spawn(move || {
+                for _ in 0..3 {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let request = read_request_headers(&mut stream);
+                    let path = request.lines().next().unwrap_or_default();
+                    let body = if path.starts_with("GET /api/version ") {
+                        r#"{"version":"0.5.0"}"#.to_owned()
+                    } else if path.starts_with("GET /api/tags ") {
+                        format!(
+                            r#"{{"models":[{{"name":"alpha","digest":"{tag_digest}","size":42,"details":{{"quantization_level":"Q4_K_M"}}}}]}}"#
+                        )
+                    } else {
+                        format!(
+                            r#"{{"models":[{{"name":"alpha","digest":"{running_digest}","size":42,"details":{{"quantization_level":"Q4_K_M"}}}}]}}"#
+                        )
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            Self {
+                endpoint: format!("http://127.0.0.1:{port}"),
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for IdentityServer {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn read_request_headers(stream: &mut TcpStream) -> String {
         let mut bytes = Vec::new();
         let mut one = [0_u8; 1];
         while bytes.len() < 16 * 1024 {
@@ -1601,6 +1785,7 @@ mod tests {
                 break;
             }
         }
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     fn minimal_gguf(model_name: &str) -> Vec<u8> {
@@ -1740,6 +1925,88 @@ mod tests {
         .unwrap();
         assert_eq!(catalog.sources[0].status, ModelSourceStatus::Unavailable);
         assert!(catalog.sources[0].models.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_ollama_profile_identity_reads_current_digest_without_persisting_catalog_rows() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let server = IdentityServer::start("sha256:current", "sha256:current");
+        let config = ModelSourceConfig {
+            backend: ModelBackend::Ollama,
+            label: None,
+            endpoint: Some(server.endpoint.clone()),
+            path: None,
+        };
+        let source_id = stable_model_source_id(&config).unwrap();
+        let mut extra = BTreeMap::new();
+        extra.insert("backend".to_owned(), json!(ModelBackend::Ollama));
+        extra.insert("modelId".to_owned(), json!("model-stored"));
+        extra.insert("sourceId".to_owned(), json!(source_id));
+        extra.insert("endpoint".to_owned(), json!(server.endpoint));
+        extra.insert("modelDigest".to_owned(), json!("sha256:previous"));
+        let profile = ProfileRevision {
+            profile_id: "profile-live".to_owned(),
+            profile_revision_id: "profile-live@1".to_owned(),
+            revision: 1,
+            model: "alpha".to_owned(),
+            runtime: "ollama".to_owned(),
+            parameters: BTreeMap::new(),
+            system_prompt: None,
+            extra,
+        };
+        storage.save_profile_revision(&profile, "100").unwrap();
+        assert!(storage.list_model_records().unwrap().is_empty());
+
+        let current =
+            read_live_profile_model_identity(&storage, &profile.profile_revision_id, true)
+                .expect("live runtime identity is read");
+
+        assert_eq!(current.digest.as_deref(), Some("sha256:current"));
+        assert_eq!(current.runtime_version.as_deref(), Some("0.5.0"));
+        assert_eq!(current.source_id, source_id);
+        assert_eq!(current.model, "alpha");
+        assert!(storage.list_model_records().unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_ollama_profile_identity_rejects_a_loaded_digest_different_from_the_current_tag() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let server = IdentityServer::start("sha256:current", "sha256:loaded-other");
+        let config = ModelSourceConfig {
+            backend: ModelBackend::Ollama,
+            label: None,
+            endpoint: Some(server.endpoint.clone()),
+            path: None,
+        };
+        let source_id = stable_model_source_id(&config).unwrap();
+        let mut extra = BTreeMap::new();
+        extra.insert("backend".to_owned(), json!(ModelBackend::Ollama));
+        extra.insert("modelId".to_owned(), json!("model-stored"));
+        extra.insert("sourceId".to_owned(), json!(source_id));
+        extra.insert("endpoint".to_owned(), json!(server.endpoint));
+        extra.insert("modelDigest".to_owned(), json!("sha256:previous"));
+        let profile = ProfileRevision {
+            profile_id: "profile-live".to_owned(),
+            profile_revision_id: "profile-live@1".to_owned(),
+            revision: 1,
+            model: "alpha".to_owned(),
+            runtime: "ollama".to_owned(),
+            parameters: BTreeMap::new(),
+            system_prompt: None,
+            extra,
+        };
+        storage.save_profile_revision(&profile, "100").unwrap();
+
+        let result = read_live_profile_model_identity(&storage, &profile.profile_revision_id, true);
+
+        assert!(
+            matches!(result, Err(ModelLibraryError::InvalidRequest(message)) if message.contains("loaded model digest"))
+        );
+        assert!(storage.list_model_records().unwrap().is_empty());
         let _ = fs::remove_dir_all(root);
     }
 

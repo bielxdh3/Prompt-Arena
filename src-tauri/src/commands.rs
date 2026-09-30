@@ -11,15 +11,21 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::{
+    docker_evaluator::{
+        evaluate as evaluate_docker_contract, DockerEvaluation, DockerEvaluationStatus,
+        PINNED_PYTHON_IMAGE, VERIFIER_CONTRACT_VERSION,
+    },
     domain::{
         sha256_hex, validate_benchmark_document as validate_document,
         validate_benchmark_document_size as validate_document_size, Attempt,
         BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord,
-        ModelCatalog, ModelDiscoveryRequest, ModelImportRequest, ModelOperation, ModelRecord,
-        ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+        DockerVerifierId, ModelCatalog, ModelDiscoveryRequest, ModelImportRequest, ModelOperation,
+        ModelRecord, ModelRemovalEvidence, ObjectiveVerificationEvidence, ProfileRevision, Run,
+        ValidatedBenchmark, ValidationError,
     },
     evaluation::{
         get_blind_evaluation as get_blind_evaluation_record,
@@ -40,8 +46,10 @@ use crate::{
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
     model_library::{
         discover_local_models as discover_local_models_backend,
-        import_managed_gguf_model as import_managed_gguf_model_backend, ModelLibraryError,
-        ModelOperationController, ModelOperationRequest,
+        import_managed_gguf_model as import_managed_gguf_model_backend,
+        read_live_profile_model_identity as read_live_profile_model_identity_backend,
+        LiveProfileModelIdentity, ModelLibraryError, ModelOperationController,
+        ModelOperationRequest,
     },
     official_packs::{
         get_official_pack as get_official_pack_record,
@@ -753,6 +761,20 @@ pub fn discover_local_models(
     discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn read_live_profile_model_identity(
+    app: AppHandle,
+    profile_revision_id: String,
+    require_loaded_model_digest: bool,
+) -> Result<LiveProfileModelIdentity, CommandError> {
+    read_live_profile_model_identity_backend(
+        &storage_for(&app)?,
+        &profile_revision_id,
+        require_loaded_model_digest,
+    )
+    .map_err(Into::into)
+}
+
 #[tauri::command]
 pub fn import_managed_gguf_model(
     app: AppHandle,
@@ -997,8 +1019,143 @@ pub fn execute_run_once(
 ) -> Result<PersistedExecution, CommandError> {
     let storage = storage_for(&app)?;
     bind_authoritative_execution_boundary(&mut plan, &storage)?;
-    let outcome = invoke_worker_once(&app, &plan)?;
+    let outcome = if let Some(verifier_id) = plan.docker_verifier_id {
+        let mut generation_plan = plan.clone();
+        // This text-only plan is constructed after authoritative backend
+        // binding; renderer-supplied boundary/verifier fields are never used
+        // to bypass the allowlisted Docker contract.
+        generation_plan.execution_boundary = Default::default();
+        generation_plan.docker_verifier_id = None;
+        generation_plan.verifier_policy = None;
+        generation_plan.objective_expectation = None;
+        let generated = invoke_worker_once(&app, &generation_plan)?;
+        attach_docker_contract_outcome(generated, verifier_id)
+    } else {
+        invoke_worker_once(&app, &plan)?
+    };
     persist_terminal_outcome(&storage, &outcome, &now_marker()).map_err(Into::into)
+}
+
+fn attach_docker_contract_outcome(
+    outcome: TerminalOutcome,
+    verifier_id: DockerVerifierId,
+) -> TerminalOutcome {
+    match outcome {
+        TerminalOutcome::Completed {
+            mut run,
+            mut attempt,
+            response,
+            score: _,
+            progress,
+        } => {
+            let evaluation = evaluate_docker_contract(verifier_id, &response.text);
+            let details = docker_evaluation_details(&evaluation);
+            attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
+            attempt
+                .effective_config
+                .insert("dockerImage".to_owned(), json!(PINNED_PYTHON_IMAGE));
+            attempt.extra.insert("dockerEvaluation".to_owned(), details);
+            // Infrastructure failures are persisted as verifier state with
+            // the response artifact intact, never as a failed model score.
+            let score = docker_evaluation_score(&evaluation, &response.text);
+            TerminalOutcome::Completed {
+                run,
+                attempt,
+                response,
+                score,
+                progress,
+            }
+        }
+        TerminalOutcome::Cancelled {
+            mut run,
+            mut attempt,
+            progress,
+        } => {
+            let details = json!({
+                "status": "not_run",
+                "contractVersion": VERIFIER_CONTRACT_VERSION,
+                "verifierId": verifier_id.as_str(),
+                "reason": "Generation was cancelled before Docker text verification."
+            });
+            attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
+            attempt.extra.insert("dockerEvaluation".to_owned(), details);
+            TerminalOutcome::Cancelled {
+                run,
+                attempt,
+                progress,
+            }
+        }
+        TerminalOutcome::Failed {
+            mut run,
+            mut attempt,
+            error,
+            progress,
+        } => {
+            let details = json!({
+                "status": "not_run",
+                "contractVersion": VERIFIER_CONTRACT_VERSION,
+                "verifierId": verifier_id.as_str(),
+                "reason": "Generation failed before Docker text verification."
+            });
+            attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
+            attempt.extra.insert("dockerEvaluation".to_owned(), details);
+            TerminalOutcome::Failed {
+                run,
+                attempt,
+                error,
+                progress,
+            }
+        }
+    }
+}
+
+fn docker_evaluation_score(
+    evaluation: &DockerEvaluation,
+    response: &str,
+) -> Option<ObjectiveVerificationEvidence> {
+    matches!(
+        evaluation.status,
+        DockerEvaluationStatus::Passed | DockerEvaluationStatus::Failed
+    )
+    .then(|| evaluation.evidence(response))
+}
+
+fn attach_docker_policy(
+    run: &mut Run,
+    attempt: &mut Attempt,
+    verifier_id: DockerVerifierId,
+    details: serde_json::Value,
+) {
+    run.environment
+        .insert("executionBoundary".to_owned(), json!("docker_required"));
+    run.environment.insert(
+        "dockerVerifierContractVersion".to_owned(),
+        json!(VERIFIER_CONTRACT_VERSION),
+    );
+    run.environment
+        .insert("dockerVerifierId".to_owned(), json!(verifier_id.as_str()));
+    run.environment
+        .insert("dockerEvaluation".to_owned(), details);
+    attempt
+        .effective_config
+        .insert("executionBoundary".to_owned(), json!("docker_required"));
+    attempt
+        .effective_config
+        .insert("dockerVerifierId".to_owned(), json!(verifier_id.as_str()));
+}
+
+fn docker_evaluation_details(evaluation: &DockerEvaluation) -> serde_json::Value {
+    json!({
+        "status": evaluation.status.as_str(),
+        "contractVersion": VERIFIER_CONTRACT_VERSION,
+        "verifierId": evaluation.verifier_id.as_str(),
+        "image": PINNED_PYTHON_IMAGE,
+        "passedTests": evaluation.passed_tests,
+        "totalTests": evaluation.total_tests,
+        "reason": evaluation.reason,
+        "network": "none",
+        "hostMounts": "none"
+    })
 }
 
 fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
@@ -1272,14 +1429,49 @@ mod tests {
     };
 
     use super::{
-        app_status, ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
-        resolve_worker_executable, start_ollama_with, worker_executable_name,
-        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus, StorageState,
-        OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
+        app_status, docker_evaluation_score, ollama_server_command, ollama_spawn_error,
+        read_benchmark_version_from_storage, resolve_worker_executable, start_ollama_with,
+        worker_executable_name, worker_executable_path, worker_sidecar_resource_path,
+        OllamaStartStatus, StorageState, OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH,
+        WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
+    use crate::{
+        docker_evaluator::{DockerEvaluation, DockerEvaluationStatus},
+        domain::{DockerVerifierId, ObjectiveVerifierKind},
+    };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn docker_infrastructure_outcomes_never_become_candidate_scores() {
+        let response = "Return not-found for a missing user instead of null.";
+        for (status, score_passed) in [
+            (DockerEvaluationStatus::Passed, Some(true)),
+            (DockerEvaluationStatus::Failed, Some(false)),
+            (DockerEvaluationStatus::Unavailable, None),
+            (DockerEvaluationStatus::TimedOut, None),
+            (DockerEvaluationStatus::OutputLimit, None),
+            (DockerEvaluationStatus::InvalidOutput, None),
+        ] {
+            let evaluation = DockerEvaluation {
+                verifier_id: DockerVerifierId::MissingUserTextV1,
+                status,
+                passed_tests: if status == DockerEvaluationStatus::Passed {
+                    3
+                } else {
+                    1
+                },
+                total_tests: 3,
+                reason: "test outcome",
+            };
+            let score = docker_evaluation_score(&evaluation, response);
+            assert_eq!(score.as_ref().map(|evidence| evidence.passed), score_passed);
+            if let Some(score) = score {
+                assert_eq!(score.verifier_kind, ObjectiveVerifierKind::DockerContract);
+            }
+        }
+    }
 
     #[test]
     fn status_exposes_local_storage_without_runtime_providers() {

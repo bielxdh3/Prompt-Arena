@@ -240,16 +240,7 @@ export function visibleArenaTelemetryError(error: string | null | undefined, bli
 }
 
 export function arenaTelemetryLabel(sample: ArenaSampleTelemetry, blind: boolean, locale: AppLocale = "en"): string {
-  const blindOrdinal = blindLabelOrdinal(sample.competitorId);
-  return blind
-    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + blindOrdinal)}`
-    : sample.competitorLabel;
-}
-
-function blindLabelOrdinal(value: string): number {
-  const key = opaqueBlindOrderKey(value);
-  const prefix = Number.parseInt(key.slice(0, 8), 16);
-  return Number.isFinite(prefix) ? prefix % 26 : 0;
+  return blind ? (locale === "pt-BR" ? "Competidor" : "Competitor") : sample.competitorLabel;
 }
 
 export type ArenaMetricSummary = {
@@ -1089,18 +1080,19 @@ export type BlindArenaCard = {
 export function buildBlindArenaCards(
   executions: ArenaExecution[],
   responses: Map<string, string>,
+  orderSeed = "legacy-blind-order",
 ): BlindArenaCard[] {
   const candidates = executions
     .filter((item) => item.execution?.attempt.status === "completed")
     .map((item) => {
       const executionKey = `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`;
-      return { executionKey, orderKey: opaqueBlindOrderKey(executionKey), text: responses.get(executionKey) ?? "" };
+      return { executionKey, orderKey: opaqueBlindOrderKey(`${orderSeed}:${executionKey}`), text: responses.get(executionKey) ?? "" };
     })
     .filter((card) => card.text.length > 0);
   candidates.sort((left, right) => left.orderKey.localeCompare(right.orderKey) || left.executionKey.localeCompare(right.executionKey));
   return candidates.map((candidate, index) => ({
     label: `Response ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? `-${index + 1}` : ""}`,
-    token: `blind-${candidate.orderKey.slice(0, 24)}`,
+    token: `blind-${orderSeed.slice(0, 24)}-${index + 1}`,
     executionKey: candidate.executionKey,
     text: candidate.text,
   }));

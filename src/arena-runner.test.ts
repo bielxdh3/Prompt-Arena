@@ -142,10 +142,12 @@ describe("arena runner", () => {
       { competitorId: "two@1", competitorLabel: "two", repetition: 1, runId: "arena-2-1", plan: {} as never, execution: execution("arena-2-1", "two@1", "completed"), error: null, cancelled: false },
     ];
     const responses = new Map([["arena-1-1:arena-1-1-attempt", "one response"], ["arena-2-1:arena-2-1-attempt", "two response"]]);
-    const cards = buildBlindArenaCards(results, responses);
+    const cards = buildBlindArenaCards(results, responses, "random-a");
     expect(cards.map((card) => card.label)).toEqual(["Response A", "Response B"]);
-    const reversed = buildBlindArenaCards([...results].reverse(), responses);
+    const reversed = buildBlindArenaCards([...results].reverse(), responses, "random-a");
     expect(reversed.map((card) => [card.token, card.executionKey])).toEqual(cards.map((card) => [card.token, card.executionKey]));
+    const nextPresentation = buildBlindArenaCards(results, responses, "random-b");
+    expect(nextPresentation.map((card) => card.token)).not.toEqual(cards.map((card) => card.token));
     expect(cards[0]).not.toHaveProperty("competitorLabel");
     expect(arenaExportJson(request, results)).not.toContain("runs/");
     expect(arenaExportJson(request, results)).not.toContain("must-not-export");
@@ -195,11 +197,11 @@ describe("arena runner", () => {
     const telemetry = createArenaTelemetry(request, 10);
     const firstBlindLabel = arenaTelemetryLabel(telemetry.samples[0], true);
     const secondBlindLabel = arenaTelemetryLabel(telemetry.samples[1], true);
-    expect(firstBlindLabel).toMatch(/^Competitor [A-Z]+$/);
-    expect(secondBlindLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(firstBlindLabel).toBe("Competitor");
+    expect(secondBlindLabel).toBe("Competitor");
     expect(arenaTelemetryLabel({ ...telemetry.samples[0], competitorOrdinal: 999 }, true)).toBe(firstBlindLabel);
     expect(arenaTelemetryLabel({ ...telemetry.samples[1], competitorOrdinal: 0 }, true)).toBe(secondBlindLabel);
-    expect(firstBlindLabel).not.toBe(secondBlindLabel);
+    expect(firstBlindLabel).toBe(secondBlindLabel);
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
   });
 

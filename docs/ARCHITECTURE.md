@@ -129,8 +129,8 @@ multi-rater review, cross-run ranking, rubric authoring, or broader scoring/anal
 
 ## Phase 12 bounded official-pack catalog
 
-Three repository-owned benchmark-v1 documents live under `packs/official`: programming/software-engineering,
-reasoning/math/knowledge, and writing/analysis/instruction-following. The Rust catalog loads them with `include_str!`,
+Four repository-owned benchmark-v1 documents live under `packs/official`: programming/software-engineering@2,
+programming/Python functional correctness@3, reasoning/math/knowledge, and writing/analysis/instruction-following. The Rust catalog loads them with `include_str!`,
 passes each document through the existing serde/manual validator, canonicalizes the validated shape, and derives a stable
 SHA-256 content hash. Its typed list/get surface returns summaries, execution metadata, and a validated canonical document
 without opening storage or creating a benchmark version. Unknown metadata remains part of the canonical document contract;
@@ -138,9 +138,24 @@ the catalog does not weaken schema, path, hash, or immutable-storage rules.
 
 The Benchmarks UI treats these records as read-only source material. Desktop mode can inspect pack identity, version,
 hash, capability/evaluation metadata, and canonical JSON rendered as plain text. Browser preview shows an explicit no-read
-state and invokes no catalog command. Programming cases explicitly require Docker and are marked unavailable, so the
-current one-shot text-generation worker blocks them. The worker has no code evaluator or host-execution fallback;
-Docker-backed code evaluation and filesystem access remain outside this phase.
+state and invokes no catalog command. The programming/software-engineering@2 pack has two implementation-owned, versioned
+Docker text contracts for its code-review/API prose cases. The backend binds each allowlisted verifier ID from the immutable
+stored case, runs the normal one-shot text-generation worker with a temporary text-only plan, then checks the bounded
+response in a pinned Python image. The separate `software-engineering@3` pack contains one fixed Python function challenge.
+For that contract, the fixed Rust-owned harness parses the generated source, permits only one named function with an
+allowlisted AST subset, then executes that restricted function against fixed hidden cases in the same isolated image.
+The image, command, harness, test expectations, and accepted verifier IDs are fixed in Rust; imported case fields cannot
+choose them. This is one restricted challenge, not general-purpose code execution. The evaluator refuses remote Docker
+contexts, requires the pinned image already present (`--pull=never`), and records daemon/image/timeout/output/cleanup
+failures without turning infrastructure errors into a model score or falling back to host execution. The container has
+no network or host mounts, uses a non-root UID, a read-only root filesystem, dropped capabilities, no-new-privileges,
+and CPU, memory, process, wall-clock, input, and combined-output bounds. User-triggered cancellation is not yet wired
+into the app command; evaluator wall-clock timeout kills the Docker CLI process and attempts named-container cleanup.
+
+Docker is an additional local dependency only when running these cases. Rootless daemons are supported at the standard
+`/run/user/<uid>/docker.sock` endpoint; the app also accepts the standard local system sockets and Docker Desktop named
+pipes. Access to a rootful Docker socket effectively grants host-level daemon control, and even rootless containers
+share the host kernel, so the Docker daemon/operator and kernel remain part of the trust boundary.
 
 ## Phase 13 bounded model-library baseline
 
@@ -172,9 +187,11 @@ browser preview reads no runs or attempts. Separate Insights helpers compare sav
 calculate repeated-run Welch/Wilson intervals for single-model samples, and compute deterministic Elo v1 or regularized
 Bradley–Terry v1 global and taxonomy-specific snapshots from objective Arena pass rates. Task categories are retained only
 when the stored task category ID resolves in the benchmark's category tree. Elo's displayed `400 / sqrt(samples)` is a
-rough heuristic. Bradley–Terry uncertainty uses a Laplace normal approximation that assumes independent pair outcomes;
-shared Arena sources can make them correlated. Intervals are pointwise, not family-wise corrected. Tournament policy,
-AI judging, and calibrated uncertainty for correlated evidence remain future work.
+rough heuristic. Bradley–Terry uncertainty uses CR1 source-cluster standard errors when Arena summaries identify the
+source clusters, a prior-only standard deviation when only one cluster is available, and legacy Laplace standard errors
+when outcomes have no source IDs. These values are not calibrated confidence intervals. Repeated regression intervals
+apply Bonferroni adjustment across the seven reported metrics and target at least 95% family-wise coverage; legacy
+pointwise records remain readable. Tournament policy, AI judging, and calibrated rating intervals remain future work.
 
 ## Phase 15 bounded local appearance preferences
 
@@ -199,10 +216,10 @@ independently verified. Price snapshots are dated user-supplied inputs, not a li
 
 ## Future boundaries
 
-Remaining gaps include family-wise regression intervals, calibrated rating uncertainty for correlated evidence,
-semantic-preservation guarantees for every robustness transform, authenticated provenance for imported Repro Bundles,
-complete hardware/energy telemetry, Linux BYOK credential/transport support, Docker-backed coding execution,
-AI judging, multi-rater evaluation, and interruption recovery. Improvements must preserve provenance, effective
+Remaining gaps include calibrated rating intervals, semantic-preservation guarantees for every robustness transform,
+functional-verifier integration into coding robustness, authenticated provenance for imported Repro Bundles, complete
+hardware/energy telemetry, Linux BYOK credential/transport support, broader official coding challenge coverage,
+AI judging, multi-rater evaluation, user-triggered Docker cancellation, and interruption recovery. Improvements must preserve provenance, effective
 configuration, error taxonomy, and immutable historical records.
 
 ## Completion stack: multi-model Arena and delivery
