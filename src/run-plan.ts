@@ -8,7 +8,11 @@ import type {
   RunPlan,
 } from "./bridge";
 import { normalizeObjectivePolicy, type ObjectiveVerifierPolicy } from "./objective-verifiers";
-import { validateLoopbackEndpoint } from "./model-library";
+import {
+  MAX_PROFILE_CONTEXT_WINDOW_TOKENS,
+  MAX_PROFILE_OUTPUT_TOKENS,
+  validateLoopbackEndpoint,
+} from "./model-library";
 import { derivePromptVariantPrompt } from "./robustness-arena";
 
 const DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434";
@@ -142,7 +146,7 @@ export function buildRunPlan(input: BuildRunPlanInput): RunPlan {
       prompt,
       messages: [],
       systemPrompt,
-      parameters: generationParameters(profile.parameters),
+      parameters: generationParameters(profile.parameters, profile.runtime),
       stopSequences: [],
       seed: null,
       tools: [],
@@ -255,12 +259,13 @@ function normalizeProfile(value: unknown): ProfileRevision {
   return normalized;
 }
 
-function generationParameters(parameters: Record<string, unknown>): GenerationParameters {
+function generationParameters(parameters: Record<string, unknown>, runtime: string): GenerationParameters {
   const supported = new Set([
     "temperature",
     "topP",
     "topK",
     "maxTokens",
+    "contextWindowTokens",
     "repeatPenalty",
     "reasoningEffort",
   ]);
@@ -269,11 +274,20 @@ function generationParameters(parameters: Record<string, unknown>): GenerationPa
       throw new Error(`Profile parameter is unsupported by the local runtime: ${key}.`);
     }
   }
+  const contextWindowTokens = positiveParameter(
+    parameters.contextWindowTokens,
+    "contextWindowTokens",
+    MAX_PROFILE_CONTEXT_WINDOW_TOKENS,
+  );
+  if (contextWindowTokens !== null && runtime !== "ollama") {
+    throw new Error("Profile parameter contextWindowTokens is unsupported by the selected runtime.");
+  }
   return {
     temperature: finiteNumber(parameters.temperature, "temperature", (value) => value >= 0),
     topP: finiteNumber(parameters.topP, "topP", (value) => value >= 0 && value <= 1),
     topK: positiveParameter(parameters.topK, "topK"),
-    maxTokens: positiveParameter(parameters.maxTokens, "maxTokens"),
+    maxTokens: positiveParameter(parameters.maxTokens, "maxTokens", MAX_PROFILE_OUTPUT_TOKENS),
+    contextWindowTokens,
     repeatPenalty: finiteNumber(parameters.repeatPenalty, "repeatPenalty", (value) => value >= 0),
     presencePenalty: null,
     frequencyPenalty: null,
@@ -304,9 +318,9 @@ function finiteNumber(
   return value;
 }
 
-function positiveParameter(value: unknown, label: string): number | null {
+function positiveParameter(value: unknown, label: string, maximum = MAX_U32): number | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > MAX_U32) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new Error(`Profile parameter ${label} is invalid.`);
   }
   return value;
@@ -369,7 +383,7 @@ function executionBoundaryValue(
 ): ExecutionBoundary {
   let boundary: "text_generation" | "docker_required" | undefined;
   let sandboxRequired: boolean | undefined;
-  let sandboxUnavailable: boolean | undefined;
+  let sandboxStatus: "not_required" | "required" | "unavailable" | undefined;
   let notes: string | undefined;
   let hasPolicy = false;
   const invalid = (): never => { throw new Error("Benchmark execution policy is malformed or contradictory."); };
@@ -392,8 +406,8 @@ function executionBoundaryValue(
     }
     if (scope.sandboxStatus !== undefined) {
       hasPolicy = true;
-      if (scope.sandboxStatus !== "not_required" && scope.sandboxStatus !== "unavailable") invalid();
-      sandboxUnavailable = setOnce(sandboxUnavailable, scope.sandboxStatus === "unavailable");
+      if (scope.sandboxStatus !== "not_required" && scope.sandboxStatus !== "required" && scope.sandboxStatus !== "unavailable") invalid();
+      sandboxStatus = setOnce(sandboxStatus, scope.sandboxStatus as "not_required" | "required" | "unavailable");
     }
   };
   for (const scope of [document, version, task, benchmarkCase]) {
@@ -414,9 +428,9 @@ function executionBoundaryValue(
 
   const dockerBoundary = boundary === "docker_required";
   const textBoundary = boundary === "text_generation";
-  const unavailable = sandboxUnavailable === true;
-  const notRequired = sandboxUnavailable === false;
-  const dockerRequired = dockerBoundary || sandboxRequired === true;
+  const unavailable = sandboxStatus === "unavailable";
+  const notRequired = sandboxStatus === "not_required";
+  const dockerRequired = dockerBoundary || sandboxRequired === true || sandboxStatus === "required";
   if ((dockerRequired && sandboxRequired === false)
     || (dockerRequired && (textBoundary || notRequired))
     || (unavailable && sandboxRequired !== true)
@@ -425,8 +439,8 @@ function executionBoundaryValue(
   if (dockerRequired || unavailable) {
     return {
       kind: "docker_required",
-      status: "unavailable",
-      reason: notes?.trim() ? notes : "Docker execution is unavailable; host execution is prohibited.",
+      status: unavailable ? "unavailable" : "required",
+      reason: notes?.trim() ? notes : "Docker-backed text verification is required; host execution is prohibited.",
     };
   }
   return { kind: "text_generation", status: "available", reason: null };

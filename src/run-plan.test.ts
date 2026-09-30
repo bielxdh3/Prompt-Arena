@@ -87,6 +87,7 @@ describe("bounded run-plan contract", () => {
     expect(plan.generation.parameters).toMatchObject({ temperature: 0.2 });
     expect(plan.generation.parameters.topP).toBeNull();
     expect(plan.generation.parameters.reasoningEffort).toBeNull();
+    expect(plan.generation.parameters.contextWindowTokens).toBeNull();
   });
 
   it("carries an explicit profile reasoning-off choice into the typed generation plan", () => {
@@ -96,6 +97,35 @@ describe("bounded run-plan contract", () => {
 
     expect(plan.profileRevision.parameters).toEqual({ reasoningEffort: "none" });
     expect(plan.generation.parameters.reasoningEffort).toBe("none");
+  });
+
+  it("carries a stored output-token budget into the immutable generation plan", () => {
+    const plan = buildRunPlan(input({
+      profileRevision: { ...profile(), parameters: { maxTokens: 4096 } },
+    }));
+
+    expect(plan.profileRevision.parameters).toEqual({ maxTokens: 4096 });
+    expect(plan.generation.parameters.maxTokens).toBe(4096);
+  });
+
+  it("carries an Ollama context-window preference into the immutable generation plan", () => {
+    const plan = buildRunPlan(input({
+      profileRevision: { ...profile(), parameters: { contextWindowTokens: 8192 } },
+    }));
+
+    expect(plan.profileRevision.parameters).toEqual({ contextWindowTokens: 8192 });
+    expect(plan.generation.parameters.contextWindowTokens).toBe(8192);
+  });
+
+  it("rejects a context-window override for runtimes without declared support", () => {
+    for (const [runtime, endpoint] of [
+      ["lm_studio", "http://127.0.0.1:1234"],
+      ["llama_cpp", "http://127.0.0.1:8080"],
+    ]) {
+      expect(() => buildRunPlan(input({
+        profileRevision: { ...profile(), runtime, endpoint, parameters: { contextWindowTokens: 8192 } },
+      }))).toThrow("contextWindowTokens is unsupported");
+    }
   });
 
   it("carries only bounded text expectations outside the generation request", () => {
@@ -168,10 +198,13 @@ describe("bounded run-plan contract", () => {
     ];
     for (const [index, configure] of scopes.entries()) {
       const plan = buildRunPlan({ ...input(), version: versionWithDocument(configure) });
-      expect(plan.executionBoundary).toMatchObject({ kind: "docker_required", status: "unavailable" });
+      expect(plan.executionBoundary).toMatchObject({
+        kind: "docker_required",
+        status: index === 4 ? "unavailable" : "required",
+      });
       expect(plan.executionBoundary.reason).toBe(index === 4
         ? "Docker is required"
-        : "Docker execution is unavailable; host execution is prohibited.");
+        : "Docker-backed text verification is required; host execution is prohibited.");
     }
 
     expect(() => buildRunPlan({
@@ -266,6 +299,18 @@ describe("bounded run-plan contract", () => {
       ...input(),
       profileRevision: { ...profile(), parameters: { temperature: Number.MAX_VALUE } },
     })).toThrow("temperature");
+    for (const maxTokens of [0, -1, 1.5, 32_769, 4_294_967_296]) {
+      expect(() => buildRunPlan({
+        ...input(),
+        profileRevision: { ...profile(), parameters: { maxTokens } },
+      })).toThrow("maxTokens");
+    }
+    for (const contextWindowTokens of [0, -1, 1.5, 32_769, 4_294_967_296]) {
+      expect(() => buildRunPlan({
+        ...input(),
+        profileRevision: { ...profile(), parameters: { contextWindowTokens } },
+      })).toThrow("contextWindowTokens");
+    }
     expect(() => buildRunPlan({
       ...input(),
       profileRevision: {

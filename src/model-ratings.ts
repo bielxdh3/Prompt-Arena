@@ -1,10 +1,63 @@
 import type { ArenaSummaryRecord } from "./bridge";
 
-export type RatingOutcome = { matchId: string; winnerId: string | null; competitorAId: string; competitorBId: string; category?: string | null; categoryName?: string | null; valid?: boolean };
+export type RatingOutcome = { matchId: string; winnerId: string | null; competitorAId: string; competitorBId: string; category?: string | null; categoryName?: string | null; clusterId?: string | null; valid?: boolean };
 export type RatingRuleVersion = "elo-v1" | "bradley-terry-v1";
-export type RatingUncertaintyMethod = "sample_count_heuristic" | "laplace_standard_error";
-export type ModelRating = { competitorId: string; category: string | null; categoryName?: string | null; rating: number; sampleCount: number; uncertainty: number; comparisonGroupId?: string | null; wins: number; losses: number; ties: number };
-export type RatingSet = { schemaVersion: 1; kind: "model_ratings"; ruleVersion: RatingRuleVersion; uncertaintyMethod?: RatingUncertaintyMethod; ratings: ModelRating[]; createdAt: string };
+export type RatingUncertaintyMethod = "sample_count_heuristic" | "laplace_standard_error" | "cluster_robust_standard_error_v1" | "prior_only_standard_deviation_insufficient_clusters_v1" | "component_specific_v1";
+export type ModelRating = { competitorId: string; category: string | null; categoryName?: string | null; rating: number; sampleCount: number; /** Distinct source IDs when complete; this count does not assert statistical independence. */ sourceClusterCount?: number; uncertainty: number; uncertaintyMethod?: Exclude<RatingUncertaintyMethod, "component_specific_v1">; comparisonGroupId?: string | null; wins: number; losses: number; ties: number };
+export type RatingSourceReference = { arenaId: string; contentHash: string };
+export type RatingSet = { schemaVersion: 1; kind: "model_ratings"; ruleVersion: RatingRuleVersion; uncertaintyMethod?: RatingUncertaintyMethod; ratings: ModelRating[]; sourcePopulation?: RatingSourceReference[]; createdAt: string };
+
+const RATING_UNCERTAINTY_METHODS: readonly RatingUncertaintyMethod[] = [
+  "sample_count_heuristic",
+  "laplace_standard_error",
+  "cluster_robust_standard_error_v1",
+  "prior_only_standard_deviation_insufficient_clusters_v1",
+  "component_specific_v1",
+];
+const RATING_ROW_UNCERTAINTY_METHODS: readonly Exclude<RatingUncertaintyMethod, "component_specific_v1">[] = [
+  "sample_count_heuristic",
+  "laplace_standard_error",
+  "cluster_robust_standard_error_v1",
+  "prior_only_standard_deviation_insufficient_clusters_v1",
+];
+
+function isRatingSourceReference(value: unknown): value is RatingSourceReference {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  return typeof source.arenaId === "string" && source.arenaId.length > 0 && source.arenaId.length <= 128
+    && typeof source.contentHash === "string" && /^[a-f0-9]{64}$/iu.test(source.contentHash);
+}
+
+/** Accept current rating snapshots while retaining compatibility with older snapshots that omitted the method. */
+export function isRatingSet(value: unknown): value is RatingSet {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const method = record.uncertaintyMethod;
+  return record.schemaVersion === 1
+    && record.kind === "model_ratings"
+    && (record.ruleVersion === "elo-v1" || record.ruleVersion === "bradley-terry-v1")
+    && (method === undefined || (typeof method === "string" && RATING_UNCERTAINTY_METHODS.includes(method as RatingUncertaintyMethod)))
+    && typeof record.createdAt === "string"
+    && (record.sourcePopulation === undefined || (Array.isArray(record.sourcePopulation)
+      && record.sourcePopulation.length > 0 && record.sourcePopulation.length <= 4096
+      && record.sourcePopulation.every(isRatingSourceReference)))
+    && Array.isArray(record.ratings)
+    && record.ratings.length <= 1000
+    && record.ratings.every((rating: unknown) => {
+      if (!rating || typeof rating !== "object" || Array.isArray(rating)) return false;
+      const item = rating as Record<string, unknown>;
+      const rowMethod = item.uncertaintyMethod;
+      return typeof item.competitorId === "string"
+        && (item.category === null || typeof item.category === "string")
+        && typeof item.rating === "number" && Number.isFinite(item.rating)
+        && Number.isSafeInteger(item.sampleCount) && Number(item.sampleCount) >= 0
+        && (item.sourceClusterCount === undefined || (Number.isSafeInteger(item.sourceClusterCount) && Number(item.sourceClusterCount) > 0))
+        && typeof item.uncertainty === "number" && Number.isFinite(item.uncertainty) && item.uncertainty >= 0
+        && (rowMethod === undefined || (typeof rowMethod === "string" && RATING_ROW_UNCERTAINTY_METHODS.includes(rowMethod as Exclude<RatingUncertaintyMethod, "component_specific_v1">)))
+        && ["wins", "losses", "ties"].every((key) => Number.isSafeInteger(item[key]) && Number(item[key]) >= 0)
+        && (item.comparisonGroupId === undefined || item.comparisonGroupId === null || typeof item.comparisonGroupId === "string");
+    });
+}
 
 export function computeEloRatings(outcomes: readonly RatingOutcome[], options: { initialRating?: number; kFactor?: number; category?: string | null; createdAt?: string } = {}): RatingSet {
   const initialRating = options.initialRating ?? 1_000;
@@ -51,6 +104,7 @@ export function computeEloRatings(outcomes: readonly RatingOutcome[], options: {
       rating: Math.round(rating * 100) / 100,
       sampleCount,
       uncertainty: sampleCount === 0 ? 400 : 400 / Math.sqrt(sampleCount),
+      uncertaintyMethod: "sample_count_heuristic" as const,
       ...s,
     };
   }).sort((a, b) => b.rating - a.rating || (a.category ?? "").localeCompare(b.category ?? "") || a.competitorId.localeCompare(b.competitorId));
@@ -58,9 +112,17 @@ export function computeEloRatings(outcomes: readonly RatingOutcome[], options: {
 }
 
 type BradleyTerryOptions = { initialRating?: number; category?: string | null; createdAt?: string };
-type PairObservation = { a: number; b: number; scoreA: number };
+type PairObservation = { a: number; b: number; scoreA: number; clusterId?: string | null };
+type BradleyTerryUncertaintyMethod = Exclude<RatingUncertaintyMethod, "sample_count_heuristic" | "component_specific_v1">;
 const BRADLEY_TERRY_PRIOR_PRECISION = 1 / 9;
 const BRADLEY_TERRY_RATING_SCALE = 400 / Math.LN10;
+
+function aggregateUncertaintyMethod(methods: readonly RatingUncertaintyMethod[]): RatingUncertaintyMethod {
+  const distinct = new Set(methods);
+  if (distinct.size === 0) return "laplace_standard_error";
+  if (distinct.size === 1) return methods[0];
+  return "component_specific_v1";
+}
 
 function logistic(value: number): number {
   if (value >= 0) return 1 / (1 + Math.exp(-value));
@@ -107,7 +169,7 @@ function invertMatrix(matrix: number[][]): number[][] | null {
   return Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, column) => columns[column][row]));
 }
 
-function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutcome[]): { theta: number[]; standardErrors: number[] } | null {
+function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutcome[]): { theta: number[]; standardErrors: number[]; uncertaintyMethod: BradleyTerryUncertaintyMethod; sourceClusterCount?: number } | null {
   const parameterCount = competitorIds.length - 1;
   if (parameterCount <= 0) return null;
   const indexById = new Map(competitorIds.map((id, index) => [id, index]));
@@ -115,6 +177,7 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
     a: indexById.get(outcome.competitorAId)!,
     b: indexById.get(outcome.competitorBId)!,
     scoreA: outcome.winnerId === null ? 0.5 : outcome.winnerId === outcome.competitorAId ? 1 : 0,
+    clusterId: outcome.clusterId,
   }));
   const basis = Array.from({ length: competitorIds.length }, (_, row) => Array.from({ length: parameterCount }, (_, column) => (row === column + 1 ? 1 : 0) - 1 / competitorIds.length));
   const priorGram = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) => basis.reduce((sum, vector) => sum + vector[row] * vector[column], 0)));
@@ -168,16 +231,53 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
   const fitted = evaluate(parameters);
   const covariance = invertMatrix(fitted.hessian);
   if (!covariance) return null;
-  const standardErrors = basis.map((row) => {
+  const standardErrorsFromCovariance = (matrix: number[][]) => basis.map((row) => {
     let variance = 0;
-    for (let left = 0; left < parameterCount; left += 1) for (let right = 0; right < parameterCount; right += 1) variance += row[left] * covariance[left][right] * row[right];
+    for (let left = 0; left < parameterCount; left += 1) for (let right = 0; right < parameterCount; right += 1) variance += row[left] * matrix[left][right] * row[right];
     return Math.sqrt(Math.max(0, variance));
   });
+  const hasCompleteClusterIds = observations.every((observation) => typeof observation.clusterId === "string" && observation.clusterId.trim().length > 0);
+  let uncertaintyMethod: BradleyTerryUncertaintyMethod = "laplace_standard_error";
+  let standardErrors: number[];
+  let sourceClusterCount: number | undefined;
+  if (!hasCompleteClusterIds) {
+    standardErrors = standardErrorsFromCovariance(covariance);
+  } else {
+    const clusterIds = [...new Set(observations.map((observation) => observation.clusterId!))];
+    sourceClusterCount = clusterIds.length;
+    if (clusterIds.length < 2) {
+      // With one source run there is no between-run variation to estimate. Use the BT prior SD, not the falsely precise Laplace SE.
+      const priorStandardError = Math.sqrt((1 - 1 / competitorIds.length) / BRADLEY_TERRY_PRIOR_PRECISION);
+      standardErrors = competitorIds.map(() => priorStandardError);
+      uncertaintyMethod = "prior_only_standard_deviation_insufficient_clusters_v1";
+    } else {
+      const clusterScores = new Map(clusterIds.map((clusterId) => [clusterId, Array(parameterCount).fill(0) as number[]]));
+      for (const observation of observations) {
+        const score = clusterScores.get(observation.clusterId!)!;
+        const probabilityA = logistic(fitted.theta[observation.a] - fitted.theta[observation.b]);
+        const residual = observation.scoreA - probabilityA;
+        for (let row = 0; row < parameterCount; row += 1) {
+          const xRow = (observation.a === row + 1 ? 1 : 0) - (observation.b === row + 1 ? 1 : 0);
+          score[row] += xRow * residual;
+        }
+      }
+      const meat = Array.from({ length: parameterCount }, () => Array(parameterCount).fill(0) as number[]);
+      for (const score of clusterScores.values()) for (let row = 0; row < parameterCount; row += 1) for (let column = 0; column < parameterCount; column += 1) meat[row][column] += score[row] * score[column];
+      const correction = clusterIds.length / (clusterIds.length - 1);
+      const robustCovariance = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) => {
+        let value = 0;
+        for (let left = 0; left < parameterCount; left += 1) for (let right = 0; right < parameterCount; right += 1) value += covariance[row][left] * meat[left][right] * covariance[right][column];
+        return correction * value;
+      }));
+      standardErrors = standardErrorsFromCovariance(robustCovariance);
+      uncertaintyMethod = "cluster_robust_standard_error_v1";
+    }
+  }
   if (![...fitted.theta, ...standardErrors].every(Number.isFinite)) return null;
-  return { theta: fitted.theta, standardErrors };
+  return { theta: fitted.theta, standardErrors, uncertaintyMethod, ...(sourceClusterCount === undefined ? {} : { sourceClusterCount }) };
 }
 
-/** Regularized Bradley-Terry logit ability estimates with Laplace-approximation standard errors. */
+/** Regularized Bradley-Terry abilities with Laplace or source-cluster robust standard errors; fewer than two clusters use prior-only SDs. These are not calibrated confidence intervals. */
 export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], options: BradleyTerryOptions = {}): RatingSet {
   const initialRating = options.initialRating ?? 1_000;
   const categoryOverride = Object.prototype.hasOwnProperty.call(options, "category");
@@ -188,6 +288,7 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
     .sort((left, right) => left.matchId.localeCompare(right.matchId) || left.competitorAId.localeCompare(right.competitorAId) || left.competitorBId.localeCompare(right.competitorBId));
   const matchesByCategory = new Map<string, { category: string | null; categoryName: string | null; outcomes: RatingOutcome[] }>();
   const statistics = new Map<string, { wins: number; losses: number; ties: number }>();
+  const uncertaintyMethods = new Set<RatingUncertaintyMethod>();
   for (const original of ordered) {
     const category = categoryOverride ? options.category ?? null : original.category ?? null;
     const categoryName = category === null ? null : original.categoryName ?? category;
@@ -233,6 +334,7 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
       const componentOutcomes = group.outcomes.filter((outcome) => idSet.has(outcome.competitorAId) && idSet.has(outcome.competitorBId));
       const fit = fitBradleyTerryComponent(competitorIds, componentOutcomes);
       if (!fit) return;
+      uncertaintyMethods.add(fit.uncertaintyMethod);
       const comparisonGroupId = `${group.category ?? "global"}:component-${componentIndex + 1}`;
       competitorIds.forEach((competitorId, index) => {
         const key = `${group.category ?? ""}\u0000${competitorId}`;
@@ -243,7 +345,9 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
           categoryName: group.categoryName,
           rating: Math.round((initialRating + fit.theta[index] * BRADLEY_TERRY_RATING_SCALE) * 100) / 100,
           sampleCount: stats.wins + stats.losses + stats.ties,
+          ...(fit.sourceClusterCount === undefined ? {} : { sourceClusterCount: fit.sourceClusterCount }),
           uncertainty: Math.round(fit.standardErrors[index] * BRADLEY_TERRY_RATING_SCALE * 100) / 100,
+          uncertaintyMethod: fit.uncertaintyMethod,
           comparisonGroupId,
           ...stats,
         });
@@ -254,7 +358,7 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
     || (left.comparisonGroupId ?? "").localeCompare(right.comparisonGroupId ?? "")
     || right.rating - left.rating
     || left.competitorId.localeCompare(right.competitorId));
-  return { schemaVersion: 1, kind: "model_ratings", ruleVersion: "bradley-terry-v1", uncertaintyMethod: "laplace_standard_error", ratings: result, createdAt: options.createdAt ?? new Date().toISOString() };
+  return { schemaVersion: 1, kind: "model_ratings", ruleVersion: "bradley-terry-v1", uncertaintyMethod: aggregateUncertaintyMethod([...uncertaintyMethods]), ratings: result, createdAt: options.createdAt ?? new Date().toISOString() };
 }
 
 export function computeGlobalAndCategoryRatings(outcomes: readonly RatingOutcome[], createdAt = new Date().toISOString(), ruleVersion: RatingRuleVersion = "elo-v1"): RatingSet {
@@ -264,11 +368,15 @@ export function computeGlobalAndCategoryRatings(outcomes: readonly RatingOutcome
     .filter((outcome) => outcome.valid !== false && outcome.category)
     .map((outcome) => outcome.category as string))]
     .sort((left, right) => left.localeCompare(right));
-  const categoryRatings = categoryIds.flatMap((category) => compute(
+  const categorySets = categoryIds.map((category) => compute(
     outcomes.filter((outcome) => outcome.category === category),
     { category, createdAt },
-  ).ratings);
-  return { ...global, ratings: [...global.ratings, ...categoryRatings] };
+  ));
+  return {
+    ...global,
+    uncertaintyMethod: aggregateUncertaintyMethod([global.uncertaintyMethod ?? "laplace_standard_error", ...categorySets.map((set) => set.uncertaintyMethod ?? "laplace_standard_error")]),
+    ratings: [...global.ratings, ...categorySets.flatMap((set) => set.ratings)],
+  };
 }
 
 function integer(value: unknown): number | null { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null; }
@@ -293,6 +401,7 @@ export function ratingOutcomesFromArenaSummaries(summaries: readonly ArenaSummar
         winnerId: leftRate === rightRate ? null : leftRate > rightRate ? left.id : right.id,
         category: typeof summary.categoryId === "string" ? summary.categoryId : null,
         categoryName: typeof summary.categoryName === "string" ? summary.categoryName : null,
+        clusterId: `arena-summary:${summary.contentHash}`,
       });
     }
   }

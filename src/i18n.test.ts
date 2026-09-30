@@ -49,8 +49,29 @@ describe("i18n", () => {
     expect(translateText("pt-BR", "Not in the catalog")).toBe("Not in the catalog");
   });
 
+  it("translates the Docker text-verifier state and evidence labels", () => {
+    expect(translateText("pt-BR", "Docker-backed text verification required")).toBe("Verificação de texto via Docker obrigatória");
+    expect(translateText("pt-BR", "Verifier unavailable")).toBe("Verificação indisponível");
+    expect(translateText("pt-BR", "Docker verifier status")).toBe("Status do verificador Docker");
+  });
+
   it("translates the overview local-model metric label", () => {
     expect(translateText("pt-BR", "Local models")).toBe("Modelos locais");
+  });
+
+  it("translates the profile output-token control", () => {
+    expect(translateText("pt-BR", "Maximum output tokens")).toBe("Máximo de tokens de saída");
+    expect(translateText("pt-BR", "Optional. Leave blank to preserve the runtime default. A set value caps generated output; change the revision to save a different budget.")).toBe("Opcional. Deixe em branco para preservar o padrão do runtime. Um valor definido limita a saída gerada; altere a revisão para salvar outro limite.");
+  });
+
+  it("translates the profile context-window control", () => {
+    expect(translateText("pt-BR", "Context window size (tokens)")).toBe("Tamanho da janela de contexto (tokens)");
+    expect(translateText("pt-BR", "Optional. Leave blank to preserve the runtime default. Ollama supports this override; other runtimes reject it.")).toBe("Opcional. Deixe em branco para preservar o padrão do runtime. O Ollama aceita essa substituição; outros runtimes a rejeitam.");
+    expect(translateText("pt-BR", "Context window size must be a positive 32-bit whole number.")).toBe("O tamanho da janela de contexto deve ser um número inteiro positivo de 32 bits.");
+  });
+
+  it("translates the unsupported Repro Bundle seed warning", () => {
+    expect(translateText("pt-BR", "This bundle uses a seed control that the local single-model runner cannot apply; rerunning is disabled.")).toBe("Este pacote usa um controle de semente que o executor local de modelo único não consegue aplicar; a nova execução está desativada.");
   });
 
   it("covers AST-audited PT-BR fallback literals", () => {
@@ -157,10 +178,11 @@ describe("i18n", () => {
     };
 
     const englishLabel = arenaTelemetryLabel(sample, true, "en");
-    expect(englishLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(englishLabel).toBe("Competitor");
     expect(arenaTelemetryLabel({ ...sample, competitorOrdinal: 0 }, true, "en")).toBe(englishLabel);
-    expect(arenaTelemetryLabel(sample, true, "pt-BR")).toBe(englishLabel.replace("Competitor", "Competidor"));
+    expect(arenaTelemetryLabel(sample, true, "pt-BR")).toBe("Competidor");
     expect(arenaTelemetryLabel(sample, false, "pt-BR")).toBe("Local model");
+    expect(translateText("pt-BR", "Execution failed; details withheld.")).toBe("Falha na execução; detalhes ocultos.");
   });
 });
 

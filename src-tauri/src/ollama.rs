@@ -295,6 +295,32 @@ impl OllamaProvider {
         Ok(())
     }
 
+    pub(crate) fn list_running_models(&self) -> Result<Vec<ModelInfo>, RuntimeError> {
+        let cancellation = CancellationToken::new();
+        let value = self.json_request("GET", "/api/ps", None, &cancellation)?;
+        let models = value
+            .get("models")
+            .and_then(Value::as_array)
+            .ok_or_else(|| RuntimeError::Protocol {
+                message: "runtime running-model list did not contain a models array".to_owned(),
+            })?;
+        if models.len() > MAX_LOCAL_MODEL_COUNT {
+            return Err(RuntimeError::Protocol {
+                message: "runtime running-model list exceeded the local item limit".to_owned(),
+            });
+        }
+        let mut models = models
+            .iter()
+            .map(parse_model_info)
+            .collect::<Result<Vec<_>, _>>()?;
+        models.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then(left.digest.cmp(&right.digest))
+        });
+        Ok(models)
+    }
+
     fn generation_payload(
         &self,
         request: &GenerationRequest,
@@ -379,6 +405,7 @@ impl RuntimeProvider for OllamaProvider {
                 GenerationParameter::TopP,
                 GenerationParameter::TopK,
                 GenerationParameter::MaxTokens,
+                GenerationParameter::ContextWindowTokens,
                 GenerationParameter::RepeatPenalty,
                 GenerationParameter::StopSequences,
                 GenerationParameter::Seed,
@@ -704,6 +731,9 @@ fn ollama_options(request: &GenerationRequest) -> Result<Map<String, Value>, Run
     }
     if let Some(value) = parameters.max_tokens {
         options.insert("num_predict".to_owned(), json!(value));
+    }
+    if let Some(value) = parameters.context_window_tokens {
+        options.insert("num_ctx".to_owned(), json!(value));
     }
     if let Some(value) = parameters.repeat_penalty {
         options.insert("repeat_penalty".to_owned(), json!(value));
@@ -1642,6 +1672,22 @@ mod tests {
     }
 
     #[test]
+    fn running_model_listing_returns_loaded_model_digest() {
+        let server = MockServer::start(vec![MockReply::Json(
+            200,
+            json!({"models": [{"name": "llama3.2:latest", "digest": "sha256:loaded", "size": 42, "details": {"quantization_level": "Q4_K_M"}}]}),
+        )]);
+        let models = server
+            .provider()
+            .list_running_models()
+            .expect("running model list");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "llama3.2:latest");
+        assert_eq!(models[0].digest.as_deref(), Some("sha256:loaded"));
+        assert!(server.requests()[0].starts_with("GET /api/ps HTTP/1.1"));
+    }
+
+    #[test]
     fn model_metadata_optional_fields_and_future_fields_remain_compatible() {
         let model = super::parse_model_info(&json!({
             "model": "compat:latest",
@@ -1730,6 +1776,7 @@ mod tests {
                 top_p: Some(0.9),
                 top_k: Some(20),
                 max_tokens: Some(32),
+                context_window_tokens: Some(8192),
                 repeat_penalty: Some(1.1),
                 ..GenerationParameters::default()
             },
@@ -1760,6 +1807,7 @@ mod tests {
         assert_eq!(body["format"], "json");
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["options"]["num_predict"], 32);
+        assert_eq!(body["options"]["num_ctx"], 8192);
         assert_eq!(body["options"]["seed"], 7);
         assert_eq!(body["tools"][0]["function"]["name"], "lookup");
     }

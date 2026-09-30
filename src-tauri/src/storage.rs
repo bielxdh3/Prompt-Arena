@@ -25,7 +25,7 @@ use crate::external_providers::{
     validate_external_generation_evidence, ExternalGenerationEvidencePayload,
 };
 use crate::orchestration::MAX_OBJECTIVE_EXPECTATION_BYTES;
-use crate::runtime::GenerationResponse;
+use crate::runtime::{GenerationResponse, MAX_CONTEXT_WINDOW_TOKENS, MAX_OUTPUT_TOKENS};
 
 pub use crate::domain::ArtifactRef;
 
@@ -1959,6 +1959,70 @@ impl StorageService {
         {
             return Err(invalid());
         }
+        self.validate_reproduction_provenance(payload, run_id)?;
+        Ok(())
+    }
+
+    fn validate_reproduction_provenance(
+        &self,
+        payload: &Value,
+        run_id: &str,
+    ) -> Result<(), StorageError> {
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        let reproduced_from_run_id = payload
+            .get("reproducedFromRunId")
+            .map(|value| value.as_str().ok_or_else(invalid))
+            .transpose()?;
+        let source_run_reference = payload
+            .get("reproSourceRunReference")
+            .map(|value| value.as_str().ok_or_else(invalid))
+            .transpose()?;
+        let source_run_verified = payload
+            .get("reproSourceRunVerified")
+            .map(|value| value.as_bool().ok_or_else(invalid))
+            .transpose()?;
+
+        let Some(source_run_id) = reproduced_from_run_id else {
+            if source_run_verified == Some(true) {
+                return Err(invalid());
+            }
+            if source_run_verified == Some(false) {
+                if let Some(reference) = source_run_reference {
+                    let source_record_id = format!("benchmark-{reference}");
+                    if validate_record_id(&source_record_id).is_ok() {
+                        if let Some(source) = self
+                            .get_roadmap_record(&source_record_id)?
+                            .filter(|record| record.kind == "single_model_benchmark")
+                        {
+                            if reproduction_source_identity_matches(
+                                payload,
+                                &source.payload,
+                                reference,
+                            ) {
+                                return Err(invalid());
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        };
+        if source_run_id == run_id
+            || source_run_verified != Some(true)
+            || source_run_reference != Some(source_run_id)
+        {
+            return Err(invalid());
+        }
+
+        let source_record_id = format!("benchmark-{source_run_id}");
+        validate_record_id(&source_record_id).map_err(|_| invalid())?;
+        let source = self
+            .get_roadmap_record(&source_record_id)?
+            .filter(|record| record.kind == "single_model_benchmark")
+            .ok_or_else(invalid)?;
+        if !reproduction_source_identity_matches(payload, &source.payload, source_run_id) {
+            return Err(invalid());
+        }
         Ok(())
     }
 
@@ -3528,6 +3592,30 @@ fn validate_roadmap_record(request: &RoadmapRecordRequest) -> Result<(), Storage
     Ok(())
 }
 
+fn reproduction_source_identity_matches(
+    reproduced: &Value,
+    source: &Value,
+    source_run_id: &str,
+) -> bool {
+    source.get("schemaVersion").and_then(Value::as_u64) == Some(2)
+        && source.get("kind").and_then(Value::as_str) == Some("single_model_benchmark")
+        && source.get("runId").and_then(Value::as_str) == Some(source_run_id)
+        && source_run_id
+            != reproduced
+                .get("runId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        && [
+            "benchmarkVersionId",
+            "benchmarkContentHash",
+            "taskId",
+            "caseId",
+            "profileRevision",
+        ]
+        .iter()
+        .all(|field| reproduced.get(*field) == source.get(*field))
+}
+
 fn performance_metric(
     value: Option<f64>,
     unit: &str,
@@ -3687,6 +3775,24 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
             validate_model_text(value, MAX_MODEL_PATH_BYTES)?;
         }
     }
+    if let Some(model_digest) = revision.extra.get("modelDigest") {
+        if !model_digest.is_null() {
+            let Some(model_digest) = model_digest.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            validate_model_text(model_digest, MAX_PROFILE_MODEL_BYTES)
+                .map_err(|_| StorageError::InvalidProfileRevision)?;
+        }
+    }
+    if let Some(model_content_hash) = revision.extra.get("modelContentHash") {
+        if !model_content_hash.is_null() {
+            let Some(model_content_hash) = model_content_hash.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            validate_sha256(model_content_hash)
+                .map_err(|_| StorageError::InvalidProfileRevision)?;
+        }
+    }
     if let Some(backend) = revision.extra.get("backend").and_then(Value::as_str) {
         if backend != revision.runtime {
             return Err(StorageError::InvalidProfileRevision);
@@ -3714,6 +3820,27 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
                 return Err(StorageError::InvalidProfileRevision);
             }
             validate_managed_model_path(path)?;
+        }
+    }
+    if let Some(max_tokens) = revision.parameters.get("maxTokens") {
+        if !max_tokens.is_null()
+            && !max_tokens
+                .as_u64()
+                .is_some_and(|value| value > 0 && value <= u64::from(MAX_OUTPUT_TOKENS))
+        {
+            return Err(StorageError::InvalidProfileRevision);
+        }
+    }
+    if let Some(context_window_tokens) = revision.parameters.get("contextWindowTokens") {
+        if !context_window_tokens.is_null()
+            && !context_window_tokens
+                .as_u64()
+                .is_some_and(|value| value > 0 && value <= u64::from(MAX_CONTEXT_WINDOW_TOKENS))
+        {
+            return Err(StorageError::InvalidProfileRevision);
+        }
+        if !context_window_tokens.is_null() && revision.runtime != "ollama" {
+            return Err(StorageError::InvalidProfileRevision);
         }
     }
     let request_bytes = serde_json::to_vec(revision).map_err(|_| StorageError::DatabaseFailure)?;
@@ -4209,8 +4336,9 @@ mod tests {
         TournamentMatchResult, TournamentResultPayload, TournamentStanding,
         ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
         BLIND_EVALUATIONS_MIGRATION, EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION,
-        MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
-        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES, ROADMAP_RECORDS_MIGRATION,
+        MAX_ARTIFACT_BYTES, MAX_CONTEXT_WINDOW_TOKENS, MAX_DRAFT_DOCUMENT_BYTES,
+        MAX_DRAFT_TITLE_BYTES, MAX_OUTPUT_TOKENS, MAX_PROFILE_MODEL_BYTES,
+        MAX_PROFILE_REQUEST_BYTES, ROADMAP_RECORDS_MIGRATION,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -4392,6 +4520,52 @@ mod tests {
     }
 
     #[test]
+    fn reproduction_source_identity_requires_exact_benchmark_case_and_profile() {
+        let source = json!({
+            "schemaVersion": 2,
+            "kind": "single_model_benchmark",
+            "runId": "source-run",
+            "benchmarkVersionId": "logic@1",
+            "benchmarkContentHash": "a".repeat(64),
+            "taskId": "task-a",
+            "caseId": "case-a",
+            "profileRevision": {
+                "profileId": "profile-a",
+                "profileRevisionId": "profile-a@1",
+                "model": "model-a",
+                "runtime": "ollama",
+                "parameters": { "temperature": 0.2 },
+                "extra": { "tag": "complete-profile-snapshot" }
+            }
+        });
+        let mut reproduced = source.clone();
+        reproduced["runId"] = json!("reproduced-run");
+        assert!(super::reproduction_source_identity_matches(
+            &reproduced,
+            &source,
+            "source-run"
+        ));
+
+        for (field, mismatched_value) in [
+            ("benchmarkVersionId", json!("logic@2")),
+            ("benchmarkContentHash", json!("b".repeat(64))),
+            ("taskId", json!("task-b")),
+            ("caseId", json!("case-b")),
+            (
+                "profileRevision",
+                json!({ "profileRevisionId": "profile-a@1" }),
+            ),
+        ] {
+            let mut mismatched = reproduced.clone();
+            mismatched[field] = mismatched_value;
+            assert!(
+                !super::reproduction_source_identity_matches(&mismatched, &source, "source-run"),
+                "reproduction must reject a different {field}"
+            );
+        }
+    }
+
+    #[test]
     fn roadmap_records_are_immutable_reloadable_and_kind_filtered() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
@@ -4492,6 +4666,80 @@ mod tests {
                 .unwrap(),
             vec![first.clone()]
         );
+
+        let mut reproduced_run = source_run.clone();
+        reproduced_run.run_id = "run-2".to_owned();
+        reproduced_run.started_at = "101".to_owned();
+        reproduced_run.attempt_ids = vec!["attempt-2".to_owned()];
+        let mut reproduced_attempt = source_attempt.clone();
+        reproduced_attempt.attempt_id = "attempt-2".to_owned();
+        reproduced_attempt.run_id = reproduced_run.run_id.clone();
+        service
+            .save_run(&reproduced_run, "101")
+            .expect("reproduced run saves");
+        service
+            .save_attempt(&reproduced_attempt, "101")
+            .expect("reproduced attempt saves");
+
+        let mut reproduction = request.clone();
+        reproduction.record_id = "benchmark-run-2".to_owned();
+        reproduction.payload["runId"] = json!(reproduced_run.run_id);
+        reproduction.payload["sourceRun"] = serde_json::to_value(&reproduced_run).unwrap();
+        reproduction.payload["attempt"] = serde_json::to_value(&reproduced_attempt).unwrap();
+        reproduction.payload["performance"] =
+            super::performance_evidence_from_attempt(&reproduced_attempt);
+        reproduction.payload["createdAt"] = json!("2026-09-29T01:00:00Z");
+        reproduction.payload["reproducedFromRunId"] = json!("run-1");
+        reproduction.payload["reproSourceRunReference"] = json!("run-1");
+        reproduction.payload["reproSourceRunVerified"] = json!(true);
+
+        let mut unverified_claim = reproduction.clone();
+        unverified_claim.payload["reproSourceRunVerified"] = json!(false);
+        assert_eq!(
+            service.save_roadmap_record(&unverified_claim, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismarked_local_source = reproduction.clone();
+        mismarked_local_source
+            .payload
+            .as_object_mut()
+            .expect("payload object")
+            .remove("reproducedFromRunId");
+        mismarked_local_source.payload["reproSourceRunVerified"] = json!(false);
+        assert_eq!(
+            service.save_roadmap_record(&mismarked_local_source, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut missing_source = reproduction.clone();
+        missing_source.payload["reproducedFromRunId"] = json!("missing-run");
+        missing_source.payload["reproSourceRunReference"] = json!("missing-run");
+        assert_eq!(
+            service.save_roadmap_record(&missing_source, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut verified_without_source_id = reproduction.clone();
+        verified_without_source_id
+            .payload
+            .as_object_mut()
+            .expect("payload object")
+            .remove("reproducedFromRunId");
+        assert_eq!(
+            service.save_roadmap_record(&verified_without_source_id, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let external_reference = json!({
+            "runId": "run-2",
+            "reproSourceRunReference": "external-run",
+            "reproSourceRunVerified": false
+        });
+        assert_eq!(
+            service.validate_reproduction_provenance(&external_reference, "run-2"),
+            Ok(())
+        );
+        service
+            .save_roadmap_record(&reproduction, "110")
+            .expect("matching persisted source run verifies the reproduction");
+
         assert!(service
             .list_roadmap_records(Some("performance_lab"))
             .unwrap()
@@ -4562,14 +4810,14 @@ mod tests {
 
         let preview = service
             .preview_storage_retention_at(30, "200")
-            .expect("retention previews the source run and attempt cascade");
-        assert_eq!(preview.eligible_records, 2);
+            .expect("retention previews both old run and attempt cascades");
+        assert_eq!(preview.eligible_records, 4);
         service
             .cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 2,
-                confirmation: "DELETE 2 LOCAL RECORDS".to_owned(),
+                expected_records: 4,
+                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
             })
             .expect("retention removes the source attempt and run");
         let (replay_after_retention, replay_after_retention_outcome) = service
@@ -5558,6 +5806,169 @@ mod tests {
             service.save_profile_revision(&oversized_request, "300"),
             Err(StorageError::ProfileRequestTooLarge)
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_model_artifact_identity_is_bounded_and_hash_checked() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let mut profile = profile_revision();
+        profile
+            .extra
+            .insert("modelDigest".to_owned(), json!("sha256:model"));
+        profile
+            .extra
+            .insert("modelContentHash".to_owned(), json!("a".repeat(64)));
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("valid local artifact identity saves");
+
+        let mut invalid_digest = profile_revision();
+        invalid_digest.profile_id = "invalid-digest".to_owned();
+        invalid_digest.profile_revision_id = "invalid-digest@1".to_owned();
+        invalid_digest.extra.insert(
+            "modelDigest".to_owned(),
+            json!("x".repeat(MAX_PROFILE_MODEL_BYTES + 1)),
+        );
+        assert_eq!(
+            service.save_profile_revision(&invalid_digest, "200"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut invalid_hash = profile_revision();
+        invalid_hash.profile_id = "invalid-content-hash".to_owned();
+        invalid_hash.profile_revision_id = "invalid-content-hash@1".to_owned();
+        invalid_hash
+            .extra
+            .insert("modelContentHash".to_owned(), json!("not-a-sha256"));
+        assert_eq!(
+            service.save_profile_revision(&invalid_hash, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_max_tokens_are_bounded_and_persisted_when_set() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let mut profile = profile_revision();
+        profile
+            .parameters
+            .insert("maxTokens".to_owned(), json!(4096));
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("bounded output budget saves");
+        assert_eq!(
+            service.list_profile_revisions().expect("profiles list")[0]
+                .parameters
+                .get("maxTokens"),
+            Some(&json!(4096))
+        );
+
+        for (index, value) in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(MAX_OUTPUT_TOKENS + 1),
+            json!(u64::from(u32::MAX) + 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut invalid = profile_revision();
+            invalid.profile_id = format!("invalid-output-{index}");
+            invalid.profile_revision_id = format!("{}@1", invalid.profile_id);
+            invalid.parameters.insert("maxTokens".to_owned(), value);
+            assert_eq!(
+                service.save_profile_revision(&invalid, "200"),
+                Err(StorageError::InvalidProfileRevision)
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_context_window_override_is_bounded_ollama_only_and_versioned() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let mut profile = profile_revision();
+        profile.runtime = "ollama".to_owned();
+        profile
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(8192));
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("bounded Ollama context size saves");
+        let persisted = service.list_profile_revisions().expect("profiles list");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].profile_revision_id, "profile-1@1");
+        assert_eq!(
+            persisted[0].parameters.get("contextWindowTokens"),
+            Some(&json!(8192))
+        );
+        let mut changed_revision = profile.clone();
+        changed_revision
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(16384));
+        assert_eq!(
+            service.save_profile_revision(&changed_revision, "150"),
+            Err(StorageError::ImmutableConflict)
+        );
+        assert_eq!(
+            service.list_profile_revisions().expect("profiles list")[0]
+                .parameters
+                .get("contextWindowTokens"),
+            Some(&json!(8192))
+        );
+
+        for (index, value) in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(MAX_CONTEXT_WINDOW_TOKENS + 1),
+            json!(u64::from(u32::MAX) + 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut invalid = profile_revision();
+            invalid.profile_id = format!("invalid-context-{index}");
+            invalid.profile_revision_id = format!("{}@1", invalid.profile_id);
+            invalid
+                .parameters
+                .insert("contextWindowTokens".to_owned(), value);
+            assert_eq!(
+                service.save_profile_revision(&invalid, "200"),
+                Err(StorageError::InvalidProfileRevision)
+            );
+        }
+
+        let mut unsupported = profile_revision();
+        unsupported.runtime = "lm_studio".to_owned();
+        unsupported
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(8192));
+        assert_eq!(
+            service.save_profile_revision(&unsupported, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut legacy = profile_revision();
+        legacy.profile_id = "legacy-context".to_owned();
+        legacy.profile_revision_id = "legacy-context@1".to_owned();
+        service
+            .save_profile_revision(&legacy, "400")
+            .expect("profile without context preference remains valid");
+        assert!(!service
+            .list_profile_revisions()
+            .expect("profiles list")
+            .iter()
+            .find(|item| item.profile_revision_id == legacy.profile_revision_id)
+            .unwrap()
+            .parameters
+            .contains_key("contextWindowTokens"));
         let _ = fs::remove_dir_all(root);
     }
 

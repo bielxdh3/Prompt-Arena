@@ -4,7 +4,7 @@
   "pack": {
     "packId": "official-programming-software-engineering",
     "name": "Official Programming / Software Engineering",
-    "description": "Docker-required engineering tasks for code review, API design, and bounded executable checks. Host execution is never used as a fallback.",
+    "description": "Docker-required engineering tasks for code review, API design, and bounded response-text checks. Model responses are never executed as code.",
     "categories": [
       {
         "categoryId": "programming",
@@ -33,27 +33,25 @@
   "benchmark": {
     "benchmarkId": "software-engineering",
     "name": "Software Engineering Essentials",
-    "description": "Static engineering judgment with deterministic answer checks where a concise contract is appropriate."
+    "description": "Engineering judgment with implementation-owned Docker text-contract checks; model responses are not executed as code."
   },
   "benchmarkVersion": {
-    "versionId": "software-engineering@1",
-    "versionNumber": 1,
+    "versionId": "software-engineering@2",
+    "versionNumber": 2,
     "defaultRepetitions": 1,
     "tasks": [
       {
         "taskId": "review-null-contract",
         "categoryId": "code-review",
         "name": "Review a null-handling contract",
-            "prompt": "Review the stated behavior as a senior engineer, then use the Docker-required sandbox only for the declared bounded check. Identify the main correctness risk and propose the smallest safe contract-level fix.",
+            "prompt": "Review the stated behavior as a senior engineer. Identify the correctness risk and propose the smallest safe contract-level fix. Respond in concise prose; the Docker verifier checks only the returned text.",
         "cases": [
           {
             "caseId": "missing-user",
             "prompt": "A function is documented as `find_user(id) -> User`, but it returns null when the ID is absent and callers immediately read `user.email`. In the Docker-required case, state the minimal safe API correction and include the term `not-found`.",
-            "expected": "Return an explicit not-found result or raise a documented not-found error; callers must not dereference a missing user.",
-            "verifierPolicy": {
-              "kind": "safe_pattern",
-              "pattern": "not-found",
-              "mode": "literal"
+            "dockerVerifierContract": {
+              "version": 1,
+              "id": "missing_user_text_v1"
             },
             "executionBoundary": "docker_required",
             "artifacts": []
@@ -61,22 +59,20 @@
         ],
         "rubricId": "static-engineering-review",
         "difficulty": 2,
-        "context": "Docker-required bounded check. If Docker is unavailable, this case is blocked; the host is never used as a fallback."
+        "context": "The allowlisted Docker verifier checks only bounded response text; an unavailable daemon or image is reported without host fallback."
       },
       {
         "taskId": "design-error-contract",
         "categoryId": "api-design",
         "name": "Design a stable error contract",
-            "prompt": "Give a concise API design answer that is explicit about caller behavior, machine-readable fields, and compatibility. The declared executable check, when available, runs only in Docker.",
+            "prompt": "Give a concise API design answer that is explicit about caller behavior, machine-readable fields, and compatibility. The Docker verifier checks only the returned text; no model-generated code is executed.",
         "cases": [
           {
             "caseId": "missing-resource",
-            "prompt": "A JSON HTTP API currently returns either `{\"error\":\"missing\"}` or an HTML error page for an absent resource. State the smallest stable contract that clients should receive.",
-            "expected": "Return a documented JSON error shape with a stable code such as `not_found`, a human message, and the appropriate 404 status for every missing resource.",
-            "verifierPolicy": {
-              "kind": "safe_pattern",
-              "pattern": "not_found",
-              "mode": "literal"
+            "prompt": "A JSON HTTP API currently returns either `{\"error\":\"missing\"}` or an HTML error page for an absent resource. State the smallest stable contract that clients should receive. Respond in concise prose; the Docker verifier checks only the returned text.",
+            "dockerVerifierContract": {
+              "version": 1,
+              "id": "missing_resource_text_v1"
             },
             "executionBoundary": "docker_required",
             "artifacts": []
@@ -84,7 +80,7 @@
         ],
         "rubricId": "static-engineering-review",
         "difficulty": 3,
-        "context": "Docker-required API check. Docker-backed execution is unavailable in this slice and must not fall back to host execution."
+        "context": "The allowlisted Docker verifier checks only bounded response text; an unavailable daemon or image is reported without host fallback."
       }
     ],
     "rubrics": [
@@ -116,13 +112,13 @@
   },
   "execution": {
     "capability": "text_generation",
-    "status": "unavailable",
+    "status": "available",
     "requiresSandbox": true,
-    "sandboxStatus": "unavailable",
+    "sandboxStatus": "required",
     "executionBoundary": "docker_required",
     "evaluationMode": "mixed",
-    "requirement": "Docker-backed bounded execution is required; host execution is prohibited.",
-    "notes": "Docker-backed coding sandbox is not implemented in this slice. The declared cases remain unavailable and are blocked rather than run as ordinary host prompts."
+    "requirement": "A local Docker daemon and the pinned Python image are required for the fixed response-text contract checks; host execution is prohibited.",
+    "notes": "The versioned allowlisted verifier checks bounded model response text in Docker. It does not compile or execute model-generated source code."
   },
   "materialization": {
     "kind": "deterministic_seeded",

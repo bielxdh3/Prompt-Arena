@@ -18,6 +18,8 @@ import {
   filterModelCatalog,
   hardwarePreviewCopy,
   isActiveModelOperation,
+  MAX_PROFILE_OUTPUT_TOKENS,
+  MAX_PROFILE_CONTEXT_WINDOW_TOKENS,
   modelBackendLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
@@ -270,6 +272,8 @@ describe("model library profile boundary", () => {
       revision: "2",
       model: "llama3.2:latest",
       reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "",
     });
     expect(stableProfileRevisionId("local-default", 2)).toBe("local-default@2");
     expect(revision).toMatchObject({
@@ -284,7 +288,7 @@ describe("model library profile boundary", () => {
   });
 
   it("constructs source-aware immutable profiles for discovered runtimes", () => {
-    const form = { profileId: "discovered", revision: "3", model: "ignored", reasoningEffort: "default" as const };
+    const form = { profileId: "discovered", revision: "3", model: "ignored", reasoningEffort: "default" as const, maxTokens: "", contextWindowTokens: "" };
     const discovered = [
       modelRecord({ modelId: "ollama-q4", sourceId: "ollama-source", backend: "ollama" }),
       modelRecord({ modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" }),
@@ -292,10 +296,15 @@ describe("model library profile boundary", () => {
     ];
 
     expect(discovered.map((model) => profileRevisionFromModel(form, model))).toMatchObject([
-      { profileRevisionId: "discovered@3", model: "local-model", runtime: "ollama", modelId: "ollama-q4", sourceId: "ollama-source", backend: "ollama", endpoint: "http://127.0.0.1:11434", path: null },
-      { profileRevisionId: "discovered@3", model: "local-model", runtime: "lm_studio", modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" },
+      { profileRevisionId: "discovered@3", model: "local-model", runtime: "ollama", modelId: "ollama-q4", sourceId: "ollama-source", backend: "ollama", modelDigest: "sha256:model", modelContentHash: null, endpoint: "http://127.0.0.1:11434", path: null },
+      { profileRevisionId: "discovered@3", model: "local-model", runtime: "lm_studio", modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", modelDigest: "sha256:model", modelContentHash: null, endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" },
       { profileRevisionId: "discovered@3", model: "local-model", runtime: "llama_cpp", modelId: "gguf-q5", sourceId: "gguf-source", backend: "llama_cpp", path: "models/model-q5.gguf", quantizationLevel: "Q5_K_M" },
     ]);
+    expect(profileRevisionFromModel(form, modelRecord({ contentHash: "a".repeat(64) }))).toMatchObject({
+      modelDigest: "sha256:model",
+      modelContentHash: "a".repeat(64),
+    });
+    expect(() => profileRevisionFromModel(form, modelRecord({ contentHash: "invalid" }))).toThrow("SHA-256 digest");
   });
 
   it("persists off reasoning in the immutable profile parameters and defaults to runtime behavior", () => {
@@ -305,13 +314,96 @@ describe("model library profile boundary", () => {
       revision: "1",
       model: "local-model",
       reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "",
     }).parameters).toEqual({});
     expect(profileRevisionFromForm({
       profileId: "reasoning-off",
       revision: "1",
       model: "local-model",
       reasoningEffort: "none",
+      maxTokens: "",
+      contextWindowTokens: "",
     }).parameters).toEqual({ reasoningEffort: "none" });
+  });
+
+  it("leaves an unset output budget to the runtime and validates configured max tokens", () => {
+    expect(EMPTY_PROFILE_FORM.maxTokens).toBe("");
+    expect(profileRevisionFromForm({
+      profileId: "runtime-default",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "",
+    }).parameters).toEqual({});
+    expect(profileRevisionFromForm({
+      profileId: "bounded-output",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "none",
+      maxTokens: "4096",
+      contextWindowTokens: "",
+    }).parameters).toEqual({ reasoningEffort: "none", maxTokens: 4096 });
+    expect(profileRevisionFromForm({
+      profileId: "maximum-output",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "default",
+      maxTokens: String(MAX_PROFILE_OUTPUT_TOKENS),
+      contextWindowTokens: "",
+    }).parameters).toEqual({ maxTokens: MAX_PROFILE_OUTPUT_TOKENS });
+    for (const maxTokens of ["0", "-1", "1.5", "32769", "4294967296", "not-a-number"]) {
+      expect(() => profileRevisionFromForm({
+        profileId: "invalid-output",
+        revision: "1",
+        model: "local-model",
+        reasoningEffort: "default",
+        maxTokens,
+        contextWindowTokens: "",
+      })).toThrow("Maximum output tokens");
+    }
+  });
+
+  it("stores a bounded context-window preference for Ollama profiles only", () => {
+    expect(EMPTY_PROFILE_FORM.contextWindowTokens).toBe("");
+    const profile = profileRevisionFromForm({
+      profileId: "ollama-context",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "8192",
+    });
+    expect(profile.parameters).toEqual({ contextWindowTokens: 8192 });
+    expect(profileRevisionFromForm({
+      profileId: "maximum-context",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: String(MAX_PROFILE_CONTEXT_WINDOW_TOKENS),
+    }).parameters).toEqual({ contextWindowTokens: MAX_PROFILE_CONTEXT_WINDOW_TOKENS });
+
+    for (const contextWindowTokens of ["0", "-1", "1.5", "32769", "4294967296", "not-a-number"]) {
+      expect(() => profileRevisionFromForm({
+        profileId: "invalid-context",
+        revision: "1",
+        model: "local-model",
+        reasoningEffort: "default",
+        maxTokens: "",
+        contextWindowTokens,
+      })).toThrow("Context window size");
+    }
+
+    expect(() => profileRevisionFromForm({
+      profileId: "unsupported-context",
+      revision: "1",
+      model: "local-model",
+      reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "8192",
+    }, modelRecord({ backend: "lm_studio" }))).toThrow("only by Ollama");
   });
 
   it("labels supported and unsupported model actions explicitly", () => {
@@ -337,12 +429,16 @@ describe("model library profile boundary", () => {
       revision: "1.5",
       model: "model",
       reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "",
     })).toThrow();
     expect(() => profileRevisionFromForm({
       profileId: "profile",
       revision: "1",
       model: "x".repeat(257),
       reasoningEffort: "default",
+      maxTokens: "",
+      contextWindowTokens: "",
     })).toThrow();
     expect(profileRevisionIdPreview({ ...EMPTY_PROFILE_FORM, profileId: "profile" })).toBe("profile@1");
   });

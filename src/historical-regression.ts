@@ -26,8 +26,8 @@ export type RepeatedRunRegressionMetric = {
   candidateStandardDeviation: number | null;
   standardError: number | null;
   uncertainty: number | null;
-  confidenceInterval: { level: 0.95; lower: number; upper: number } | null;
-  evidence: "welch_t_95_ci" | "bonferroni_wilson_95_ci" | "insufficient_data";
+  confidenceInterval: { level: number; lower: number; upper: number } | null;
+  evidence: "bonferroni_welch_t_familywise_ci" | "bonferroni_wilson_familywise_ci" | "welch_t_95_ci" | "bonferroni_wilson_95_ci" | "insufficient_data";
   status: "improved" | "regressed" | "no_detected_change" | "insufficient_data";
 };
 
@@ -50,13 +50,39 @@ type Comparable = { conditions: Record<string, unknown>; metrics: Record<string,
 
 function sourceId(value: HistoricalSource): string { return "runId" in value ? value.runId : value.arenaId; }
 
+function profileParameters(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const parameters = (value as Record<string, unknown>).parameters;
+  return parameters && typeof parameters === "object" && !Array.isArray(parameters)
+    ? parameters as Record<string, unknown>
+    : {};
+}
+
+function profileContextWindow(value: unknown): unknown {
+  const parameters = profileParameters(value);
+  return Object.prototype.hasOwnProperty.call(parameters, "contextWindowTokens")
+    ? parameters.contextWindowTokens ?? null
+    : parameters.contextLength ?? null;
+}
+
+function comparableProfile(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const profile = value as Record<string, unknown>;
+  const parameters = { ...profileParameters(profile) };
+  if (!Object.prototype.hasOwnProperty.call(parameters, "contextWindowTokens")
+    && Object.prototype.hasOwnProperty.call(parameters, "contextLength")) {
+    parameters.contextWindowTokens = parameters.contextLength;
+  }
+  delete parameters.contextLength;
+  return { ...profile, parameters };
+}
+
 function comparableRun(value: HistoricalSource): Comparable {
   if ("performance" in value && "runId" in value) {
     const p = value.performance.metrics;
-    const profileParameters = value.profileRevision.parameters && typeof value.profileRevision.parameters === "object" ? value.profileRevision.parameters as Record<string, unknown> : {};
     const environment = value.sourceRun.environment && typeof value.sourceRun.environment === "object" ? value.sourceRun.environment as Record<string, unknown> : {};
     return {
-      conditions: { benchmarkVersionId: value.benchmarkVersionId, taskId: value.taskId, caseId: value.caseId, profileRevisionId: value.profileRevision.profileRevisionId ?? null, runtime: value.profileRevision.runtime, model: value.profileRevision.model, quantization: value.profileRevision.quantizationLevel ?? null, context: profileParameters.contextLength ?? null, seed: profileParameters.seed ?? null, promptArenaVersion: environment.promptArenaVersion ?? null, hardware: value.hardware },
+      conditions: { benchmarkVersionId: value.benchmarkVersionId, taskId: value.taskId, caseId: value.caseId, profileRevisionId: value.profileRevision.profileRevisionId ?? null, runtime: value.profileRevision.runtime, model: value.profileRevision.model, quantization: value.profileRevision.quantizationLevel ?? null, context: profileContextWindow(value.profileRevision), seed: profileParameters(value.profileRevision).seed ?? null, promptArenaVersion: environment.promptArenaVersion ?? null, hardware: value.hardware },
       metrics: { quality: typeof value.objective?.passed === "boolean" ? value.objective.passed ? 1 : 0 : null, wallClockMs: p.wallClockMs.value, generationTokensPerSecond: p.generationTokensPerSecond.value, ttftMs: p.ttftMs.value, thinkingTimeMs: p.thinkingTimeMs.value, vramPeakBytes: p.vramPeakBytes.value, ramPeakBytes: p.ramPeakBytes.value },
       uncertainty: { quality: null, wallClockMs: null, generationTokensPerSecond: null, ttftMs: null, thinkingTimeMs: null, vramPeakBytes: null, ramPeakBytes: null },
     };
@@ -151,13 +177,19 @@ const REPEATED_METRICS = ["quality", "wallClockMs", "generationTokensPerSecond",
 type RepeatedMetricName = typeof REPEATED_METRICS[number];
 type RepeatedConditions = { controls: Record<string, unknown>; profile: unknown };
 
-const WELCH_T_95 = [
-  0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262,
-  2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093,
-  2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045,
-  2.042,
+const FAMILYWISE_CONFIDENCE_LEVEL = 0.95;
+export const REPEATED_METRIC_CONFIDENCE_LEVEL = 1 - (1 - FAMILYWISE_CONFIDENCE_LEVEL) / REPEATED_METRICS.length;
+// Critical values use two-sided alpha 0.05 / seven declared metrics and Welch df 1..30.
+const WELCH_T_FAMILYWISE_95 = [
+  0, 89.123028108819, 11.768678435351, 6.579678501573, 5.067510353639, 4.381752962166,
+  3.997060786722, 3.752698242678, 3.584356862030, 3.461591103138, 3.368214549341,
+  3.294859115088, 3.235739531497, 3.187095483674, 3.146379503711, 3.111805759608,
+  3.082085893967, 3.056267456329, 3.033631347280, 3.013624610311, 2.995815150338,
+  2.979860474724, 2.965485645659, 2.952467429095, 2.940622701548, 2.929799838980,
+  2.919872230488, 2.910733329841, 2.902292836017, 2.894473713481, 2.887209844587,
 ] as const;
-const WILSON_Z_97_5 = 2.241402727604947;
+// Wilson component intervals use 1 - (0.05 / seven / 2) coverage before combining groups.
+const WILSON_Z_FAMILYWISE_95 = 2.9137263183343394;
 
 function stableJson(value: unknown): string | null {
   const normalize = (item: unknown): unknown => {
@@ -202,13 +234,14 @@ function repeatedConditions(sample: SingleModelBenchmarkPayload): RepeatedCondit
     taskId: sample.taskId,
     caseId: sample.caseId,
     runtime: profile.runtime,
-    context: parameters.contextLength ?? null,
+    context: profileContextWindow(profile),
     seed: parameters.seed ?? null,
     promptArenaVersion: environment.promptArenaVersion ?? null,
     hardware: sample.hardware ?? null,
     temperature: performance.temperature,
   };
-  return stableJson(controls) === null || stableJson(profile) === null ? null : { controls, profile };
+  const comparableProfileValue = comparableProfile(profile);
+  return stableJson(controls) === null || stableJson(comparableProfileValue) === null ? null : { controls, profile: comparableProfileValue };
 }
 
 function repeatedValues(sample: SingleModelBenchmarkPayload): Record<RepeatedMetricName, number | null> {
@@ -241,11 +274,11 @@ function sampleVariance(values: readonly number[], average: number): number | nu
 }
 
 function wilsonInterval(successes: number, count: number): { lower: number; upper: number } {
-  const z2 = WILSON_Z_97_5 ** 2;
+  const z2 = WILSON_Z_FAMILYWISE_95 ** 2;
   const proportion = successes / count;
   const denominator = 1 + z2 / count;
   const center = (proportion + z2 / (2 * count)) / denominator;
-  const halfWidth = WILSON_Z_97_5 * Math.sqrt(proportion * (1 - proportion) / count + z2 / (4 * count ** 2)) / denominator;
+  const halfWidth = WILSON_Z_FAMILYWISE_95 * Math.sqrt(proportion * (1 - proportion) / count + z2 / (4 * count ** 2)) / denominator;
   return { lower: center - halfWidth, upper: center + halfWidth };
 }
 
@@ -295,7 +328,7 @@ function analyzeRepeatedMetric(metric: RepeatedMetricName, left: readonly number
     const candidateInterval = wilsonInterval(candidateSuccesses, right.length);
     lower = candidateInterval.lower - baselineInterval.upper;
     upper = candidateInterval.upper - baselineInterval.lower;
-    evidence = "bonferroni_wilson_95_ci";
+    evidence = "bonferroni_wilson_familywise_ci";
   } else {
     const leftComponent = baselineVariance / left.length;
     const rightComponent = candidateVariance / right.length;
@@ -303,10 +336,10 @@ function analyzeRepeatedMetric(metric: RepeatedMetricName, left: readonly number
     if (!Number.isFinite(denominator) || denominator <= 0) return basic;
     const degreesOfFreedom = (leftComponent + rightComponent) ** 2 / denominator;
     const conservativeDf = Math.max(1, Math.min(30, Math.floor(degreesOfFreedom)));
-    const critical = WELCH_T_95[conservativeDf];
+    const critical = WELCH_T_FAMILYWISE_95[conservativeDf];
     lower = meanDelta - critical * standardError;
     upper = meanDelta + critical * standardError;
-    evidence = "welch_t_95_ci";
+    evidence = "bonferroni_welch_t_familywise_ci";
   }
 
   const status: RepeatedRunRegressionMetric["status"] = lower > 0
@@ -318,7 +351,7 @@ function analyzeRepeatedMetric(metric: RepeatedMetricName, left: readonly number
     ...basic,
     standardError,
     uncertainty: Math.max(Math.abs(meanDelta - lower), Math.abs(upper - meanDelta)),
-    confidenceInterval: { level: 0.95, lower, upper },
+    confidenceInterval: { level: REPEATED_METRIC_CONFIDENCE_LEVEL, lower, upper },
     evidence,
     status,
   };
@@ -399,15 +432,15 @@ export function compareRepeatedHistoricalRuns(
     candidateRunIds: [...candidateIds],
     compatibility: { compatible, changedDimensions, unverifiedDimensions, warnings: [...failures, ...warnings], incompatibilityReasons: [...failures] },
     minimumSamplesPerGroup: MIN_REPEATED_SAMPLES,
-    confidenceLevel: 0.95,
-    statisticalMethod: "Welch two-sample t confidence intervals for continuous metrics; Bonferroni-combined Wilson score intervals for the quality-rate difference.",
+    confidenceLevel: FAMILYWISE_CONFIDENCE_LEVEL,
+    statisticalMethod: "Bonferroni-adjusted two-sided Welch t intervals for continuous metrics and conservative Bonferroni-combined Wilson score intervals for quality; all seven metric intervals provide at least 95% family-wise coverage.",
     assumptions: [
       "Each array contains independent repeated runs from one internally consistent profile revision.",
       "Recorded benchmark version and content, task, case, runtime, context, seed, Prompt Arena version, hardware, and temperature must match across groups.",
       "Missing or unknown context, seed, application version, hardware, or temperature values remain unverified and are listed with the result.",
       "Continuous metric samples are approximately normally distributed; Welch intervals do not assume equal variances.",
-      "Quality is a binary success rate; two 97.5% Wilson intervals are combined conservatively to form a 95% difference interval.",
-      "Intervals are pointwise per metric; no family-wise correction is made across the seven metrics.",
+      "Quality is a binary success rate; baseline and candidate Wilson intervals each use at least 99.6429% confidence and are combined conservatively before correction across all seven metrics.",
+      "Each metric interval uses a two-sided 99.2857% confidence level so the seven-interval family has at least 95% simultaneous coverage by Bonferroni correction.",
       "A group-level profile difference is an association and cannot identify which changed profile field caused it.",
     ],
     metrics,

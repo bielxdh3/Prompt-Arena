@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildHistoricalRegressionExport, compareHistoricalRuns, compareRepeatedHistoricalRuns } from "./historical-regression";
+import { buildHistoricalRegressionExport, compareHistoricalRuns, compareRepeatedHistoricalRuns, REPEATED_METRIC_CONFIDENCE_LEVEL } from "./historical-regression";
 import { performanceEvidenceFromExecution } from "./performance-lab";
 import type { SingleModelBenchmarkPayload } from "./single-model-benchmark";
 import type { ArenaSummaryRecord } from "./bridge";
@@ -10,8 +10,8 @@ const payload = (model: string, passed: boolean): SingleModelBenchmarkPayload =>
   performance: performanceEvidenceFromExecution(null), hardware: null, createdAt: "2026-09-12T00:00:00Z",
 });
 
-const repeatedPayload = (runId: string, model: string, wallClockMs: number): SingleModelBenchmarkPayload => {
-  const base = payload(model, true);
+const repeatedPayload = (runId: string, model: string, wallClockMs: number, passed = true): SingleModelBenchmarkPayload => {
+  const base = payload(model, passed);
   return {
     ...base,
     runId,
@@ -35,6 +35,15 @@ describe("historical regression comparison", () => {
       uncertainty: null,
       percentDelta: -1,
     });
+  });
+
+  it("treats distinct context-window overrides as changed historical conditions", () => {
+    const baseline = payload("alpha", true);
+    const candidate = payload("alpha", true);
+    baseline.profileRevision.parameters = { contextWindowTokens: 8_192 };
+    candidate.profileRevision.parameters = { contextWindowTokens: 16_384 };
+
+    expect(compareHistoricalRuns(baseline, candidate).compatibility.changedDimensions).toContain("context");
   });
 
   it("supports Arena summaries as sources and exports source IDs with content hashes", () => {
@@ -73,6 +82,17 @@ describe("repeated historical regression inference", () => {
     "2026-09-12T00:00:01Z",
   );
 
+  it("rejects repeated groups with different configured context windows", () => {
+    const baseline = Array.from({ length: 5 }, (_, index) => repeatedPayload(`context-base-${index}`, "alpha", 100));
+    const candidate = Array.from({ length: 5 }, (_, index) => repeatedPayload(`context-candidate-${index}`, "alpha", 100));
+    for (const sample of baseline) sample.profileRevision.parameters = { contextWindowTokens: 8_192 };
+    for (const sample of candidate) sample.profileRevision.parameters = { contextWindowTokens: 16_384 };
+
+    const result = compareRepeatedHistoricalRuns(baseline, candidate);
+    expect(result.compatibility.compatible).toBe(false);
+    expect(result.compatibility.changedDimensions).toContain("context");
+  });
+
   it("reports no detected change for identical run distributions without mutating source records", () => {
     const baseline = [98, 100, 102, 99, 101].map((value, index) => repeatedPayload(`base-${index}`, "alpha", value));
     const candidate = [98, 100, 102, 99, 101].map((value, index) => repeatedPayload(`candidate-${index}`, "beta", value));
@@ -82,13 +102,37 @@ describe("repeated historical regression inference", () => {
     const quality = result.metrics.find((metric) => metric.metric === "quality");
 
     expect(result.compatibility.compatible).toBe(true);
-    expect(wallClock).toMatchObject({ status: "no_detected_change", baselineMean: 100, candidateMean: 100, meanDelta: 0, evidence: "welch_t_95_ci" });
+    expect(result.confidenceLevel).toBe(0.95);
+    expect(wallClock).toMatchObject({ status: "no_detected_change", baselineMean: 100, candidateMean: 100, meanDelta: 0, evidence: "bonferroni_welch_t_familywise_ci" });
     expect(wallClock?.confidenceInterval?.lower).toBeLessThan(0);
     expect(wallClock?.confidenceInterval?.upper).toBeGreaterThan(0);
-    expect(quality).toMatchObject({ status: "no_detected_change", evidence: "bonferroni_wilson_95_ci", meanDelta: 0 });
+    expect(wallClock?.confidenceInterval?.level).toBe(REPEATED_METRIC_CONFIDENCE_LEVEL);
+    expect(quality).toMatchObject({ status: "no_detected_change", evidence: "bonferroni_wilson_familywise_ci", meanDelta: 0 });
     expect(quality?.confidenceInterval?.lower).toBeLessThan(0);
     expect(quality?.confidenceInterval?.upper).toBeGreaterThan(0);
     expect(baseline.map((sample) => sample.runId)).toEqual(originalRunIds);
+  });
+
+  it("applies the seven-metric Bonferroni correction to Welch intervals", () => {
+    const result = compare([0, 10, 20, 30, 40], [25, 35, 45, 55, 65]);
+    const wallClock = result.metrics.find((metric) => metric.metric === "wallClockMs");
+
+    expect(result.metrics).toHaveLength(7);
+    expect(REPEATED_METRIC_CONFIDENCE_LEVEL).toBeCloseTo(1 - 0.05 / 7, 12);
+    expect(wallClock).toMatchObject({ meanDelta: 25, evidence: "bonferroni_welch_t_familywise_ci", status: "no_detected_change" });
+    expect(wallClock?.confidenceInterval?.lower).toBeCloseTo(-10.8435686203, 8);
+    expect(wallClock?.confidenceInterval?.upper).toBeCloseTo(60.8435686203, 8);
+  });
+
+  it("uses the family-wise Wilson critical value for binary quality", () => {
+    const baseline = Array.from({ length: 5 }, (_, index) => repeatedPayload(`quality-base-${index}`, "alpha", 100, true));
+    const candidate = Array.from({ length: 5 }, (_, index) => repeatedPayload(`quality-candidate-${index}`, "beta", 100, false));
+    const result = compareRepeatedHistoricalRuns(baseline, candidate);
+    const quality = result.metrics.find((metric) => metric.metric === "quality");
+
+    expect(quality).toMatchObject({ meanDelta: -1, evidence: "bonferroni_wilson_familywise_ci", status: "no_detected_change" });
+    expect(quality?.confidenceInterval?.upper).toBeCloseTo(0.25869922344, 8);
+    expect(quality?.confidenceInterval?.level).toBe(REPEATED_METRIC_CONFIDENCE_LEVEL);
   });
 
   it("classifies a clear reduction in latency as an improvement", () => {

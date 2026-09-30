@@ -978,6 +978,35 @@ mod tests {
     }
 
     #[test]
+    fn context_window_override_is_rejected_before_request_for_unsupported_runtimes() {
+        let config = OllamaConfig {
+            endpoint: "http://127.0.0.1:1".to_owned(),
+            connect_timeout_ms: 1_000,
+            read_timeout_ms: 20,
+            read_deadline_ms: 2_000,
+        };
+        let context_request = GenerationRequest {
+            parameters: GenerationParameters {
+                context_window_tokens: Some(8192),
+                ..GenerationParameters::default()
+            },
+            ..request()
+        };
+        for runtime in [
+            OpenAiCompatibleRuntime::LmStudio,
+            OpenAiCompatibleRuntime::LlamaCpp,
+        ] {
+            let provider = OpenAiCompatibleProvider::new(runtime, config.clone()).unwrap();
+            assert_eq!(
+                provider.generate(&context_request, &CancellationToken::new()),
+                Err(RuntimeError::UnsupportedParameter {
+                    parameter: GenerationParameter::ContextWindowTokens,
+                })
+            );
+        }
+    }
+
+    #[test]
     fn chat_stream_ttft_waits_for_first_nonempty_text() {
         let body = concat!(
             "data: {\"model\":\"local-model\",\"choices\":[{\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}\n\n",

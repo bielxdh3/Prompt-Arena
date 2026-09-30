@@ -350,6 +350,7 @@ pub enum ObjectiveVerifierKind {
     RequiredFields,
     Classification,
     SafePattern,
+    DockerContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -436,7 +437,29 @@ pub enum ExecutionBoundaryKind {
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionBoundaryStatus {
     Available,
+    Required,
     Unavailable,
+}
+
+/// An implementation-owned, versioned evaluator contract. The identifier can
+/// select only one of the fixed contracts in `docker_evaluator`; it never
+/// carries a command, test, image, or filesystem path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockerVerifierId {
+    MissingUserTextV1,
+    MissingResourceTextV1,
+    FixedFunctionPythonV1,
+}
+
+impl DockerVerifierId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingUserTextV1 => "missing_user_text_v1",
+            Self::MissingResourceTextV1 => "missing_resource_text_v1",
+            Self::FixedFunctionPythonV1 => "fixed_function_python_v1",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

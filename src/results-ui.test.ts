@@ -6,6 +6,7 @@ import {
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
+  dockerEvaluationStatusLabel,
   formatByteCount,
   formatCount,
   formatDurationNs,
@@ -44,6 +45,18 @@ describe("read-only results formatting", () => {
     expect(evidence?.expectedNormalizedByteCount).toBe(8);
     expect(objectiveVerificationEvidence({ verifierKind: "human", score: 1 })).toBeNull();
     expect(objectiveVerificationEvidence("response text")).toBeNull();
+    expect(objectiveVerificationEvidence({
+      passed: false,
+      verifierKind: "docker_contract",
+      expectedNormalizedByteCount: 20,
+      actualNormalizedByteCount: 100,
+      expectedSha256: "a".repeat(64),
+      actualSha256: "b".repeat(64),
+      details: { status: "failed", passedTests: 1, totalTests: 3 },
+    })?.verifierKind).toBe("docker_contract");
+    expect(dockerEvaluationStatusLabel("unavailable")).toBe("Verifier unavailable");
+    expect(dockerEvaluationStatusLabel("failed")).toBe("Verifier failed");
+    expect(dockerEvaluationStatusLabel("unknown-from-import")).toBe("Verifier status unknown");
   });
 
   it("keeps blind-evaluation states and score controls bounded", () => {

@@ -2,8 +2,22 @@ import type { BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvalu
 import { translate, formatLocaleNumber } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
+export type DockerEvaluationStatus = "passed" | "failed" | "unavailable" | "timed_out" | "output_limit" | "invalid_output" | "not_run";
 
 export const BLIND_RESPONSE_MAX_HEIGHT_PX = 320;
+
+export function dockerEvaluationStatusLabel(status: unknown): string {
+  switch (status) {
+    case "passed": return translate("Verifier passed");
+    case "failed": return translate("Verifier failed");
+    case "unavailable": return translate("Verifier unavailable");
+    case "timed_out": return translate("Verifier timed out");
+    case "output_limit": return translate("Verifier output limit");
+    case "invalid_output": return translate("Verifier output invalid");
+    case "not_run": return translate("Verifier not run");
+    default: return translate("Verifier status unknown");
+  }
+}
 
 export function blindReviewHidesAttemptEvidence(status: string): boolean {
   switch (status.trim().toLowerCase()) {
@@ -128,7 +142,8 @@ function isVerifierKind(value: unknown): value is ObjectiveVerificationEvidence[
     || value === "json_schema"
     || value === "required_fields"
     || value === "classification"
-    || value === "safe_pattern";
+    || value === "safe_pattern"
+    || value === "docker_contract";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

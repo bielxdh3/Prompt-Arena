@@ -203,7 +203,7 @@ export type ImmutableResultReference = {
 
 export type ObjectiveVerificationEvidence = {
   passed: boolean;
-  verifierKind: "exact_text" | "numeric_tolerance" | "json_schema" | "required_fields" | "classification" | "safe_pattern";
+  verifierKind: "exact_text" | "numeric_tolerance" | "json_schema" | "required_fields" | "classification" | "safe_pattern" | "docker_contract";
   expectedNormalizedByteCount: number;
   actualNormalizedByteCount: number;
   expectedSha256: string;
@@ -276,7 +276,7 @@ export type OfficialPackExecution = {
   capability: "text_generation";
   status: "available" | "unavailable";
   requiresSandbox: boolean;
-  sandboxStatus: "not_required" | "unavailable";
+  sandboxStatus: "not_required" | "required" | "unavailable";
   executionBoundary: "text_generation" | "docker_required";
   evaluationMode: "objective" | "human_rubric" | "mixed";
   requirement: string;
@@ -536,6 +536,7 @@ export type ReasoningEffort = "none";
 
 export type ProfileParameters = Record<string, unknown> & {
   reasoningEffort?: ReasoningEffort | null;
+  contextWindowTokens?: number | null;
 };
 
 export type GenerationParameters = {
@@ -543,6 +544,7 @@ export type GenerationParameters = {
   topP: number | null;
   topK: number | null;
   maxTokens: number | null;
+  contextWindowTokens: number | null;
   repeatPenalty: number | null;
   presencePenalty: number | null;
   frequencyPenalty: number | null;
@@ -603,7 +605,7 @@ export type PromptVariant = {
 
 export type ExecutionBoundary = {
   kind: "text_generation" | "docker_required";
-  status: "available" | "unavailable";
+  status: "available" | "required" | "unavailable";
   reason: string | null;
 };
 
@@ -695,6 +697,18 @@ export type ModelRecord = {
   managed: boolean;
   managedPath: string | null;
   metadata: Record<string, unknown>;
+};
+
+export type LiveProfileModelIdentity = {
+  modelId: string;
+  sourceId: string;
+  backend: ModelBackend;
+  model: string;
+  runtime: string;
+  digest: string | null;
+  contentHash: string | null;
+  quantizationLevel: string | null;
+  runtimeVersion: string | null;
 };
 
 export type ModelSourceConfig = {
@@ -1158,6 +1172,14 @@ export async function validateBenchmarkDocument(documentJson: string): Promise<B
   );
 }
 
+export async function saveBenchmarkVersion(documentJson: string): Promise<SavedBenchmarkVersion> {
+  return invokeDesktop<SavedBenchmarkVersion>(
+    "save_benchmark_version",
+    "The imported benchmark snapshot could not be saved locally.",
+    { document: documentJson },
+  );
+}
+
 export async function publishBenchmarkDraft(draftId: string): Promise<SavedBenchmarkVersion> {
   return invokeDesktop<SavedBenchmarkVersion>(
     "publish_benchmark_draft",
@@ -1188,6 +1210,17 @@ export async function readModelCatalog(request: ModelDiscoveryRequest): Promise<
     "discover_local_models",
     "The local model catalog could not be reached.",
     { request },
+  );
+}
+
+export async function readLiveProfileModelIdentity(
+  profileRevisionId: string,
+  requireLoadedModelDigest = false,
+): Promise<LiveProfileModelIdentity> {
+  return invokeDesktop<LiveProfileModelIdentity>(
+    "read_live_profile_model_identity",
+    "The current model identity could not be verified from its local runtime.",
+    { profileRevisionId, requireLoadedModelDigest },
   );
 }
 

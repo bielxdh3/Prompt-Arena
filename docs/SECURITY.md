@@ -33,6 +33,16 @@ loopback invariants, secret-file ignore rules, lockfiles, and obvious key-materi
 production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
 repository state.
 
+## GitHub security and dependency status (2026-09-30)
+
+The authenticated repository snapshot showed no open Code Scanning alerts; the five historical `js/file-system-race`
+alerts are closed as fixed. Secret Scanning showed no open alerts. Dependabot vulnerability-alerting is disabled, so no
+zero-finding claim is available for that category; it was not enabled by this work. The mission branch's production and
+full-tree `npm audit --audit-level=high` checks both reported zero known vulnerabilities. `cargo-audit`, `cargo-deny`,
+and Trivy are unavailable in the local environment, and GitHub Dependency Review must run on the pushed candidate before
+the branch's dependency gate is considered verified. GitHub Actions references in the edited CI, CodeQL, and Dependency
+Review workflows are pinned to full commit SHAs.
+
 The release workflow is candidate-validation only and has no publishing permissions or tag/release operations. Release
 publication remains disabled pending server-side repository protections and an independently approved publisher, as
 documented in `docs/RELEASING.md`.
@@ -71,8 +81,10 @@ model paths, download files, or send telemetry.
   remain immutable and conflicting content is rejected.
 - Profile registration is typed and immutable. The derived `profile-id@revision` identity is checked at the storage
   boundary; identical replay is idempotent and changed content under that identity is rejected as an immutable conflict.
-  The complete serialized profile request is capped at 256 KiB, including `parameters` and flattened `extra`, and the
-  resulting metadata remains under the 1 MiB local metadata ceiling.
+  Output-token and context-window profile values are positive integers capped at 32,768 at the UI, plan, runtime, and
+  storage boundaries; context-window overrides are supported only for Ollama. Optional model digest/content-hash fields
+  are validated and retained in profile identity. The complete serialized profile request is capped at 256 KiB,
+  including `parameters` and flattened `extra`, and the resulting metadata remains under the 1 MiB local metadata ceiling.
 - The structured editor emits only bounded optional text expected answers. It rejects non-text expected values when
   loading a draft rather than silently converting them, and it rejects unsupported multi-item shapes before an edit can
   rewrite data.
@@ -120,17 +132,35 @@ model paths, download files, or send telemetry.
 - Blind human evaluation is a separate local immutable record, not a mutation of Attempts, Results, or artifacts. Its
   preparation reader accepts only completed attempts pointing to registered `generation-response` artifacts, checks the
   app-owned relative path, kind/schema/path metadata, regular-file boundary, size, and SHA-256, and parses the bounded
-  response as untrusted plain text. Stable anonymous tokens/order are derived from run and attempt IDs, while the
+  response as untrusted plain text. A fresh cryptographic per-presentation seed permutes anonymous cards and tokens;
+  before lock, the live Arena monitor exposes only aggregate progress, not per-competitor order/status/identity. Its
+  screen-reader live region announces only the aggregate completed/total count, not the changing monitor table. The
   prepared UI does not mount AttemptDetail or identifying model/profile/provider/endpoint/metric/objective/attempt-ID
   evidence. The parent gate also keeps that evidence hidden for loading, empty, and error states; only a successful lock
-  re-enables post-lock audit IDs. The persisted record contains no response text, and scores/ranking are validated at
-  the Rust boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
+  re-enables post-lock audit IDs. Failed lock writes retain scores and offer a retry after checking whether a record was
+  already committed. The persisted record contains no response text, and scores/ranking are validated at the Rust
+  boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
 - Phase 14 comparability remains a pure in-memory diagnostic over one local run and its typed attempts. The separate
   Insights surface stores bounded single-model suite summaries, per-run metrics, single-run comparisons across saved
   single-model/Arena sources, repeated single-model regression intervals, Elo v1/Bradley–Terry v1 rating snapshots,
   robustness outcomes, and integrity-checked repro bundles. Derived comparisons retain source IDs/content hashes on
-  export. These partial features do not implement family-wise interval correction, an official global ranking,
-  tournament policy, or AI judging.
+  export. Repeated regression intervals apply a Bonferroni family-wise correction across seven metrics. Bradley–Terry
+  outcomes are clustered by immutable Arena summary hash when present; source-cluster counts do not establish statistical
+  independence, and new rating snapshots carry their contributing Arena summary IDs and content hashes. Repro Bundle
+  v3 preserves exact Rust-canonical benchmark UTF-8 bytes in bounded base64 chunks, so JavaScript number formatting
+  cannot invalidate hashes. Its final serialized envelope is capped at 8 MiB including integrity metadata, matching the
+  import bound. It compares the full registered profile and available model digest, then reads the current Ollama digest
+  and runtime version from the profile's saved loopback endpoint before and after an explicit Re-run. After generation it
+  also requires `/api/ps` to report exactly one loaded model with a digest matching the current tag. These checks do not
+  write catalog rows; changed or mismatched digests block the reproduced-run record. They are best-effort and do not
+  atomically pin a digest to the generation request. LM Studio and llama.cpp currently do not provide a
+  live model digest through this adapter and remain read-only for Repro reruns. Provider-reported hashes do not attest
+  which weight bytes a runtime actually loaded; unavailable source runtime-version evidence remains disclosed. A missing
+  local benchmark is reconstructed only on an explicit Re-run action after local validation and reread. Legacy v1/v2 envelopes preserve payloads during
+  integrity-checked read-only migration; v1 single-model evidence without identity proof remains read-only. Unsupported
+  seeds and missing model identity block rerun; runtime-version unavailability is surfaced as a difference. Bundles may
+  contain private prompt text, and a self-computed SHA-256 detects changes but does not authenticate the source. These
+  partial features still do not implement an official global ranking, tournament policy, or AI judging.
 - Roadmap-record writes bind `single_model_benchmark` payloads to the exact persisted run, attempt, profile revision,
   benchmark version, task/case, objective, and performance evidence; `performance_lab` must match that benchmark's
   derived metrics, and `single_model_suite` cases and totals are checked against the published case list and referenced
@@ -152,8 +182,24 @@ model paths, download files, or send telemetry.
   matched contents, and documentation references to macOS are not treated as active support targets.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
-  summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
-  sandbox status; the programming pack marks Docker-backed sandbox execution unavailable, so no local code is run.
+  summary/hash or canonical JSON. The @2 prose cases and the single @3 function case bind only implementation-owned
+  version-1 verifier IDs from the authoritative stored case. Fixed image, executable/argv, Python harness, test cases,
+  and function name live in Rust; no imported case field can select a command or test. The function harness rejects all
+  syntax outside its Python AST allowlist and executes the accepted function only inside the constrained container.
+  This covers one fixed function challenge, not general-purpose code execution. The evaluator accepts only standard local Docker endpoints
+  (`/var/run/docker.sock`, `/run/docker.sock`, `/run/user/<uid>/docker.sock`, or Docker Desktop's local named pipes),
+  confirms the active endpoint, and refuses SSH/TCP contexts and Docker environment overrides. It requires the pinned
+  digest locally with `--pull=never`; missing daemon/image and runtime/cleanup failures produce no candidate score.
+  The response is bounded and sent only on stdin. The container uses no network or host/project/home/Docker-socket mounts,
+  a read-only root, UID 65532, dropped capabilities, no-new-privileges, CPU/memory/PID limits, a 20-second timeout, and
+  a combined output cap; timeout/output failure kills the Docker CLI process and attempts removal by generated container
+  name. The @2 text contracts use lexical phrase requirements; a matching phrase can pass without proving semantic
+  behavior. The @3 function contract executes only its AST-restricted function
+  under fixed tests; it does not execute unrestricted model-generated programs. The user-triggered cancel lifecycle
+  is not yet connected to this evaluator. The earlier pinned-image smoke report is not bound to the current candidate
+  SHA, and the local Docker daemon was unavailable on 2026-09-30, so live execution of these contracts remains unverified
+  for this branch. Docker access remains part of the trust boundary: a rootful daemon socket
+  permits host-level daemon control, while rootless Docker reduces but does not remove kernel/daemon risk.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/hardware/Arena/official-pack commands, validate benchmarks, query
   Ollama, or invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output
@@ -185,10 +231,10 @@ checked against 256 KiB before `serde_json::from_str`, and draft input is size-c
 
 ## Required future controls
 
-Linux secure credential storage and BYOK transport, Docker-backed coding execution, family-wise regression intervals,
-calibrated ratings for correlated evidence, full robustness semantic-preservation evidence, full Repro reconstruction, complete
+Linux secure credential storage and BYOK transport, calibrated rating intervals, full robustness semantic-preservation
+evidence and functional-verifier integration, portable seed application and authenticated Repro provenance, complete
 hardware/energy telemetry, multi-rater human evaluation, AI judging, unified model search, empirical recommendation
-history, and broader official-pack coverage are not complete. When extended, these require
+history, broader official coding-pack coverage, and user-triggered Docker cancellation are not complete. When extended, these require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.
 Historical benchmark records must not be deleted as a migration side effect.
