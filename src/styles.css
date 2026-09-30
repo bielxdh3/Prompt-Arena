@@ -3284,6 +3284,12 @@ button.official-pack-row:hover,
   border-color: var(--color-accent);
 }
 
+.secondary-button[aria-pressed="true"] {
+  color: var(--color-accent-strong);
+  background: var(--color-surface-muted);
+  border-color: var(--color-accent);
+}
+
 .publish-button {
   color: var(--color-accent-strong);
 }
@@ -3922,6 +3928,10 @@ button.official-pack-row:hover,
 
 /* Roadmap evidence uses the same token vocabulary as the main shell. */
 .roadmap-features-view .arena-select-control select:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.repeated-regression-panel { display: grid; gap: 14px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-border); }
+.repeated-regression-panel h4 { margin: 0; color: var(--color-text); }
+.roadmap-features-view .repeated-run-select select { min-height: 10rem; height: auto; padding: 8px; }
+.roadmap-features-view .repeated-run-select option { padding: 4px 6px; }
 .roadmap-table th,
 .roadmap-table td { border-bottom-color: var(--color-border); }
 .roadmap-table th,

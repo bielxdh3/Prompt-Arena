@@ -38,6 +38,8 @@ pub struct GenerationParameters {
     pub repeat_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
     pub frequency_penalty: Option<f32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for GenerationParameters {
@@ -50,8 +52,15 @@ impl Default for GenerationParameters {
             repeat_penalty: None,
             presence_penalty: None,
             frequency_penalty: None,
+            reasoning_effort: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -170,6 +179,7 @@ pub enum GenerationParameter {
     ToolPolicy,
     ResponseFormat,
     Metadata,
+    ReasoningEffort,
 }
 
 impl fmt::Display for GenerationParameter {
@@ -178,6 +188,7 @@ impl fmt::Display for GenerationParameter {
             Self::Temperature => "temperature",
             Self::TopP => "top_p",
             Self::TopK => "top_k",
+            Self::ReasoningEffort => "reasoning_effort",
             Self::MaxTokens => "max_tokens",
             Self::RepeatPenalty => "repeat_penalty",
             Self::PresencePenalty => "presence_penalty",
@@ -266,6 +277,13 @@ impl RuntimeCapabilities {
         {
             return Err(RuntimeError::UnsupportedParameter {
                 parameter: GenerationParameter::FrequencyPenalty,
+            });
+        }
+        if parameters.reasoning_effort.is_some()
+            && !self.supports_parameter(GenerationParameter::ReasoningEffort)
+        {
+            return Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ReasoningEffort,
             });
         }
         if !request.stop_sequences.is_empty()
@@ -381,6 +399,8 @@ pub struct TimingMetrics {
     pub load_duration_ns: Option<u64>,
     pub prompt_eval_duration_ns: Option<u64>,
     pub eval_duration_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_duration_ns: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -639,8 +659,8 @@ pub trait RuntimeProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        Capability, GenerationParameter, GenerationRequest, RuntimeCapabilities, RuntimeError,
-        ToolPolicy,
+        Capability, GenerationParameter, GenerationParameters, GenerationRequest, ReasoningEffort,
+        RuntimeCapabilities, RuntimeError, TimingMetrics, ToolPolicy,
     };
     use std::collections::BTreeSet;
 
@@ -688,6 +708,77 @@ mod tests {
             Err(RuntimeError::UnsupportedParameter {
                 parameter: GenerationParameter::PresencePenalty
             })
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_rejects_explicit_reasoning_effort_without_support() {
+        let capabilities = RuntimeCapabilities {
+            capabilities: BTreeSet::from([Capability::Chat]),
+            parameters: BTreeSet::new(),
+        };
+        let request = GenerationRequest {
+            model: "model".to_owned(),
+            messages: vec![super::ChatMessage {
+                role: super::MessageRole::User,
+                content: "Say hello".to_owned(),
+                name: None,
+                tool_call_id: None,
+            }],
+            parameters: GenerationParameters {
+                reasoning_effort: Some(ReasoningEffort::None),
+                ..GenerationParameters::default()
+            },
+            ..GenerationRequest::default()
+        };
+        assert_eq!(
+            capabilities.validate_request(&request),
+            Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ReasoningEffort,
+            })
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_uses_the_typed_camel_case_wire_contract() {
+        let mut wire = serde_json::to_value(GenerationParameters::default()).unwrap();
+        wire["reasoningEffort"] = serde_json::json!("none");
+
+        let explicit: GenerationParameters = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(explicit.reasoning_effort, Some(ReasoningEffort::None));
+        assert_eq!(
+            serde_json::to_value(&explicit).unwrap()["reasoningEffort"],
+            "none"
+        );
+
+        wire.as_object_mut().unwrap().remove("reasoningEffort");
+        let default: GenerationParameters = serde_json::from_value(wire).unwrap();
+        assert_eq!(default.reasoning_effort, None);
+    }
+
+    #[test]
+    fn timing_metrics_accept_legacy_records_and_omit_unavailable_ttft() {
+        let legacy = serde_json::json!({
+            "totalDurationNs": 10,
+            "loadDurationNs": 2,
+            "promptEvalDurationNs": 3,
+            "evalDurationNs": 4
+        });
+        let parsed: TimingMetrics = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.ttft_duration_ns, None);
+        let serialized = serde_json::to_value(parsed).unwrap();
+        assert!(serialized.get("ttftDurationNs").is_none());
+
+        let with_ttft = TimingMetrics {
+            total_duration_ns: None,
+            load_duration_ns: None,
+            prompt_eval_duration_ns: None,
+            eval_duration_ns: None,
+            ttft_duration_ns: Some(5),
+        };
+        assert_eq!(
+            serde_json::to_value(with_ttft).unwrap()["ttftDurationNs"],
+            5
         );
     }
 

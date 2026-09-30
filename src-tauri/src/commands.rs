@@ -51,7 +51,8 @@ use crate::{
     },
     ollama::{OllamaConfig, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     orchestration::{
-        persist_terminal_outcome, OrchestrationError, PersistedExecution, RunPlan, TerminalOutcome,
+        bind_authoritative_execution_boundary, persist_terminal_outcome, OrchestrationError,
+        PersistedExecution, RunPlan, TerminalOutcome,
     },
     protocol::{
         WorkerErrorCode, WorkerOutcome, WorkerRequest, WorkerResponse, WorkerResult,
@@ -990,9 +991,14 @@ pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus
 /// Execute exactly one bounded generation in the app-owned worker, then persist
 /// its terminal outcome in the app-owned store.
 #[tauri::command]
-pub fn execute_run_once(app: AppHandle, plan: RunPlan) -> Result<PersistedExecution, CommandError> {
+pub fn execute_run_once(
+    app: AppHandle,
+    mut plan: RunPlan,
+) -> Result<PersistedExecution, CommandError> {
+    let storage = storage_for(&app)?;
+    bind_authoritative_execution_boundary(&mut plan, &storage)?;
     let outcome = invoke_worker_once(&app, &plan)?;
-    persist_terminal_outcome(&storage_for(&app)?, &outcome, &now_marker()).map_err(Into::into)
+    persist_terminal_outcome(&storage, &outcome, &now_marker()).map_err(Into::into)
 }
 
 fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {

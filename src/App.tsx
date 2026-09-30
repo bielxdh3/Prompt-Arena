@@ -89,6 +89,7 @@ import {
   formatCredentialSource,
   formatIdentityConfidence,
   formatStorageStatus,
+  providerActionsAvailable,
   providerLabel,
   validateByokBudget,
   validateByokConfiguration,
@@ -283,6 +284,13 @@ function AppShell() {
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
   const mainRef = useRef<HTMLElement>(null);
+  const previousActiveView = useRef(activeView);
+
+  useEffect(() => {
+    if (previousActiveView.current === activeView) return;
+    previousActiveView.current = activeView;
+    mainRef.current?.focus();
+  }, [activeView]);
 
   useEffect(() => {
     const root = mainRef.current;
@@ -419,7 +427,7 @@ function AppShell() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{translate("Prompt Arena")} / {translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</p>
-            <h1>{translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</h1>
+            <h1 id="page-title">{translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</h1>
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
@@ -439,7 +447,7 @@ function AppShell() {
           </div>
         )}
 
-        <main className="main-content" id="main-content" ref={mainRef}>
+        <main className="main-content" id="main-content" aria-labelledby="page-title" tabIndex={-1} ref={mainRef}>
           <div key={activeView} className="page-transition">
             {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
             {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
@@ -1981,14 +1989,27 @@ function ModelsView() {
               }}
             />
             <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
-            <p className="field-help">
+            <label className="form-control" htmlFor="profile-reasoning-effort">
+              <span className="field-label">{translate("Reasoning effort")}</span>
+              <select
+                id="profile-reasoning-effort"
+                className="font-select"
+                value={form.reasoningEffort}
+                onChange={(event) => updateField("reasoningEffort", event.currentTarget.value as ProfileFormState["reasoningEffort"])}
+              >
+                <option value="default">{translate("Runtime default")}</option>
+                <option value="none">{translate("Off / none")}</option>
+              </select>
+            </label>
+            <p className="field-help">{translate("Runtime default preserves current behavior. Off / none is sent only to runtimes that advertise support; unsupported choices are rejected before generation.")}</p>
+            <div className="field-help">
               {selectedProfileModel ? (
                 <>
                   {translate("Runtime")}: {modelBackendLabel(selectedProfileModel.backend)} · {translate("source")} <TechnicalDetails label={translate("Source")} value={selectedProfileModel.sourceId} /> · {translate("immutable model identity is preserved.")}
                 </>
               ) : translate("Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity.")}
               {" "} {translate("Derived immutable ID:")} <TechnicalDetails label={translate("Profile revision")} value={profileRevisionIdPreview(form)} />
-            </p>
+            </div>
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>{translate("Register immutable revision")}</button>
             {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
           </div>
@@ -3340,17 +3361,16 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
               <span className="field-help" role="status">{filteredRuns.length} {translate("of")} {state.runs.length} {translate("runs shown")}</span>
             </div>
             {filteredRuns.length === 0 ? (
-              <EmptyState title={translate("No matching runs")} description="No persisted run matches this local filter. Clear the filter to see all records." />
+              <EmptyState title={translate("No matching runs")} description={translate("No persisted run matches this local filter. Clear the filter to see all records.")} />
             ) : (
               <div className="runs-layout">
-                <div className="runs-list" aria-label={translate("Run records")}>
+                <section className="runs-list" aria-label={translate("Run records")}>
                   {filteredRuns.map((run) => (
                 <button
                   className={`run-row ${selectedRunId === run.runId ? "is-selected" : ""}`}
                   key={run.runId}
                   type="button"
                   aria-pressed={selectedRunId === run.runId}
-                  aria-label={`${numberedName("Run", run.runId, state.runs.map((item) => item.runId))}, ${attemptStatusLabel(run.status)}`}
                   onClick={() => {
                     setBlindEvaluationStatus("loading");
                     setSelectedRunId(run.runId);
@@ -3368,7 +3388,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                   </span>
                 </button>
               ))}
-            </div>
+            </section>
             <section
               className="attempts-panel"
               aria-live="polite"
@@ -4924,7 +4944,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
             ))}
           </div>
 
-          {selectedMetadata ? (
+          {selectedMetadata && providerActionsAvailable(selectedMetadata.storageStatus) ? (
             <div className="byok-editor-grid">
               <section className="byok-editor-card" aria-labelledby="byok-configuration-heading">
                 <div className="section-heading compact-heading">
@@ -5091,6 +5111,18 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                 {generationResult && <ByokGenerationSuccess result={generationResult} />}
               </section>
             </div>
+          ) : selectedMetadata ? (
+            <StateMessage
+              icon="◇"
+              title={translate("Provider actions unavailable")}
+              description={translate(byokErrorMessage({
+                code: selectedMetadata.storageStatus === "unsupported"
+                  ? "provider_storage_unsupported"
+                  : selectedMetadata.storageStatus === "error"
+                    ? "provider_storage_error"
+                    : "provider_storage_unavailable",
+              }))}
+            />
           ) : (
             <StateMessage icon="!" title={translate("Provider metadata incomplete")} description="The desktop bridge did not return a usable record for the selected provider." error />
           )}
@@ -5159,7 +5191,7 @@ function ByokProviderCard({
         <div><span>{translate("Model")}</span><strong>{metadata?.model ?? "Not configured"}</strong></div>
         <div><span>{translate("Identity")}</span><strong>{formatIdentityConfidence(metadata?.identityConfidence)}</strong></div>
       </div>
-      <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata} aria-pressed={selected}>
+      <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata || !providerActionsAvailable(metadata.storageStatus)} aria-pressed={selected}>
         {selected ? translate("Selected") : translate("Manage provider")}
       </button>
     </article>

@@ -7,6 +7,7 @@ import {
   MAX_OBJECTIVE_EXPECTATION_BYTES,
   type BuildRunPlanInput,
 } from "./run-plan";
+import { generatePerturbations } from "./robustness-arena";
 
 function profile(): ProfileRevision {
   return {
@@ -85,6 +86,16 @@ describe("bounded run-plan contract", () => {
     expect(plan.objectiveExpectation).toBeNull();
     expect(plan.generation.parameters).toMatchObject({ temperature: 0.2 });
     expect(plan.generation.parameters.topP).toBeNull();
+    expect(plan.generation.parameters.reasoningEffort).toBeNull();
+  });
+
+  it("carries an explicit profile reasoning-off choice into the typed generation plan", () => {
+    const plan = buildRunPlan(input({
+      profileRevision: { ...profile(), parameters: { reasoningEffort: "none" } },
+    }));
+
+    expect(plan.profileRevision.parameters).toEqual({ reasoningEffort: "none" });
+    expect(plan.generation.parameters.reasoningEffort).toBe("none");
   });
 
   it("carries only bounded text expectations outside the generation request", () => {
@@ -98,6 +109,30 @@ describe("bounded run-plan contract", () => {
     expect(plan.objectiveExpectation).toBe("  expected answer\r\n");
     expect(plan.generation.metadata).toEqual({});
     expect(JSON.stringify(plan.generation)).not.toContain("expected answer");
+  });
+
+  it("derives robustness prompts from a versioned typed transformation request", () => {
+    const [variant] = generatePerturbations("Task prompt\n\nCase prompt", null, "logic@1", 7, ["concise_wording"]);
+    const plan = buildRunPlan(input({
+      promptVariant: {
+        version: variant.version,
+        transformationType: variant.transformationType,
+        seed: variant.seed,
+        sourceTaskVersion: variant.sourceTaskVersion,
+      },
+    }));
+
+    expect(plan.taskId).toBe("task-1");
+    expect(plan.promptVariant).toEqual({
+      version: "2",
+      transformationType: "concise_wording",
+      seed: 7,
+      sourceTaskVersion: "logic@1",
+    });
+    expect(plan.generation.prompt).toBe(variant.prompt);
+    expect(() => buildRunPlan(input({
+      promptVariant: { ...plan.promptVariant!, sourceTaskVersion: "other@1" },
+    }))).toThrow("source does not match");
   });
 
   it("treats unsupported expectations as absent and rejects invalid or oversized text", () => {
@@ -121,6 +156,38 @@ describe("bounded run-plan contract", () => {
         document.benchmarkVersion.tasks[0].cases[0].expected = "x".repeat(MAX_OBJECTIVE_EXPECTATION_BYTES + 1);
       }),
     })).toThrow("Objective expectation");
+  });
+
+  it("derives sandbox-required policy at every scope and rejects contradictory metadata", () => {
+    const scopes = [
+      (document: Record<string, any>) => { document.requiresSandbox = true; },
+      (document: Record<string, any>) => { document.benchmarkVersion.requiresSandbox = true; },
+      (document: Record<string, any>) => { document.benchmarkVersion.tasks[0].requiresSandbox = true; },
+      (document: Record<string, any>) => { document.benchmarkVersion.tasks[0].cases[0].requiresSandbox = true; },
+      (document: Record<string, any>) => { document.benchmarkVersion.execution = { requiresSandbox: true, sandboxStatus: "unavailable", notes: "Docker is required" }; },
+    ];
+    for (const [index, configure] of scopes.entries()) {
+      const plan = buildRunPlan({ ...input(), version: versionWithDocument(configure) });
+      expect(plan.executionBoundary).toMatchObject({ kind: "docker_required", status: "unavailable" });
+      expect(plan.executionBoundary.reason).toBe(index === 4
+        ? "Docker is required"
+        : "Docker execution is unavailable; host execution is prohibited.");
+    }
+
+    expect(() => buildRunPlan({
+      ...input(),
+      version: versionWithDocument((document) => {
+        document.benchmarkVersion.tasks[0].executionBoundary = "text_generation";
+        document.benchmarkVersion.tasks[0].cases[0].requiresSandbox = true;
+      }),
+    })).toThrow("execution policy");
+
+    expect(() => buildRunPlan({
+      ...input(),
+      version: versionWithDocument((document) => {
+        document.benchmarkVersion.tasks[0].cases[0].sandboxStatus = "unavailable";
+      }),
+    })).toThrow("execution policy");
   });
 
   it("rejects malformed identities, missing selections, and unsafe repetition bounds", () => {
@@ -199,6 +266,13 @@ describe("bounded run-plan contract", () => {
       ...input(),
       profileRevision: { ...profile(), parameters: { temperature: Number.MAX_VALUE } },
     })).toThrow("temperature");
+    expect(() => buildRunPlan({
+      ...input(),
+      profileRevision: {
+        ...profile(),
+        parameters: { reasoningEffort: "high" as unknown as "none" },
+      },
+    })).toThrow("reasoningEffort");
     expect(() => buildRunPlan({
       ...input(),
       version: versionWithDocument((document) => {

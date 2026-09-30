@@ -12,6 +12,7 @@ import {
   arenaMonitorDisplay,
   arenaTelemetryLabel,
   createArenaTelemetry,
+  buildArenaSummaryPayload,
   visibleArenaTelemetryError,
   visibleArenaTelemetryMetrics,
   type ArenaProgress,
@@ -76,6 +77,20 @@ function execution(runId: string, profileId: string, status: "completed" | "fail
 }
 
 describe("arena runner", () => {
+  it("stores a task category only when the task and category tree agree", () => {
+    const categorizedDocument = JSON.parse(version.documentJson) as Record<string, any>;
+    categorizedDocument.pack.categories = [{ categoryId: "reasoning", name: "Reasoning", children: [] }];
+    categorizedDocument.benchmarkVersion.tasks[0].categoryId = "reasoning";
+    const categorizedVersion = { ...version, documentJson: JSON.stringify(categorizedDocument) };
+    const request = { arenaId: "arena", version: categorizedVersion, taskId: "task", caseId: "case", profiles: [profile("one")], repetitions: 1 };
+
+    expect(buildArenaSummaryPayload(request, [])).toMatchObject({ categoryId: "reasoning", categoryName: "Reasoning" });
+
+    categorizedDocument.benchmarkVersion.tasks[0].categoryId = "unlisted";
+    expect(buildArenaSummaryPayload({ ...request, version: { ...categorizedVersion, documentJson: JSON.stringify(categorizedDocument) } }, []))
+      .not.toHaveProperty("categoryId");
+  });
+
   it("executes repetitions sequentially and isolates a failed competitor", async () => {
     const calls: string[] = [];
     const results = await executeArena({ arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 3 }, async (plan) => {

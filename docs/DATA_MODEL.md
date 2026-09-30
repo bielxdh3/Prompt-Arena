@@ -2,9 +2,10 @@
 
 Phase 01 established storage vocabulary and contracts. Phase 02 adds local metadata persistence and immutable artifact
 writes. Phase 04 adds one-shot orchestration evidence while keeping the store local-first and append-only. Phase 05 adds
-bounded editable benchmark drafts without changing immutable benchmark-version history. Phase 06 adds a bounded local
-profile-revision registry and fixed-loopback Ollama discovery; it does not define the full model-library catalog. Phase 07
-adds a read-only published-version record and a pure one-shot run-plan contract; it does not add run authoring state.
+bounded editable benchmark drafts without changing immutable benchmark-version history. The current Models surface
+supports immutable profiles and loopback discovery for Ollama, LM Studio, and llama.cpp, plus bounded Ollama pull and
+managed GGUF operations. The run-plan contract binds a published version, task/case, immutable profile, and generation
+parameters; it still executes one case per plan.
 
 ## Foundation records
 
@@ -60,11 +61,12 @@ are also checked before the record is canonicalized and content-hashed. Replayin
 idempotent (`AlreadyPresent`); replaying the identity with changed content is an immutable conflict. Profile listing
 is a typed read ordered by `created_at, record_id`, so the result is deterministic without mutating history.
 
-The Models surface calls only the fixed local Ollama endpoint `http://127.0.0.1:11434`. Discovery accepts at most
-512 model records, validates each normalized record's bounded text fields, caps each serialized metadata map at
-256 KiB, and sorts the returned records by name and digest. Unavailable transport/runtime states and malformed
-responses are typed unavailable/protocol errors. This slice records no endpoint or credential, downloads or deletes
-no model, and does not manage cloud providers or runtime process lifecycles.
+The Models surface calls fixed or explicitly selected loopback endpoints for Ollama, LM Studio, and llama.cpp.
+Discovery accepts at most 512 model records, validates each normalized record's bounded text fields, caps each serialized
+metadata map at 256 KiB, and sorts the returned records by name and digest. Ollama pull and managed GGUF import/removal
+operations are persisted with progress/audit evidence. GGUF import is catalog/file management only and does not launch
+a llama.cpp runtime. Unavailable transport/runtime states and malformed responses are typed errors. BYOK provider
+credentials and external endpoints use a separate boundary described below.
 
 Browser preview has no profile/model persistence boundary: it displays unsaved fields and explicit preview states,
 never invokes desktop profile/model commands, queries Ollama, reads SQLite, or creates sample records.
@@ -78,7 +80,7 @@ the immutable `benchmark_versions` row.
 
 The pure TypeScript plan builder consumes that published record, a real immutable `ProfileRevision`, and explicit task
 and case IDs. It validates the summary/document benchmark identity, positive version number, exact `profile-id@revision`
-identity, fixed `ollama` runtime, bounded model and profile request data, and exactly one benchmark repetition. It then
+identity, a supported local runtime, bounded model and profile request data, and exactly one benchmark repetition. It then
 selects one matching task and case, requires a non-empty bounded task prompt, combines task and optional case prompts
 with `\n\n`, combines profile and task system prompts in profile-then-task order, and sets the generation model from the
 profile. Profile revisions keep serde-flattened unknown fields at the top level: the browser form emits only explicit
@@ -86,8 +88,8 @@ fields, while the plan builder preserves unknown JSON fields after bounded valid
 Supported profile generation parameters are mapped into the existing `GenerationRequest`; unknown parameter keys are
 rejected in this slice.
 
-The resulting `RunPlan` contains the existing run ID, published version ID, selected case ID, immutable profile,
-generation request, and a fresh default Ollama configuration for `http://127.0.0.1:11434`. Its serialized size remains
+The resulting `RunPlan` contains the run ID, published version ID, selected task/case IDs, immutable profile, generation
+request, and a loopback-only local runtime configuration. Its serialized size remains
 bounded by the existing one-shot plan limit. The bridge exposes typed version read and one-shot execution functions,
 but browser preview does not call either function, create records, or invent task/case/profile data. Full repetition
 controls, run authoring, cancellation, and process lifecycle remain planned.
@@ -163,10 +165,11 @@ with `validate_benchmark_document`, and returns the validator's canonical JSON p
 
 Each document carries an explicit top-level `execution` metadata object preserved by benchmark-v1's unknown-field policy.
 It declares the typed text-generation capability/status, evaluation mode, sandbox status, and human-readable requirement.
-The programming/software-engineering pack is intentionally static text reasoning and sets `sandboxStatus` to `unavailable`;
-Docker-backed code execution is not implemented and no code, filesystem, or network execution is implied. The math pack
-uses normalized exact-text expectations where appropriate. The writing pack uses `expected: null` and explicit human
-criteria for instruction following, clarity, evidence discipline, and usefulness.
+The programming/software-engineering pack explicitly declares `executionBoundary: docker_required`,
+`requiresSandbox: true`, and `sandboxStatus: unavailable` for its programming cases. Those cases remain blocked until a
+Docker-backed evaluator exists; the current worker performs text generation only and never falls back to host execution.
+The math pack uses normalized exact-text expectations where appropriate. The writing pack uses `expected: null` and
+explicit human criteria for instruction following, clarity, evidence discipline, and usefulness.
 
 `list_official_packs` returns deterministic summaries ordered by pack ID. `get_official_pack` returns the validated full
 canonical document for a known pack ID and `None` for an unknown ID. The desktop Benchmarks surface renders the metadata
@@ -196,8 +199,11 @@ cross-run comparison record. Missing or inconsistent dimensions return `not_read
 
 Runs mounts this diagnostic only after the existing blind-evaluation gate permits attempt evidence. Before that gate,
 attempt IDs and identity/metrics/objective evidence remain suppressed. Browser preview invokes no run/attempt command and
-invents no comparability result. Regression, tournaments, AI judging, calibration, cost analysis, and persistent
-comparability history remain future work.
+invents no comparability result. Insights persists historical comparisons over saved single-model runs and Arena
+summaries plus deterministic Elo v1 or regularized Bradley–Terry v1 rating snapshots. Repeated single-model comparisons
+retain source run IDs, sample counts, pointwise 95% intervals, changed and unverified conditions, and explicit statistical
+assumptions. Tournament policy, AI judging, calibrated uncertainty for correlated evidence, and family-wise interval
+correction remain future work.
 
 ## Phase 15 bounded appearance state
 
@@ -207,18 +213,14 @@ reduced-motion flag, then returns defaults for malformed or unsupported values. 
 in Tauri webview storage; browser preview keeps it in memory for a truthful live preview and never reads or writes
 localStorage. Theme history, import/export, sync, telemetry, and user-generated CSS are not part of this data model.
 
-## Phase 16 provider and cost foundation state
+## Phase 16 provider and cost records
 
-Provider catalog entries are static architecture metadata, not credentials, provider sessions, network configuration, or
-execution records. Each entry declares capability/transport status, credential source state, and identity confidence for
-the four planned external identities. A `PriceTableSnapshot` is a dated, bounded USD price shape; it is not persisted or
-claimed to be current in this phase.
-
-Cost estimates are ephemeral pure results over bounded token usage and one price snapshot. Missing/invalid prices return
-an unavailable result. Budget helpers return explicit allow/confirm/deny decisions against a ceiling and confirmation
-threshold; they do not start work, reserve funds, or record history. Sanitized provider selection retains no unknown or
-credential-like fields. Actual adapters, secure storage, network consent, usage/cost history, and external run records
-remain future data-model work.
+The BYOK surface supports four typed external adapters and persists only sanitized generation evidence: provider/model
+identity, usage, cost, dated price inputs, budget decision, and network-consent facts. Prompts, responses, API keys,
+credential blobs, and headers are not stored in this history. On Windows, provider credentials live in Windows Credential
+Manager; the Linux secure storage/transport backend currently fails closed as unavailable. A `PriceSnapshot` is a dated,
+bounded USD input supplied by the user, not a live price feed or billing receipt. Explicit network consent and configured
+budget rules gate a request; they do not guarantee final provider charges or reserve funds.
 
 ## Benchmark vocabulary for later phases
 
@@ -239,17 +241,72 @@ Historical semantic records must be append-only. A changed benchmark is a new ve
 
 ## Bounded execution evidence
 
-`RunPlan` binds one benchmark version, case, immutable profile revision, generation request, and loopback-only Ollama
-configuration. The desktop execution command sends that plan to a fixed-name one-shot worker. The worker returns one
+`RunPlan` binds one benchmark version, task/case, immutable profile revision, generation request, and loopback-only local
+runtime configuration. The Tauri command reloads the immutable benchmark and exactly matching stored profile snapshot,
+then derives the canonical prompt, system prompt, typed robustness transform, verifier policy/expected answer, and
+Docker-required policy before invoking the worker. It also validates the full supported generation-parameter projection
+from the profile, fixes seed/stops/tools/format to the local policy, and records the accepted profile-derived parameters
+in attempt effective configuration. An Ollama profile without an explicit endpoint is restricted to the canonical
+`127.0.0.1:11434` default; explicit saved loopback endpoints must match exactly after normalization. Renderer-supplied
+prompt, profile, generation settings, verifier, transform, or boundary fields are not execution authority. The desktop execution command sends the validated plan to a fixed-name one-shot
+worker. The worker returns one
 typed terminal outcome and exits; the app, not the worker, owns SQLite and filesystem persistence. Completed outcomes can
 be replayed idempotently, while conflicting run, attempt, result, artifact, path, kind, schema, or hash metadata is
 rejected. Run listings and attempt reads are local, deterministically ordered, and reject empty/path-like IDs. Browser
-preview reads no app store and never executes a model. Full model-library management, cross-runtime grouping,
-recommendations, downloads, and deletion remain planned.
+preview reads no app store and never executes a model. Sensor-level GPU/VRAM/energy telemetry and complete runtime
+management remain incomplete.
 ## Completion Arena composition
 
 The completion UI composes multiple existing immutable `RunPlan` values rather than mutating profile revisions or
 benchmark versions. Every competitor/repetition is persisted as its own immutable `Run`/`Attempt` pair with a unique run
-identity. `src/arena-runner.ts` retains the Arena grouping in memory for comparison and export; an aggregate Arena table
-is intentionally still a future migration. Response text is retrieved only through the verified `read_attempt_response`
-command and is never copied into metadata or exports as a filesystem path.
+identity, and a bounded Arena summary record stores aggregate metrics and source attempt references. Response text is
+retrieved only through the verified `read_attempt_response` command and is never copied into metadata or exports as a
+filesystem path.
+
+## Insights records
+
+The `single_model_benchmark` and `performance_lab` roadmap records retain sanitized one-case provenance and measured or
+explicitly unavailable metrics. Streamed TTFT is monotonic time from request start to the first non-empty text chunk;
+non-streaming and empty streams leave it unavailable. Prompt tokens/second is derived only when the runtime reports
+both prompt-token count and prompt-evaluation duration; unsupported measurements remain null. A `single_model_suite`
+record stores each case's terminal state, source run/attempt IDs
+where available, objective result, and aggregate completed/failed/cancelled/unavailable/evidence-error counts.
+`historical_regression`, `model_ratings`, `robustness_arena`, and `repro_bundle` records are bounded immutable snapshots;
+their present analysis and replay limits are documented in the architecture and delivery matrix.
+At the Rust write boundary, single-model benchmark provenance is matched to the immutable stored run, attempt,
+registered profile, published benchmark version, selected task/case, objective result, terminal attempt status, and
+performance metrics derived from the attempt's response summary. New single-model snapshots store the terminal status at
+top level; readers accept older schema-v2 snapshots without that additive field. An exact immutable replay is checked
+before source rows so retention does not make an already-saved record impossible to replay. Performance Lab records must equal the linked benchmark projection, and suite
+records must cover the published cases in order with totals matching their referenced run/attempt outcomes. These
+source checks run on writes; historical snapshots remain readable after retention removes source rows. The hardware
+object in a single-model snapshot is renderer-captured context and is not independently attested by Rust. Historical
+comparison statistics, ratings, robustness scores, and repro-bundle manifests remain bounded app-calculated snapshots
+that the Rust boundary does not recompute from their sources. Their UI marks them unverified; stored values are not
+backend-attested analysis claims.
+New Arena summaries include an optional category ID/name pair only when the selected task's category ID resolves inside
+the published benchmark's category tree. The Rust storage boundary validates the pair and omits absent optional fields,
+so legacy summary content hashes and replay behavior remain unchanged. Elo v1 emits separate global and category
+populations from objective pass-rate matches. Its `400 / sqrt(samples)` uncertainty is a rough heuristic, not a calibrated
+probability interval. Bradley–Terry v1 fits regularized logit abilities per connected comparison component and emits
+Laplace normal-approximation standard errors. These standard errors assume independent pair outcomes; pair outcomes
+derived from shared Arena evidence can be correlated. Uncategorized and legacy summaries contribute to global ratings only.
+
+Single-run `historical_regression` payloads retain source kinds and IDs, changed-condition flags, absolute/percentage
+deltas, and available metric uncertainty. Repeated-run payloads retain distinct baseline/candidate run ID lists, per-metric
+counts/means/spreads, pointwise 95% Welch intervals for continuous metrics, and Bonferroni-combined Wilson intervals for
+binary quality. A minimum of five samples per group is required; fixed controls must agree, missing controls remain
+unverified, and profile differences are reported as group associations. Intervals are pointwise across metrics, without
+family-wise correction. Derived comparison exports include the result plus source IDs/content hashes and do not copy raw
+source evidence.
+Robustness snapshots retain the source task/case/profile, base run/attempt IDs, each transformed prompt's source and
+version, terminal execution status, variant run/attempt IDs, and evidence-save errors. Version 2 operators are checked
+against the effective RunPlan prompt; transformations that do not change it are recorded as unavailable. Each operator
+retains the original benchmark verifier and expected-answer contract; semantic equivalence remains unverified and is
+called out in the UI.
+
+Repro Bundle export produces a bounded JSON file with canonical-body SHA-256 and byte-count metadata. Import checks both,
+but the self-contained checksum does not authenticate the creator. Credential-keyed fields are filtered, while the
+profile system prompt is retained for replay and may contain private text; review a bundle before sharing it. A rerun uses locally stored benchmark/profile
+records; an imported source run is linked only when its run, version, task, case and profile identities match local
+evidence. Otherwise, the source ID remains an explicitly unverified external reference.

@@ -9,12 +9,14 @@ Validation is proportional to the foundation and must remain honest about what i
 - Repository boundary policy: `npm run check:boundaries`.
 - Dependency-free boundary fixtures: `npm run test:boundaries`.
 - Production dependency audit: `npm audit --omit=dev --audit-level=high`.
-- Frontend unit tests for fonts, benchmark authoring bounds/shape handling, Phase 06 profile identity/bounds, bounded
+- Frontend unit tests for fonts, benchmark authoring bounds/shape handling, immutable profile identity/bounds and
+  reasoning-effort parameters, single-model per-case terminal/error accounting and aggregate suite records, bounded
   Arena option extraction/selection/preview behavior, RunPlan objective-expectation extraction/bounds/no-gold-metadata,
   read-only results status/metric formatting, blind-review evidence suppression states, official-pack browser-preview
   no-write states, model metadata compatibility, bounded hardware recommendation classification/thresholds, missing
   telemetry, hardware browser-preview no-read states, bounded comparability readiness/order/tie states, and browser-preview
-  surface states, appearance preference normalization/allowlists/defaults, provider catalog completeness, credential and
+  repeated-run Welch/Wilson regression intervals, sample compatibility/overlap rejection, source-hash comparison export,
+  Bradley–Terry determinism/disconnected-group behavior, surface states, appearance preference normalization/allowlists/defaults, provider catalog completeness, credential and
   identity uncertainty, price arithmetic, budget decisions, credential-like field sanitization, and provider browser
   no-write copy:
   `npm run test`.
@@ -24,7 +26,8 @@ Validation is proportional to the foundation and must remain honest about what i
   artifact/response/response-summary/objective-verification evidence, blind-evaluation artifact verification,
   anonymous deterministic preparation, score/ranking bounds, immutable evaluation replay, official-pack full-document
   validation and raw pre-parse benchmark-document size rejection, deterministic IDs/hashes, catalog lookup/not-found,
-  execution metadata, generation-content exclusion from serialized Attempt metadata, and generic score compatibility,
+  execution metadata, generation-content exclusion from serialized Attempt metadata, authoritative generation-profile
+  binding, Ollama default/custom endpoint binding, and generic score compatibility,
   draft revision/bounds/publish behavior, Runs read-API,
   orchestration, and runtime-contract tests:
   `cargo test --manifest-path src-tauri/Cargo.toml --all-targets`.
@@ -33,15 +36,23 @@ Validation is proportional to the foundation and must remain honest about what i
 - Ollama mock tests cover health, local model listing/metadata, 512-record and per-record 256 KiB metadata bounds,
   deterministic name/digest sorting, chat/text generation mapping, NDJSON streaming, typed unavailable/remote/protocol
   errors, loopback-only endpoint validation, credentials/query/fragment/non-loopback rejection, stream overflow, and
-  cooperative cancellation between socket reads/chunks. Direct reader tests cover the 64 KiB line and bounded-body
+  cooperative cancellation between socket reads/chunks. They also check that `reasoningEffort: none` maps to
+  `think: false`, while the runtime default omits the override. Stream tests verify TTFT begins at first non-empty text
+  and remains unavailable for empty streams; Performance Lab tests derive prompt throughput only from reported prompt
+  tokens and prompt-evaluation duration. OpenAI-compatible adapter tests check LM Studio's
+  `reasoning_effort: none` mapping and reject it for llama.cpp. Direct reader tests cover the 64 KiB line and bounded-body
   guards, aggregate response-header bytes/count, and chunk-trailer bytes/count.
 - Storage tests cover typed profile list/register behavior, deterministic `profile-id@revision` identity validation,
   idempotent replay, immutable conflict, and the complete 256 KiB profile request bound covering `parameters` and
-  flattened `extra`; immutable metadata remains covered by the shared 1 MiB ceiling.
+  flattened `extra`; immutable metadata remains covered by the shared 1 MiB ceiling. Roadmap-record storage tests also
+  bind single-model records to persisted run/attempt/profile/version sources, recompute Performance Lab metrics from
+  attempt summaries, verify suite case membership and aggregate outcomes, and reject forged profile, metric, and suite
+  summary data.
 - A silent-runtime mock configures a 10 ms per-read timeout and 100 ms total read deadline, then verifies a typed
   transport error returns in under one second; the default 10-minute window keeps ordinary slow local streaming viable.
 - One optional live Ollama health test uses the default loopback endpoint and self-skips when Ollama is unavailable; it
-  does not make the runtime a test or application prerequisite.
+  does not make the runtime a test or application prerequisite. The mock mapping tests do not prove visible generation
+  through the installed Tauri interface.
 - Worker storage-boundary smoke: send one `foundation_check` JSON request to `prompt-arena-worker` and verify one
   completed JSON response. Resolver tests cover the fixed dev sibling and the target-triple-suffixed packaged
   `binaries/prompt-arena-worker-<TARGET_TRIPLE>` Tauri resource, while the config test checks the Windows/Linux sidecar
@@ -56,10 +67,12 @@ draft boundary, the Phase 06 profile/discovery slice, the bounded model-library 
 the bounded Arena helper and objective RunPlan contract, the bounded single-run comparability diagnostic, the blind
 evaluation artifact/presentation/lock boundary, the official source-pack catalog, the read-only results helpers, the
 bounded local appearance normalizer, and the normalized
-runtime/Ollama adapter through a local mock server, plus the pure external-provider catalog/cost foundation. There is no desktop integration test
+  runtime/Ollama adapter through a local mock server, plus external-provider catalog/cost logic and mock-backed credential,
+  transport, consent, and request tests on supported Windows builds. There is no desktop integration test
 that launches the Tauri app and worker together, no broader run authoring/control UI, app-managed long-lived runtime
-app-managed long-lived runtime lifecycle, unified model search/download/duplicate flow, empirical hardware history,
-cross-run ranking/regression/tournament/AI-judge comparability flow, full model download/catalog/deletion flow, external provider transport/credential/paid-execution test,
+lifecycle, unified model search/download/duplicate flow, empirical hardware history,
+  full desktop integration for saved-run/Arena regression, repeated-sample and export UX, tournament policy, AI-judge comparability, full model download/catalog/deletion flow,
+  live paid-provider execution acceptance (Linux BYOK remains unsupported),
 Docker-backed coding sandbox, desktop integration for the official-pack UI, or production-data migration test. Those
 checks belong with the phases that implement each behavior; the current tests
 verify the live command/worker contracts, Arena helper contract, and local evidence boundaries without claiming full

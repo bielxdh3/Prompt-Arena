@@ -491,6 +491,7 @@ export function buildArenaSummaryPayload(
   executions: ArenaExecution[],
 ): ArenaSummaryPayload {
   const summary = summarizeArenaExecutions(executions);
+  const taskCategory = categoryForTask(request.version.documentJson, request.taskId);
   return {
     arenaId: request.arenaId,
     benchmarkVersionId: request.version.summary.versionId,
@@ -498,12 +499,54 @@ export function buildArenaSummaryPayload(
     caseId: request.caseId,
     repetitions: request.repetitions,
     packId: request.packId ?? null,
+    ...(taskCategory ? { categoryId: taskCategory.id, categoryName: taskCategory.name } : {}),
     materializationSeed: request.materializationSeed ?? null,
     arenaWallTimeMs: request.startedAtMs === undefined ? null : Math.max(0, Date.now() - request.startedAtMs),
     summary,
     competitors: summarizeArenaCompetitors(executions),
     evidence: executions.map(arenaExecutionEvidence),
   };
+}
+
+function categoryForTask(documentJson: string, taskId: string): { id: string; name: string } | null {
+  try {
+    const document = JSON.parse(documentJson) as Record<string, unknown>;
+    const pack = document.pack && typeof document.pack === "object" && !Array.isArray(document.pack)
+      ? document.pack as Record<string, unknown>
+      : null;
+    const version = document.benchmarkVersion && typeof document.benchmarkVersion === "object" && !Array.isArray(document.benchmarkVersion)
+      ? document.benchmarkVersion as Record<string, unknown>
+      : null;
+    const tasks = Array.isArray(version?.tasks) ? version.tasks : [];
+    const task = tasks.find((value) => value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).taskId === taskId) as Record<string, unknown> | undefined;
+    const categoryId = task?.categoryId;
+    if (typeof categoryId !== "string"
+      || categoryId.length === 0
+      || new TextEncoder().encode(categoryId).length > 128
+      || !/^[A-Za-z0-9._@-]+$/u.test(categoryId)
+      || !Array.isArray(pack?.categories)) return null;
+
+    const findCategory = (categories: unknown[]): string | null => {
+      for (const value of categories) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const category = value as Record<string, unknown>;
+        if (category.categoryId === categoryId
+          && typeof category.name === "string"
+          && category.name.trim()
+          && !category.name.includes("\0")
+          && new TextEncoder().encode(category.name).length <= 256) return category.name;
+        if (Array.isArray(category.children)) {
+          const child = findCategory(category.children);
+          if (child !== null) return child;
+        }
+      }
+      return null;
+    };
+    const name = findCategory(pack.categories);
+    return name === null ? null : { id: categoryId, name };
+  } catch {
+    return null;
+  }
 }
 
 function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {

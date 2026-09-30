@@ -42,6 +42,7 @@
     "tasks": [
       {
         "taskId": "weighted-average",
+        "categoryId": "quantitative",
         "name": "Compute a weighted average",
         "prompt": "Solve the quantitative problem carefully and return the requested final value. Keep the final answer unambiguous.",
         "cases": [
@@ -62,6 +63,7 @@
       },
       {
         "taskId": "fact-check-claim",
+        "categoryId": "knowledge",
         "name": "Check a factual claim",
         "prompt": "Assess the claim using stable general knowledge. State the result and the shortest sufficient correction.",
         "cases": [

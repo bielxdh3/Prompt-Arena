@@ -20,6 +20,7 @@ export type PerformanceEvidence = {
     promptTokens: MetricEvidence;
     completionTokens: MetricEvidence;
     totalTokens: MetricEvidence;
+    promptTokensPerSecond: MetricEvidence;
     generationTokensPerSecond: MetricEvidence;
     wallClockMs: MetricEvidence;
     loadTimeMs: MetricEvidence;
@@ -58,16 +59,20 @@ export function performanceEvidenceFromExecution(execution: PersistedExecution |
   const promptTokens = integer(usage?.promptTokens);
   const completionTokens = integer(usage?.completionTokens);
   const totalTokens = integer(usage?.totalTokens);
+  const promptEvalDurationMs = timing?.promptEvalDurationNs == null ? null : finite(timing.promptEvalDurationNs / 1_000_000);
+  const ttftMs = timing?.ttftDurationNs == null ? null : finite(timing.ttftDurationNs / 1_000_000);
+  const promptTokensPerSecond = promptTokens !== null && promptEvalDurationMs !== null && promptEvalDurationMs > 0 ? finite(promptTokens / (promptEvalDurationMs / 1_000)) : null;
   const generationTokensPerSecond = completionTokens !== null && generationTimeMs !== null && generationTimeMs > 0 ? finite(completionTokens / (generationTimeMs / 1_000)) : null;
   const unavailable = (unit: string, source: string): MetricEvidence => metric(null, unit, source, "unavailable", temperature);
   return {
     schemaVersion: 1,
     temperature,
     metrics: {
-      ttftMs: unavailable("ms", "runtime.responseSummary.ttft"),
+      ttftMs: metric(ttftMs, "ms", "runtime.responseSummary.timing.ttftDurationNs", "runtime", temperature),
       promptTokens: metric(promptTokens, "tokens", "runtime.responseSummary.usage.promptTokens", "runtime", temperature),
       completionTokens: metric(completionTokens, "tokens", "runtime.responseSummary.usage.completionTokens", "runtime", temperature),
       totalTokens: metric(totalTokens, "tokens", "runtime.responseSummary.usage.totalTokens", "runtime", temperature),
+      promptTokensPerSecond: metric(promptTokensPerSecond, "tokens/s", "derived(promptTokens/promptEvalDurationMs)", "derived", temperature, promptTokensPerSecond === null ? "unavailable" : "estimated", promptTokensPerSecond === null ? "unavailable" : "medium"),
       generationTokensPerSecond: metric(generationTokensPerSecond, "tokens/s", "derived(completionTokens/generationTimeMs)", "derived", temperature, generationTokensPerSecond === null ? "unavailable" : "estimated", generationTokensPerSecond === null ? "unavailable" : "medium"),
       wallClockMs: metric(wallClockMs, "ms", "runtime.responseSummary.timing.totalDurationNs", "runtime", temperature),
       loadTimeMs: metric(loadTimeMs, "ms", "runtime.responseSummary.timing.loadDurationNs", "runtime", temperature),

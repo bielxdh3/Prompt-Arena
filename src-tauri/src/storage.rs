@@ -265,6 +265,10 @@ pub struct ArenaSummaryPayload {
     pub case_id: String,
     pub repetitions: u32,
     pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_name: Option<String>,
     pub materialization_seed: Option<u64>,
     #[serde(default)]
     pub arena_wall_time_ms: Option<f64>,
@@ -1708,6 +1712,7 @@ impl StorageService {
                 return Err(StorageError::ImmutableConflict);
             }
         } else {
+            self.validate_roadmap_record_sources(request)?;
             connection
                 .execute(
                     "INSERT INTO roadmap_records (record_id, kind, content_hash, document_json, created_at)
@@ -1797,6 +1802,409 @@ impl StorageService {
             Ok(record)
         })
         .collect()
+    }
+
+    fn validate_roadmap_record_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        validate_roadmap_record(request)?;
+        match request.kind.as_str() {
+            "single_model_benchmark" => self.validate_single_model_benchmark_sources(request),
+            "single_model_suite" => self.validate_single_model_suite_sources(request),
+            "performance_lab" => self.validate_performance_record_sources(request),
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_single_model_benchmark_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("schemaVersion").and_then(Value::as_u64) != Some(2)
+            || payload.get("kind").and_then(Value::as_str) != Some("single_model_benchmark")
+        {
+            return Err(invalid());
+        }
+        let run_id = payload
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if request.record_id != format!("benchmark-{run_id}") {
+            return Err(invalid());
+        }
+        let benchmark_version_id = payload
+            .get("benchmarkVersionId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let task_id = payload
+            .get("taskId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let case_id = payload
+            .get("caseId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let benchmark_content_hash = payload
+            .get("benchmarkContentHash")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+
+        let version = self
+            .get_benchmark_version(benchmark_version_id)?
+            .ok_or_else(invalid)?;
+        let benchmark =
+            validate_benchmark_document(&version.document_json).map_err(|_| invalid())?;
+        if benchmark.version_id != benchmark_version_id
+            || benchmark.content_hash != version.summary.content_hash
+            || benchmark_content_hash != version.summary.content_hash
+            || !benchmark
+                .document
+                .benchmark_version
+                .tasks
+                .iter()
+                .any(|task| {
+                    task.task_id == task_id
+                        && task
+                            .cases
+                            .iter()
+                            .any(|benchmark_case| benchmark_case.case_id == case_id)
+                })
+        {
+            return Err(invalid());
+        }
+
+        let source_run: Run =
+            serde_json::from_value(payload.get("sourceRun").cloned().ok_or_else(invalid)?)
+                .map_err(|_| invalid())?;
+        if source_run.run_id != run_id || source_run.benchmark_version_id != benchmark_version_id {
+            return Err(invalid());
+        }
+        let stored_run = self.get_run(run_id)?.ok_or_else(invalid)?;
+        if source_run != stored_run
+            || stored_run.task_id.as_deref() != Some(task_id)
+            || !stored_run.attempt_ids.iter().any(|id| {
+                payload
+                    .get("attempt")
+                    .and_then(|value| value.get("attemptId"))
+                    .and_then(Value::as_str)
+                    == Some(id.as_str())
+            })
+        {
+            return Err(invalid());
+        }
+
+        let source_attempt: Attempt =
+            serde_json::from_value(payload.get("attempt").cloned().ok_or_else(invalid)?)
+                .map_err(|_| invalid())?;
+        if source_attempt.run_id != run_id
+            || source_attempt.task_id.as_deref() != Some(task_id)
+            || source_attempt.case_id != case_id
+            || source_attempt.profile_revision_id.is_empty()
+            || !stored_run
+                .profile_revision_ids
+                .iter()
+                .any(|id| id == &source_attempt.profile_revision_id)
+        {
+            return Err(invalid());
+        }
+        let stored_attempt = self
+            .list_attempts(run_id)?
+            .into_iter()
+            .find(|attempt| attempt.attempt_id == source_attempt.attempt_id)
+            .ok_or_else(invalid)?;
+        if source_attempt != stored_attempt {
+            return Err(invalid());
+        }
+        if payload.get("status").and_then(Value::as_str) != Some(stored_attempt.status.as_str()) {
+            return Err(invalid());
+        }
+
+        let source_profile: ProfileRevision = serde_json::from_value(
+            payload
+                .get("profileRevision")
+                .cloned()
+                .ok_or_else(invalid)?,
+        )
+        .map_err(|_| invalid())?;
+        if source_profile.profile_revision_id != source_attempt.profile_revision_id
+            || !self
+                .list_profile_revisions()?
+                .iter()
+                .any(|profile| profile == &source_profile)
+        {
+            return Err(invalid());
+        }
+
+        let expected_objective = source_attempt
+            .result
+            .as_ref()
+            .and_then(|result| result.score.as_ref())
+            .filter(|score| score.is_object())
+            .cloned()
+            .unwrap_or(Value::Null);
+        if payload.get("objective").unwrap_or(&Value::Null) != &expected_objective {
+            return Err(invalid());
+        }
+
+        let expected_performance = performance_evidence_from_attempt(&source_attempt);
+        if payload.get("performance") != Some(&expected_performance) {
+            return Err(invalid());
+        }
+        if !payload
+            .get("hardware")
+            .is_some_and(|hardware| hardware.is_null() || hardware.is_object())
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_performance_record_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        let run_id = request
+            .payload
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if request.record_id != format!("performance-{run_id}") {
+            return Err(invalid());
+        }
+        let source = self
+            .get_roadmap_record(&format!("benchmark-{run_id}"))?
+            .filter(|record| record.kind == "single_model_benchmark")
+            .ok_or_else(invalid)?;
+        let source_payload = source.payload;
+        let mut expected = source_payload
+            .get("performance")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(invalid)?;
+        expected.insert("runId".to_owned(), Value::String(run_id.to_owned()));
+        expected.insert(
+            "benchmarkVersionId".to_owned(),
+            source_payload
+                .get("benchmarkVersionId")
+                .cloned()
+                .ok_or_else(invalid)?,
+        );
+        expected.insert(
+            "profileRevisionId".to_owned(),
+            source_payload
+                .get("profileRevision")
+                .and_then(|profile| profile.get("profileRevisionId"))
+                .cloned()
+                .ok_or_else(invalid)?,
+        );
+        if request.payload != Value::Object(expected) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_single_model_suite_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        let suite_id = payload
+            .get("suiteId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let benchmark_version_id = payload
+            .get("benchmarkVersionId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if request.record_id != suite_id
+            || payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+            || payload.get("kind").and_then(Value::as_str) != Some("single_model_suite")
+            || payload.get("startedAt").and_then(Value::as_str).is_none()
+            || payload.get("createdAt").and_then(Value::as_str).is_none()
+        {
+            return Err(invalid());
+        }
+        let version = self
+            .get_benchmark_version(benchmark_version_id)?
+            .ok_or_else(invalid)?;
+        let benchmark =
+            validate_benchmark_document(&version.document_json).map_err(|_| invalid())?;
+        if benchmark.version_id != benchmark_version_id
+            || benchmark.content_hash != version.summary.content_hash
+        {
+            return Err(invalid());
+        }
+        let source_profile: ProfileRevision = serde_json::from_value(
+            payload
+                .get("profileRevision")
+                .cloned()
+                .ok_or_else(invalid)?,
+        )
+        .map_err(|_| invalid())?;
+        if !self
+            .list_profile_revisions()?
+            .iter()
+            .any(|profile| profile == &source_profile)
+        {
+            return Err(invalid());
+        }
+
+        let expected_cases: Vec<(&str, &str)> = benchmark
+            .document
+            .benchmark_version
+            .tasks
+            .iter()
+            .flat_map(|task| {
+                task.cases
+                    .iter()
+                    .map(move |case| (task.task_id.as_str(), case.case_id.as_str()))
+            })
+            .collect();
+        let cases = payload
+            .get("cases")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if cases.len() != expected_cases.len() {
+            return Err(invalid());
+        }
+
+        let mut completed = 0usize;
+        let mut failed = 0usize;
+        let mut cancelled = 0usize;
+        let mut unavailable = 0usize;
+        let mut evidence_errors = 0usize;
+        for (case, (expected_task_id, expected_case_id)) in cases.iter().zip(expected_cases) {
+            let task_id = case
+                .get("taskId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let case_id = case
+                .get("caseId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if task_id != expected_task_id || case_id != expected_case_id {
+                return Err(invalid());
+            }
+            let status = case
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            match status {
+                "completed" => completed += 1,
+                "failed" => failed += 1,
+                "cancelled" => cancelled += 1,
+                "unavailable" => unavailable += 1,
+                _ => return Err(invalid()),
+            }
+            let error_code = case.get("errorCode").and_then(Value::as_str);
+            match error_code {
+                None => {}
+                Some("execution_failed") => {
+                    if status != "failed" {
+                        return Err(invalid());
+                    }
+                }
+                Some("evidence_save_failed") => evidence_errors += 1,
+                Some(_) => return Err(invalid()),
+            }
+
+            let run_id = case.get("runId").filter(|value| !value.is_null());
+            let attempt_id = case.get("attemptId").filter(|value| !value.is_null());
+            match (run_id, attempt_id) {
+                (None, None) => {
+                    if status != "unavailable" && error_code != Some("execution_failed") {
+                        return Err(invalid());
+                    }
+                    if case
+                        .get("objectivePassed")
+                        .filter(|value| !value.is_null())
+                        .is_some()
+                    {
+                        return Err(invalid());
+                    }
+                }
+                (Some(run_id), Some(attempt_id)) => {
+                    let run_id = run_id.as_str().ok_or_else(invalid)?;
+                    let attempt_id = attempt_id.as_str().ok_or_else(invalid)?;
+                    if status == "unavailable" || error_code == Some("execution_failed") {
+                        return Err(invalid());
+                    }
+                    let run = self.get_run(run_id)?.ok_or_else(invalid)?;
+                    if run.benchmark_version_id != benchmark_version_id
+                        || run.task_id.as_deref() != Some(task_id)
+                        || !run
+                            .profile_revision_ids
+                            .iter()
+                            .any(|id| id == &source_profile.profile_revision_id)
+                        || !run.attempt_ids.iter().any(|id| id == attempt_id)
+                    {
+                        return Err(invalid());
+                    }
+                    let attempt = self
+                        .list_attempts(run_id)?
+                        .into_iter()
+                        .find(|attempt| attempt.attempt_id == attempt_id)
+                        .ok_or_else(invalid)?;
+                    let status_matches = match status {
+                        "completed" => attempt.status == "completed",
+                        "failed" => attempt.status == "failed",
+                        "cancelled" => attempt.status == "cancelled",
+                        _ => false,
+                    };
+                    if !status_matches
+                        || attempt.task_id.as_deref() != Some(task_id)
+                        || attempt.case_id != case_id
+                        || attempt.profile_revision_id != source_profile.profile_revision_id
+                    {
+                        return Err(invalid());
+                    }
+                    let objective_passed = attempt
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.score.as_ref())
+                        .and_then(|score| score.get("passed"))
+                        .and_then(Value::as_bool);
+                    if case.get("objectivePassed").and_then(Value::as_bool) != objective_passed
+                        || (case
+                            .get("objectivePassed")
+                            .is_some_and(|value| !value.is_null())
+                            != objective_passed.is_some())
+                    {
+                        return Err(invalid());
+                    }
+                }
+                _ => return Err(invalid()),
+            }
+        }
+
+        let total = cases.len();
+        let has_incomplete_case = failed + cancelled + unavailable + evidence_errors > 0;
+        let expected_status = if completed == 0 && has_incomplete_case {
+            "failed"
+        } else if has_incomplete_case {
+            "partial"
+        } else {
+            "completed"
+        };
+        let expected_summary = serde_json::json!({
+            "total": total,
+            "completed": completed,
+            "failed": failed,
+            "cancelled": cancelled,
+            "unavailable": unavailable,
+            "evidenceErrors": evidence_errors,
+        });
+        if payload.get("summary") != Some(&expected_summary)
+            || payload.get("status").and_then(Value::as_str) != Some(expected_status)
+        {
+            return Err(invalid());
+        }
+        Ok(())
     }
 
     pub fn preview_storage_retention(
@@ -2230,20 +2638,31 @@ struct RetentionTableSql {
 }
 
 const RETENTION_DELETE_TABLES: &[RetentionTableSql] = &[
-    RetentionTableSql {
-        name: "attempts",
-        count_sql: "SELECT COUNT(*) FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id)",
-        delete_sql: "DELETE FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id)",
-    },
+    // Preview and cleanup follow dependency order: old results, then eligible attempts, then runs.
     RetentionTableSql {
         name: "result_records",
         count_sql: "SELECT COUNT(*) FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
         delete_sql: "DELETE FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
     },
     RetentionTableSql {
+        name: "attempts",
+        count_sql: "SELECT COUNT(*) FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER))",
+        delete_sql: "DELETE FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER))",
+    },
+    RetentionTableSql {
         name: "runs",
-        count_sql: "SELECT COUNT(*) FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)",
-        delete_sql: "DELETE FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)",
+        count_sql: concat!(
+            "SELECT COUNT(*) FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
+            "AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 AND NOT (CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)))) ",
+            "AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) ",
+            "AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+        ),
+        delete_sql: concat!(
+            "DELETE FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
+            "AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 AND NOT (CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)))) ",
+            "AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) ",
+            "AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+        ),
     },
     RetentionTableSql {
         name: "blind_evaluations",
@@ -2637,6 +3056,15 @@ fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageEr
     }
     if let Some(pack_id) = &summary.pack_id {
         validate_record_id(pack_id)?;
+    }
+    if let Some(category_id) = &summary.category_id {
+        validate_summary_identifier(category_id)?;
+    }
+    if let Some(category_name) = &summary.category_name {
+        validate_bounded_text(category_name, 256)?;
+    }
+    if summary.category_id.is_some() != summary.category_name.is_some() {
+        return Err(StorageError::InvalidRecordId);
     }
     validate_bounded_json(&summary.summary, 0)?;
     for competitor in &summary.competitors {
@@ -3077,6 +3505,7 @@ fn validate_roadmap_kind(kind: &str) -> Result<(), StorageError> {
     if matches!(
         kind,
         "single_model_benchmark"
+            | "single_model_suite"
             | "performance_lab"
             | "historical_regression"
             | "model_ratings"
@@ -3097,6 +3526,98 @@ fn validate_roadmap_record(request: &RoadmapRecordRequest) -> Result<(), Storage
     }
     validate_bounded_json(&request.payload, 0)?;
     Ok(())
+}
+
+fn performance_metric(
+    value: Option<f64>,
+    unit: &str,
+    source: &str,
+    sampling_method: &str,
+    temperature: &str,
+    derived: bool,
+) -> Value {
+    let numeric_value = value.and_then(|value| {
+        if !value.is_finite() || value < 0.0 {
+            return None;
+        }
+        if value.fract() == 0.0 && value <= i64::MAX as f64 {
+            Some(serde_json::Number::from(value as i64))
+        } else {
+            serde_json::Number::from_f64(value)
+        }
+    });
+    let available = numeric_value.is_some();
+    serde_json::json!({
+        "value": numeric_value,
+        "unit": unit,
+        "source": source,
+        "samplingMethod": sampling_method,
+        "samplingIntervalMs": null,
+        "state": if available { if derived { "estimated" } else { "observed" } } else { "unavailable" },
+        "confidence": if available { if derived { "medium" } else { "high" } } else { "unavailable" },
+        "temperature": temperature,
+    })
+}
+
+fn performance_evidence_from_attempt(attempt: &Attempt) -> Value {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    let summary = attempt.extra.get("responseSummary");
+    let timing = summary.and_then(|value| value.get("timing"));
+    let usage = summary.and_then(|value| value.get("usage"));
+    let timing_ms = |key: &str| {
+        timing
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(|value| value / 1_000_000.0)
+    };
+    let token_count = |key: &str| {
+        usage
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_u64)
+            .filter(|value| *value <= MAX_SAFE_INTEGER)
+            .map(|value| value as f64)
+    };
+    let load_time_ms = timing_ms("loadDurationNs");
+    let generation_time_ms = timing_ms("evalDurationNs");
+    let wall_clock_ms = timing_ms("totalDurationNs");
+    let prompt_eval_time_ms = timing_ms("promptEvalDurationNs");
+    let prompt_tokens = token_count("promptTokens");
+    let completion_tokens = token_count("completionTokens");
+    let total_tokens = token_count("totalTokens");
+    let prompt_tokens_per_second = prompt_tokens
+        .zip(prompt_eval_time_ms.filter(|value| *value > 0.0))
+        .map(|(tokens, duration_ms)| tokens / (duration_ms / 1_000.0));
+    let generation_tokens_per_second = completion_tokens
+        .zip(generation_time_ms.filter(|value| *value > 0.0))
+        .map(|(tokens, duration_ms)| tokens / (duration_ms / 1_000.0));
+    let temperature = "unknown";
+    let unavailable = |unit: &str, source: &str| {
+        performance_metric(None, unit, source, "unavailable", temperature, false)
+    };
+    serde_json::json!({
+        "schemaVersion": 1,
+        "temperature": temperature,
+        "metrics": {
+            "ttftMs": performance_metric(timing_ms("ttftDurationNs"), "ms", "runtime.responseSummary.timing.ttftDurationNs", "runtime", temperature, false),
+            "promptTokens": performance_metric(prompt_tokens, "tokens", "runtime.responseSummary.usage.promptTokens", "runtime", temperature, false),
+            "completionTokens": performance_metric(completion_tokens, "tokens", "runtime.responseSummary.usage.completionTokens", "runtime", temperature, false),
+            "totalTokens": performance_metric(total_tokens, "tokens", "runtime.responseSummary.usage.totalTokens", "runtime", temperature, false),
+            "promptTokensPerSecond": performance_metric(prompt_tokens_per_second, "tokens/s", "derived(promptTokens/promptEvalDurationMs)", "derived", temperature, true),
+            "generationTokensPerSecond": performance_metric(generation_tokens_per_second, "tokens/s", "derived(completionTokens/generationTimeMs)", "derived", temperature, true),
+            "wallClockMs": performance_metric(wall_clock_ms, "ms", "runtime.responseSummary.timing.totalDurationNs", "runtime", temperature, false),
+            "loadTimeMs": performance_metric(load_time_ms, "ms", "runtime.responseSummary.timing.loadDurationNs", "runtime", temperature, false),
+            "generationTimeMs": performance_metric(generation_time_ms, "ms", "runtime.responseSummary.timing.evalDurationNs", "runtime", temperature, false),
+            "thinkingTimeMs": unavailable("ms", "runtime.reasoning.thinkingTime"),
+            "vramAverageBytes": unavailable("bytes", "os.gpu.vram.average"),
+            "vramPeakBytes": unavailable("bytes", "os.gpu.vram.peak"),
+            "ramAverageBytes": unavailable("bytes", "os.memory.ram.average"),
+            "ramPeakBytes": unavailable("bytes", "os.memory.ram.peak"),
+            "cpuUtilizationPercent": unavailable("percent", "os.cpu.utilization"),
+            "gpuUtilizationPercent": unavailable("percent", "os.gpu.utilization"),
+            "energyWh": unavailable("Wh", "os.power.energy"),
+        },
+    })
 }
 
 fn roadmap_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoadmapRecord> {
@@ -3778,6 +4299,7 @@ mod tests {
         Run {
             run_id: "run-1".to_owned(),
             benchmark_version_id: "logic@1".to_owned(),
+            task_id: Some("task-1".to_owned()),
             profile_revision_ids: vec!["profile-1@1".to_owned()],
             status: "created".to_owned(),
             started_at: "100".to_owned(),
@@ -3791,6 +4313,7 @@ mod tests {
         Attempt {
             attempt_id: "attempt-1".to_owned(),
             run_id: "run-1".to_owned(),
+            task_id: Some("task-1".to_owned()),
             profile_revision_id: "profile-1@1".to_owned(),
             case_id: "case-1".to_owned(),
             status: "pending".to_owned(),
@@ -3872,11 +4395,83 @@ mod tests {
     fn roadmap_records_are_immutable_reloadable_and_kind_filtered() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
-        let request = RoadmapRecordRequest {
-            record_id: "single-run-1".to_owned(),
-            kind: "single_model_benchmark".to_owned(),
-            payload: json!({"runId": "run-1", "environment": {"apiKey": "redacted"}}),
+        let benchmark = validate_benchmark_document(&valid_document()).expect("valid benchmark");
+        let version = service
+            .save_benchmark_version(&benchmark, "100")
+            .expect("benchmark version saves");
+        let profile = profile_revision();
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("profile revision saves");
+        let source_run = Run {
+            run_id: "run-1".to_owned(),
+            benchmark_version_id: version.version_id.clone(),
+            task_id: Some("task".to_owned()),
+            profile_revision_ids: vec![profile.profile_revision_id.clone()],
+            status: "created".to_owned(),
+            started_at: "100".to_owned(),
+            attempt_ids: vec!["attempt-1".to_owned()],
+            environment: BTreeMap::new(),
+            extra: BTreeMap::new(),
         };
+        let mut source_attempt = Attempt {
+            attempt_id: "attempt-1".to_owned(),
+            run_id: source_run.run_id.clone(),
+            task_id: Some("task".to_owned()),
+            profile_revision_id: profile.profile_revision_id.clone(),
+            case_id: "case".to_owned(),
+            status: "completed".to_owned(),
+            effective_config: BTreeMap::new(),
+            result: None,
+            artifacts: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        source_attempt.extra.insert(
+            "responseSummary".to_owned(),
+            json!({
+                "usage": {"promptTokens": 5, "completionTokens": 3, "totalTokens": 8},
+                "timing": {"totalDurationNs": 2000000, "loadDurationNs": 1000000, "promptEvalDurationNs": 500000, "evalDurationNs": 500000, "ttftDurationNs": 100000}
+            }),
+        );
+        service
+            .save_run(&source_run, "100")
+            .expect("source run saves");
+        service
+            .save_attempt(&source_attempt, "100")
+            .expect("source attempt saves");
+        let request = RoadmapRecordRequest {
+            record_id: "benchmark-run-1".to_owned(),
+            kind: "single_model_benchmark".to_owned(),
+            payload: json!({
+                "schemaVersion": 2,
+                "kind": "single_model_benchmark",
+                "runId": source_run.run_id,
+                "benchmarkVersionId": version.version_id,
+                "benchmarkContentHash": version.content_hash,
+                "taskId": "task",
+                "caseId": "case",
+                "profileRevision": serde_json::to_value(&profile).unwrap(),
+                "sourceRun": serde_json::to_value(&source_run).unwrap(),
+                "attempt": serde_json::to_value(&source_attempt).unwrap(),
+                "status": "completed",
+                "objective": null,
+                "performance": super::performance_evidence_from_attempt(&source_attempt),
+                "hardware": null,
+                "createdAt": "2026-09-29T00:00:00Z"
+            }),
+        };
+        let mut forged_status = request.clone();
+        forged_status.payload["status"] = json!("failed");
+        assert_eq!(
+            service.save_roadmap_record(&forged_status, "100"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut forged_attempt = request.clone();
+        forged_attempt.payload["attempt"]["profileRevisionId"] = json!("unregistered-profile@1");
+        assert_eq!(
+            service.save_roadmap_record(&forged_attempt, "100"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
         let (first, outcome) = service
             .save_roadmap_record(&request, "100")
             .expect("record saves");
@@ -3888,27 +4483,100 @@ mod tests {
         assert_eq!(replay, first);
         assert_eq!(replay_outcome, SaveOutcome::AlreadyPresent);
         assert_eq!(
-            service.get_roadmap_record("single-run-1").unwrap(),
+            service.get_roadmap_record("benchmark-run-1").unwrap(),
             Some(first.clone())
         );
         assert_eq!(
             service
                 .list_roadmap_records(Some("single_model_benchmark"))
                 .unwrap(),
-            vec![first]
+            vec![first.clone()]
         );
         assert!(service
             .list_roadmap_records(Some("performance_lab"))
             .unwrap()
             .is_empty());
-        let changed = RoadmapRecordRequest {
-            payload: json!({"runId": "run-2"}),
-            ..request
+        let mut performance_payload = super::performance_evidence_from_attempt(&source_attempt)
+            .as_object()
+            .cloned()
+            .expect("performance payload is an object");
+        performance_payload.insert("runId".to_owned(), json!(source_run.run_id));
+        performance_payload.insert("benchmarkVersionId".to_owned(), json!(version.version_id));
+        performance_payload.insert(
+            "profileRevisionId".to_owned(),
+            json!(profile.profile_revision_id),
+        );
+        let performance = RoadmapRecordRequest {
+            record_id: "performance-run-1".to_owned(),
+            kind: "performance_lab".to_owned(),
+            payload: serde_json::Value::Object(performance_payload),
         };
+        let mut forged_performance = performance.clone();
+        forged_performance.payload["metrics"]["wallClockMs"]["value"] = json!(999.0);
+        assert_eq!(
+            service.save_roadmap_record(&forged_performance, "150"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        service
+            .save_roadmap_record(&performance, "175")
+            .expect("source-bound performance record saves");
+        let suite = RoadmapRecordRequest {
+            record_id: "suite-run-1".to_owned(),
+            kind: "single_model_suite".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "single_model_suite",
+                "suiteId": "suite-run-1",
+                "benchmarkVersionId": version.version_id,
+                "profileRevision": serde_json::to_value(&profile).unwrap(),
+                "status": "completed",
+                "summary": {"total": 1, "completed": 1, "failed": 0, "cancelled": 0, "unavailable": 0, "evidenceErrors": 0},
+                "cases": [{"taskId": "task", "caseId": "case", "status": "completed", "runId": "run-1", "attemptId": "attempt-1", "objectivePassed": null}],
+                "startedAt": "2026-09-29T00:00:00Z",
+                "createdAt": "2026-09-29T00:00:00Z"
+            }),
+        };
+        let mut forged_suite = suite.clone();
+        forged_suite.payload["summary"]["completed"] = json!(0);
+        assert_eq!(
+            service.save_roadmap_record(&forged_suite, "250"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_suite, suite_outcome) = service
+            .save_roadmap_record(&suite, "250")
+            .expect("suite record saves");
+        assert_eq!(suite_outcome, SaveOutcome::Saved);
+        assert_eq!(saved_suite.kind, "single_model_suite");
+        assert_eq!(
+            service
+                .list_roadmap_records(Some("single_model_suite"))
+                .unwrap(),
+            vec![saved_suite]
+        );
+        let mut changed = request.clone();
+        changed.payload["createdAt"] = json!("2026-09-29T00:00:01Z");
         assert_eq!(
             service.save_roadmap_record(&changed, "300"),
             Err(StorageError::ImmutableConflict)
         );
+
+        let preview = service
+            .preview_storage_retention_at(30, "200")
+            .expect("retention previews the source run and attempt cascade");
+        assert_eq!(preview.eligible_records, 2);
+        service
+            .cleanup_storage_retention(&StorageRetentionRequest {
+                older_than_days: 30,
+                cutoff_at: "200".to_owned(),
+                expected_records: 2,
+                confirmation: "DELETE 2 LOCAL RECORDS".to_owned(),
+            })
+            .expect("retention removes the source attempt and run");
+        let (replay_after_retention, replay_after_retention_outcome) = service
+            .save_roadmap_record(&request, "500")
+            .expect("immutable snapshot replay succeeds after source retention");
+        assert_eq!(replay_after_retention, first);
+        assert_eq!(replay_after_retention_outcome, SaveOutcome::AlreadyPresent);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3973,7 +4641,7 @@ mod tests {
             .execute("INSERT INTO runs (record_id, content_hash, document_json, created_at) VALUES ('old-run', 'run-hash', '{}', '100'), ('new-run', 'new-run-hash', '{}', '300')", [])
             .expect("run fixtures insert");
         connection
-            .execute("INSERT INTO attempts (record_id, content_hash, document_json, created_at) VALUES ('old-attempt', 'attempt-hash', '{}', '100'), ('linked-attempt', 'linked-attempt-hash', '{}', '100')", [])
+            .execute("INSERT INTO attempts (record_id, content_hash, document_json, created_at) VALUES ('old-attempt', 'attempt-hash', '{}', '100'), ('linked-attempt', 'linked-attempt-hash', '{\"runId\":\"old-run\",\"status\":\"completed\"}', '100')", [])
             .expect("attempt fixtures insert");
         connection
             .execute("INSERT INTO result_records (result_id, attempt_id, content_hash, document_json, created_at) VALUES ('old-result', 'linked-attempt', 'result-hash', '{}', '100')", [])
@@ -3991,8 +4659,8 @@ mod tests {
         let preview = service
             .preview_storage_retention_at(30, "200")
             .expect("retention previews");
-        assert_eq!(preview.eligible_records, 4);
-        assert_eq!(preview.confirmation, "DELETE 4 LOCAL RECORDS");
+        assert_eq!(preview.eligible_records, 5);
+        assert_eq!(preview.confirmation, "DELETE 5 LOCAL RECORDS");
         assert!(preview
             .protected_tables
             .iter()
@@ -4001,8 +4669,8 @@ mod tests {
             service.cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 4,
-                confirmation: "DELETE 3 LOCAL RECORDS".to_owned(),
+                expected_records: 5,
+                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
             }),
             Err(StorageError::RetentionConfirmationRequired)
         );
@@ -4017,11 +4685,25 @@ mod tests {
             .cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 4,
-                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
+                expected_records: 5,
+                confirmation: "DELETE 5 LOCAL RECORDS".to_owned(),
             })
             .expect("retention cleans eligible history");
-        assert_eq!(result.deleted_records, 4);
+        assert_eq!(result.deleted_records, 5);
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM attempts", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM result_records", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
         assert_eq!(
             connection
                 .query_row(
@@ -4050,7 +4732,7 @@ mod tests {
                     |row| row.get::<_, u32>(0)
                 )
                 .unwrap(),
-            1
+            0
         );
         assert_eq!(
             connection
@@ -4086,6 +4768,8 @@ mod tests {
             case_id: "case".to_owned(),
             repetitions: 1,
             pack_id: None,
+            category_id: Some("reasoning".to_owned()),
+            category_name: Some("Reasoning".to_owned()),
             materialization_seed: Some(42),
             arena_wall_time_ms: Some(12.5),
             summary: json!({"total": 1, "uncertainty": 0.1, "tieMargin": 0.2}),
@@ -4127,6 +4811,22 @@ mod tests {
         );
         assert_eq!(service.get_arena_summary("arena-1").unwrap(), Some(first));
         assert_eq!(service.list_arena_summaries().unwrap().len(), 1);
+        let mut incomplete_category = summary.clone();
+        incomplete_category.arena_id = "arena-2".to_owned();
+        incomplete_category.category_name = None;
+        assert_eq!(
+            service.save_arena_summary(&incomplete_category, "400"),
+            Err(StorageError::InvalidRecordId)
+        );
+        let mut legacy_summary = summary.clone();
+        legacy_summary.category_id = None;
+        legacy_summary.category_name = None;
+        let legacy_json = serde_json::to_value(legacy_summary).expect("legacy summary serializes");
+        assert!(!legacy_json.as_object().unwrap().contains_key("categoryId"));
+        assert!(!legacy_json
+            .as_object()
+            .unwrap()
+            .contains_key("categoryName"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4145,6 +4845,8 @@ mod tests {
             case_id: "case".to_owned(),
             repetitions: 1,
             pack_id: None,
+            category_id: None,
+            category_name: None,
             materialization_seed: None,
             arena_wall_time_ms: Some(20.0),
             summary: json!({"objectivePassRate": 1.0}),

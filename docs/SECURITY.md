@@ -2,10 +2,10 @@
 
 ## Foundation verdict
 
-The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
-typed status, benchmark/profile/draft persistence, fixed-loopback Ollama discovery, one-shot execution, Runs read
-operations, bounded blind-evaluation preparation/lock, and read-only official-pack/published-version commands; they
-operate only on typed data and the app-owned local storage root. Draft saves use bounded requests and
+The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands use
+typed benchmark/profile/evidence storage, fixed-loopback local discovery and execution, bounded model operations,
+read-only Runs/blind-review/official-pack operations, and a separate explicit BYOK provider flow. They do not expose an
+arbitrary shell or filesystem browser. Draft saves use bounded requests and
 optimistic revisions; publishing revalidates the stored document before creating an immutable benchmark version. The
 capability file contains no plugin permissions. The worker accepts a tagged protocol, validates its version, job ID,
 and request bound, performs one generation at most, returns one typed terminal response, and exits.
@@ -19,11 +19,13 @@ the local webview store; browser preview neither reads nor writes localStorage a
 uses fixed selectors for normalized data attributes, with no arbitrary style strings, remote themes, imports, accounts,
 credentials, or telemetry.
 
-Phase 16 external-provider code is catalog, arithmetic, and explanatory UI only. It accepts no API key, secret, environment
-value, endpoint, credential file, or provider response; it makes no network call and has no persistence boundary. Cost
-estimation validates dated price snapshots and bounded usage, fails closed when prices are missing/invalid, and budget
-decisions never authorize execution by themselves. Unknown provider-selection fields, including credential-like fields,
-are discarded before a sanitized summary is returned. Local Ollama remains the only executable runtime.
+The BYOK flow supports typed OpenAI-compatible, OpenAI, Anthropic, and Gemini adapters. Provider calls require explicit
+per-request network consent and validated HTTPS endpoint/model configuration. On Windows the API key is stored in Windows
+Credential Manager; unsupported credential and transport platforms fail closed (Linux BYOK is not currently available).
+Secrets are held in secret-wrapped buffers for request construction and are omitted from debug output and persisted
+history. External history contains sanitized provider/model/usage/cost/policy metadata, not prompt/response text or
+credential material. Budget limits can require confirmation or deny a request; they do not reserve or guarantee a charge.
+Provider-reported model identity remains unverified.
 
 Phase 17 adds a dependency-free review checker. It reads fixed repository configuration and Git-tracked paths, never emits
 file contents, and validates the Windows/Linux pull-request matrix, deterministic worker sidecar packaging, local-only CSP/font and
@@ -31,10 +33,14 @@ loopback invariants, secret-file ignore rules, lockfiles, and obvious key-materi
 production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
 repository state.
 
-The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
-command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
-does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
-from an already-running local Ollama service; it does not spawn or forcibly terminate that service. Phase 13 adds a
+The release workflow is candidate-validation only and has no publishing permissions or tag/release operations. Release
+publication remains disabled pending server-side repository protections and an independently approved publisher, as
+documented in `docs/RELEASING.md`.
+
+The local runtime adapters accept only plain-HTTP loopback endpoints; the Models surface supplies a fixed Ollama default
+and selected loopback endpoints for LM Studio and llama.cpp. The adapters request health, model metadata, generation,
+and streaming. The `start_local_ollama` command can start Ollama with a shell-free process launch and no user-supplied
+arguments; it does not forcibly terminate the service. Phase 13 adds a
 read-only `read_hardware_snapshot` command with fixed, bounded platform sources; it does not spawn a shell, traverse
 model paths, download files, or send telemetry.
 
@@ -42,7 +48,7 @@ model paths, download files, or send telemetry.
 
 - UI input is presentation state; font selection, scale, accent, radius, surface, and reduced motion are constrained by
   the pure appearance normalizer before reaching CSS data attributes or local webview storage.
-- Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or path.
+- Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or arbitrary filesystem path. Managed GGUF import accepts a bounded relative `.gguf` path that Rust validates under the managed model root.
 - Worker input is untrusted JSON and is rejected on malformed JSON, unsupported protocol versions, or unsafe job IDs.
 - The execution command checks only the fixed dev worker sibling and then the target-triple-suffixed
   `binaries/prompt-arena-worker-<TARGET_TRIPLE>` Tauri resource, supplies no shell, PATH lookup, user path, download, or
@@ -50,6 +56,14 @@ model paths, download files, or send telemetry.
 - Benchmark documents are capped at 256 KiB of raw input before serde parsing or canonicalization, then deserialized and
   manually validated at the domain boundary; oversized input returns a typed `benchmark_too_large` error and unknown
   JSON fields are retained.
+- The Tauri one-shot execution command loads the immutable stored benchmark version and derives the selected task/case,
+  canonical prompt, typed robustness transform, verifier policy/expectation, and Docker policy on the backend before
+  launching the worker. It requires the submitted profile snapshot to match exactly one stored profile and derives the
+  system prompt from that stored profile and authoritative task. Renderer-supplied prompt, system prompt, profile fields,
+  generation options, or boundary metadata are not authority; generation parameters must equal the supported profile
+  projection and seed, stops, tools, and response format follow a fixed backend policy. When an Ollama profile omits an
+  endpoint, execution is restricted to the canonical `127.0.0.1:11434` endpoint. Explicit saved loopback endpoints must
+  match after normalization; missing identities, unsupported parameters, malformed transforms, and mismatches fail closed.
 - Published version reads validate the deterministic bounded `benchmark-id@version` identity and return only the stored
   canonical document JSON plus summary. They do not import, rewrite, re-canonicalize, or publish benchmark history.
 - Benchmark drafts are canonicalized before local storage and enforce portable IDs, a 256-byte title limit, a 256 KiB
@@ -80,10 +94,12 @@ model paths, download files, or send telemetry.
   ephemeral; no hardware telemetry or user override is persisted.
 - Cancellation is cooperative: the client checks the token between socket reads and streamed chunks and returns a typed
   cancellation error. It has no remote process-kill capability.
-- The run-plan helper accepts no endpoint, credential, shell, provider, or lifecycle input. It validates the published
+- The local run-plan helper accepts no shell, arbitrary provider, or lifecycle input. It validates the published
   version/document identity, selected task/case identity, non-empty prompt, immutable profile identity/runtime/model,
-  supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It always emits the
-  fixed/default `http://127.0.0.1:11434` Ollama configuration and delegates only to the existing one-shot worker.
+  supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It emits only a
+  loopback runtime configuration and delegates local generation to the existing one-shot worker. The profile's optional
+  reasoning-effort `none` value is sent only to Ollama (`think: false`) and LM Studio (`reasoning_effort: "none"`);
+  llama.cpp does not advertise that parameter and rejects it during negotiation.
 - The Arena view accepts only selected identities returned by typed immutable version/profile reads and the selected
   stored document. It exposes no raw JSON, endpoint, credential, cancellation, or process-lifecycle input; progress and
   terminal text are rendered as text and no run record exists until explicit one-shot execution.
@@ -109,15 +125,27 @@ model paths, download files, or send telemetry.
   evidence. The parent gate also keeps that evidence hidden for loading, empty, and error states; only a successful lock
   re-enables post-lock audit IDs. The persisted record contains no response text, and scores/ranking are validated at
   the Rust boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
-- Phase 14 comparability is a pure in-memory diagnostic over one local run and its typed attempts. Its panel is nested
-  under the same parent-owned blind-evaluation gate, so it cannot expose model/profile/provider/metrics/objective
-  evidence or attempt IDs while the gate suppresses AttemptDetail. It creates no records, reads no artifacts, and makes
-  no official ranking, cross-run, regression, tournament, AI-judge, calibration, or cost claim.
+- Phase 14 comparability remains a pure in-memory diagnostic over one local run and its typed attempts. The separate
+  Insights surface stores bounded single-model suite summaries, per-run metrics, single-run comparisons across saved
+  single-model/Arena sources, repeated single-model regression intervals, Elo v1/Bradley–Terry v1 rating snapshots,
+  robustness outcomes, and integrity-checked repro bundles. Derived comparisons retain source IDs/content hashes on
+  export. These partial features do not implement family-wise interval correction, an official global ranking,
+  tournament policy, or AI judging.
+- Roadmap-record writes bind `single_model_benchmark` payloads to the exact persisted run, attempt, profile revision,
+  benchmark version, task/case, objective, and performance evidence; `performance_lab` must match that benchmark's
+  derived metrics, and `single_model_suite` cases and totals are checked against the published case list and referenced
+  run/attempt outcomes. These checks run on writes so existing immutable snapshots remain readable after retention
+  removes source rows. The `hardware` field in a single-model snapshot is only shape-checked: it is renderer-captured
+  context, not backend-attested telemetry. Historical comparisons, rating sets, robustness results, and repro-bundle
+  snapshots remain bounded renderer-derived records; Rust does not recompute their analysis from source evidence.
 - Phase 15 appearance preferences are sanitized local presentation state only. The browser surface is explicitly
-  no-persistence; desktop storage is limited to one local preference value and contains no prompts, runs, attempts,
-  models, profiles, metrics, or credentials.
-- Phase 16 provider metadata and cost helpers are ephemeral and read-only. They never accept, log, persist, export, or
-  transmit secrets; all four external identities remain unconfigured, identity-unverified, and network-not-wired.
+  no-persistence; desktop appearance-preference storage contains only one normalized preference value. Separate
+  app-owned SQLite storage holds product records, including runs, attempts, profiles, model metadata, metrics, and
+  sanitized external-provider evidence; API keys remain in OS credential storage on supported Windows builds.
+- BYOK commands accept key material only during configuration and do not return it. External generation requires
+  explicit consent; request and response bodies are bounded, transport is HTTPS on supported Windows builds, and
+  persisted external records omit prompts, responses, keys, and headers. Linux provider storage/transport remains
+  explicitly unavailable.
 - Phase 17 boundary checks are fail-closed diagnostics over repository policy. They inspect every Git-tracked capability JSON
   under `src-tauri/capabilities`, require its current empty/allowlisted permission boundary, and parse exact reviewed
   `script-src`, `style-src`, `font-src`, and `connect-src` CSP allowlists. They report only generic failures or paths, never
@@ -147,6 +175,9 @@ process that can modify app-owned files can still race separate path checks and 
 - Worker execution selects only the fixed app-owned development sibling or the target-triple-suffixed Tauri resource and
   supplies no shell, PATH lookup, or user path. Its `is_file` validation and subsequent spawn are separate, so the
   selected worker executable can still be replaced between validation and spawn.
+- `start_local_ollama` launches `ollama serve` without a shell or caller-supplied arguments, but resolves `ollama` through
+  `PATH`. A lower-trust actor would need control of a searched directory or an elevated-launch condition for this to
+  become a distinct execution path; neither was established in the Standard scan.
 
 Portable no-follow handles or equivalent OS-specific open/execute primitives would be required to close these races; they
 are not implemented in this bounded cycle. Benchmark input is not a parsing-order finding: the raw document size is
@@ -154,9 +185,10 @@ checked against 256 KiB before `serde_json::from_str`, and draft input is size-c
 
 ## Required future controls
 
-External/cloud provider adapters, credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, broader official-pack coverage, Docker-backed coding sandbox execution, unified model search, duplicate management, empirical recommendation history, full model-library management,
-broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
+Linux secure credential storage and BYOK transport, Docker-backed coding execution, family-wise regression intervals,
+calibrated ratings for correlated evidence, full robustness semantic-preservation evidence, full Repro reconstruction, complete
+hardware/energy telemetry, multi-rater human evaluation, AI judging, unified model search, empirical recommendation
+history, and broader official-pack coverage are not complete. When extended, these require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.
 Historical benchmark records must not be deleted as a migration side effect.
