@@ -55,6 +55,7 @@ describe("read-only results formatting", () => {
       details: { status: "failed", passedTests: 1, totalTests: 3 },
     })?.verifierKind).toBe("docker_contract");
     expect(dockerEvaluationStatusLabel("unavailable")).toBe("Verifier unavailable");
+    expect(dockerEvaluationStatusLabel("cancelled")).toBe("Verifier cancelled");
     expect(dockerEvaluationStatusLabel("failed")).toBe("Verifier failed");
     expect(dockerEvaluationStatusLabel("unknown-from-import")).toBe("Verifier status unknown");
   });

@@ -20,6 +20,7 @@ const SMOKE_WAIT_MS = 2_500;
 const SMOKE_TERMINATION_WAIT_MS = 5_000;
 const UNINSTALL_DISAPPEAR_WAIT_MS = 5_000;
 const UNINSTALL_POLL_INTERVAL_MS = 100;
+const MSI_TIMEOUT_MS = 120_000;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
   const configPath = path.join(repositoryRoot, "src-tauri", "tauri.conf.json");
@@ -61,6 +62,10 @@ export function verifyPackageArtifacts({ platform, version, artifactDirectory, m
       .filter((spec) => !spec.required && !listedNames.has(packageArtifactName(normalizedPlatform, version, spec.kind)))
       .map(({ kind }) => kind),
   };
+}
+
+export function windowsInstallerPath(artifactDirectory, version, kind) {
+  return path.join(artifactDirectory, packageArtifactName("windows", version, kind));
 }
 
 function commandAvailable(command) {
@@ -117,6 +122,87 @@ function findUninstaller(installDirectory) {
   const uninstaller = walkFiles(installDirectory).find((filePath) => /^uninstall.*\.exe$/iu.test(path.basename(filePath)));
   if (!uninstaller) throw new Error("NSIS uninstaller was not found in the installed directory");
   return uninstaller;
+}
+
+export function buildMsiexecArguments(action, installer, installDirectory) {
+  if (action === "install") {
+    if (typeof installDirectory !== "string" || !installDirectory || installDirectory.includes('"')) {
+      throw new Error("MSI install directory is invalid");
+    }
+    return ["/i", installer, "/qn", "/norestart", `INSTALLDIR="${installDirectory}"`];
+  }
+  if (action === "uninstall") return ["/x", installer, "/qn", "/norestart"];
+  throw new Error(`unsupported MSI action: ${action}`);
+}
+
+export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = false } = {}) {
+  if (exitCode === 0) return { rebootRequired: false, notInstalled: false };
+  if (exitCode === 3010) return { rebootRequired: true, notInstalled: false };
+  if (exitCode === 1641) throw new Error(`MSI ${action} initiated a system restart despite /norestart (exit code 1641)`);
+  if (allowNotInstalled && exitCode === 1605) return { rebootRequired: false, notInstalled: true };
+  throw new Error(`MSI ${action} failed with msiexec exit code ${exitCode}`);
+}
+
+function runMsiexec(args) {
+  try {
+    execFileSync("msiexec.exe", args, { stdio: "ignore", timeout: MSI_TIMEOUT_MS });
+    return 0;
+  } catch (error) {
+    if (error && Number.isInteger(error.status)) return error.status;
+    throw error;
+  }
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : "Package verification failed.";
+}
+
+function appendCleanupError(currentError, phase, cleanupError) {
+  const message = `${phase} failed: ${errorMessage(cleanupError)}`;
+  return currentError
+    ? new Error(`${errorMessage(currentError)}; ${message}`, { cause: currentError })
+    : new Error(message, { cause: cleanupError });
+}
+
+async function msiSmoke(artifactDirectory, metadata, smokeRoot, lines) {
+  const installer = windowsInstallerPath(artifactDirectory, metadata.version, "msi");
+  const installDirectory = path.join(smokeRoot, "msi-installed");
+  const expectedExecutable = path.join(installDirectory, `${metadata.mainBinaryName}.exe`);
+  let executable = expectedExecutable;
+  let installAttempted = false;
+  let smokeError;
+
+  try {
+    installAttempted = true;
+    const installCode = runMsiexec(buildMsiexecArguments("install", installer, installDirectory));
+    const installResult = checkMsiexecExitCode(installCode, "install");
+    lines.push(`MSI clean install: passed (msiexec exit code ${installCode}${installResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
+    executable = findInstalledExecutable(installDirectory, metadata.productName, metadata.mainBinaryName);
+    lines.push(`MSI installed executable: found (${path.basename(executable)}).`);
+    await launchAndStop(executable, []);
+    lines.push("MSI installed executable start: passed.");
+    await launchAndStop(executable, []);
+    lines.push("MSI installed executable restart: passed.");
+  } catch (error) {
+    smokeError = error;
+  } finally {
+    if (installAttempted) {
+      try {
+        const uninstallCode = runMsiexec(buildMsiexecArguments("uninstall", installer));
+        const uninstallResult = checkMsiexecExitCode(uninstallCode, "uninstall", { allowNotInstalled: true });
+        if (uninstallResult.notInstalled) {
+          if (fs.existsSync(expectedExecutable)) throw new Error("MSI product was not registered for uninstall but its executable remains");
+          lines.push("MSI teardown: no registered product remained (msiexec exit code 1605).");
+        } else {
+          if (!(await waitForPathToDisappear(executable))) throw new Error("MSI uninstall left the installed executable behind after the removal wait");
+          lines.push(`MSI silent uninstall: passed (msiexec exit code ${uninstallCode}${uninstallResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
+        }
+      } catch (error) {
+        smokeError = appendCleanupError(smokeError, "MSI teardown", error);
+      }
+    }
+  }
+  if (smokeError) throw smokeError;
 }
 
 async function waitForPathToDisappear(filePath) {
@@ -183,12 +269,14 @@ function launchAndStop(command, args) {
 async function windowsSmoke(artifactDirectory, metadata, lines) {
   if (process.platform !== "win32") {
     lines.push("NSIS clean-install smoke: skipped (the current runner is not Windows).");
+    lines.push("MSI clean-install smoke: skipped (the current runner is not Windows).");
     return;
   }
-  const installer = path.join(artifactDirectory, packageArtifactName("windows", metadata.version, "nsis"));
+  const installer = windowsInstallerPath(artifactDirectory, metadata.version, "nsis");
   const smokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-arena-p7-windows-"));
   const installDirectory = path.join(smokeRoot, "installed");
   try {
+    await msiSmoke(artifactDirectory, metadata, smokeRoot, lines);
     execFileSync(installer, ["/S", `/D=${installDirectory}`], { stdio: "ignore", timeout: 120_000 });
     const executable = findInstalledExecutable(installDirectory, metadata.productName, metadata.mainBinaryName);
     lines.push(`NSIS clean install: passed (${path.basename(executable)}).`);

@@ -43,6 +43,11 @@ and Trivy are unavailable in the local environment, and GitHub Dependency Review
 the branch's dependency gate is considered verified. GitHub Actions references in the edited CI, CodeQL, and Dependency
 Review workflows are pinned to full commit SHAs.
 
+The lockfile includes `glib 0.18.5`, affected by [RustSec RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html),
+an informational unsoundness advisory fixed in `glib >=0.20.0`. The advisory names `VariantStrIter` iterator methods;
+application reachability and exploitability were not established in this review. This remains an unresolved transitive-
+dependency review item; no clean Rust dependency-audit result is available.
+
 The release workflow is candidate-validation only and has no publishing permissions or tag/release operations. Release
 publication remains disabled pending server-side repository protections and an independently approved publisher, as
 documented in `docs/RELEASING.md`.
@@ -104,8 +109,15 @@ model paths, download files, or send telemetry.
   Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are not guessed:
   they remain null with unavailable status/confidence when feature detection is absent. The snapshot is read-only and
   ephemeral; no hardware telemetry or user override is persisted.
-- Cancellation is cooperative: the client checks the token between socket reads and streamed chunks and returns a typed
-  cancellation error. It has no remote process-kill capability.
+- Cancellation is scoped to an active Arena run ID. If cancellation wins before the app receives the worker's terminal
+  response, Tauri stops only the app-owned worker and asks a fresh one-shot worker to persist a typed cancelled outcome.
+  A terminal response already received by the app is preserved. After its terminal outcome is assembled, cancellation
+  is rejected while the run ID stays reserved through persistence. The local request can stop while the model service
+  continues inference; the app has no remote model-process kill capability.
+- Docker verification checks the same run cancellation token while waiting on the bounded local Docker CLI process.
+  Cancellation stops that CLI and attempts `docker container rm --force` for the app-owned container. The persisted
+  verifier status is `cancelled` with no candidate score; cleanup failure is disclosed and is not represented as a
+  successful cleanup.
 - The local run-plan helper accepts no shell, arbitrary provider, or lifecycle input. It validates the published
   version/document identity, selected task/case identity, non-empty prompt, immutable profile identity/runtime/model,
   supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It emits only a
@@ -113,8 +125,9 @@ model paths, download files, or send telemetry.
   reasoning-effort `none` value is sent only to Ollama (`think: false`) and LM Studio (`reasoning_effort: "none"`);
   llama.cpp does not advertise that parameter and rejects it during negotiation.
 - The Arena view accepts only selected identities returned by typed immutable version/profile reads and the selected
-  stored document. It exposes no raw JSON, endpoint, credential, cancellation, or process-lifecycle input; progress and
-  terminal text are rendered as text and no run record exists until explicit one-shot execution.
+  stored document. It exposes no raw JSON, endpoint, credential, or process-lifecycle input. Its cancel control sends
+  only the current run ID to the app; progress and terminal text are rendered as text and no run record exists until
+  explicit one-shot execution.
 - Completed attempt summaries are bounded metadata only: they omit response text, are stored in the immutable attempt's
   flattened extra fields, and are rejected when they exceed the 8 KiB summary bound. The effective-configuration snapshot
   retains only approved provider/endpoint/runtime/profile/model, runtime scalar, and capability fields; the full

@@ -69,6 +69,7 @@ export type ArenaExecutionRequest = {
 export type ExecutePlan = (plan: RunPlan) => Promise<PersistedExecution>;
 
 export type ArenaProgress = {
+  runId?: string;
   completed: number;
   total: number;
   currentCompetitor: string;
@@ -322,7 +323,7 @@ export async function executeArena(
       const runId = `${request.arenaId}-${profileIndex + 1}-${repetition}`;
       const sampleIndex = profileIndex * request.repetitions + repetition - 1;
       const sampleStartedAtMs = now();
-      const progress = (status: ArenaSampleStatus, completedCount: number, execution: PersistedExecution | null = null, error: string | null = null, sampleDurationMs: number | null = null) => { const timestampMs = now(); onProgress?.({ completed: completedCount, total, currentCompetitor: competitorLabel, repetition, competitorOrdinal: profileIndex, sampleIndex, status, timestampMs, sampleStartedAtMs, sampleElapsedMs: Math.max(0, timestampMs - sampleStartedAtMs), sampleDurationMs, metrics: telemetryMetricsFromExecution(execution), error }); };
+      const progress = (status: ArenaSampleStatus, completedCount: number, execution: PersistedExecution | null = null, error: string | null = null, sampleDurationMs: number | null = null) => { const timestampMs = now(); onProgress?.({ runId, completed: completedCount, total, currentCompetitor: competitorLabel, repetition, competitorOrdinal: profileIndex, sampleIndex, status, timestampMs, sampleStartedAtMs, sampleElapsedMs: Math.max(0, timestampMs - sampleStartedAtMs), sampleDurationMs, metrics: telemetryMetricsFromExecution(execution), error }); };
       progress("preparing", completed);
       if (!shouldContinue()) {
         const durationMs = Math.max(0, now() - sampleStartedAtMs);
@@ -400,6 +401,11 @@ function sanitizeArenaError(error: unknown): string {
   const message = error instanceof Error ? error.message : "The competitor failed before producing a result.";
   if (!message.trim() || /(api[_ -]?key|authorization|bearer|credential|secret|prompt|response body)/iu.test(message)) return "Execution failed; details withheld.";
   return message.replace(/[\r\n\t]+/gu, " ").slice(0, 180);
+}
+
+export function hasCancelledDockerVerification(execution: PersistedExecution | null): boolean {
+  const dockerEvaluation = execution?.attempt.dockerEvaluation;
+  return isRecord(dockerEvaluation) && dockerEvaluation.status === "cancelled";
 }
 
 export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMetricSummary {

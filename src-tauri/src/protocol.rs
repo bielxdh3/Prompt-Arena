@@ -19,6 +19,11 @@ pub enum WorkerRequest {
         job_id: String,
         plan: RunPlan,
     },
+    CancelGenerateOnce {
+        protocol_version: u16,
+        job_id: String,
+        plan: RunPlan,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

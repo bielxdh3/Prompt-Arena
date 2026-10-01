@@ -31,6 +31,10 @@ Validation is proportional to the foundation and must remain honest about what i
   draft revision/bounds/publish behavior, Runs read-API,
   orchestration, and runtime-contract tests:
   `cargo test --manifest-path src-tauri/Cargo.toml --all-targets`.
+- Cancellation tests cover run-ID registration, duplicate/late cancellation rejection, active worker cancellation, Docker CLI
+  cancellation, and forced cleanup of the app-owned named container. They do not replace installed desktop cancellation acceptance.
+- `npm test` includes package-verification tests for MSI/NSIS artifact selection, silent MSI install/uninstall arguments,
+  and installer exit-code handling. Windows CI performs the actual MSI install, launch, restart, and uninstall smoke.
 - Hardware tests cover fixed Linux memory parsing, explicit unavailable metrics, snapshot GPU/VRAM non-guessing, and
   the typed snapshot shape. Ollama tests cover compatibility with optional/future model metadata fields.
 - Ollama mock tests cover health, local model listing/metadata, 512-record and per-record 256 KiB metadata bounds,
@@ -44,7 +48,11 @@ Validation is proportional to the foundation and must remain honest about what i
   guards, aggregate response-header bytes/count, and chunk-trailer bytes/count.
 - Storage tests cover typed profile list/register behavior, deterministic `profile-id@revision` identity validation,
   idempotent replay, immutable conflict, and the complete 256 KiB profile request bound covering `parameters` and
-  flattened `extra`; immutable metadata remains covered by the shared 1 MiB ceiling. Roadmap-record storage tests also
+  flattened `extra`; immutable metadata remains covered by the shared 1 MiB ceiling. Model-library tests cover a
+  64 KiB streamed GGUF SHA-256 with a bounded header prefix, content-hash-derived immutable import IDs, and
+  metadata-only rediscovery that retains the import record while explicitly marking current bytes unverified and
+  avoiding a conflicting write. Effective-config tests verify profile digests/import hashes and the status that they
+  were not rechecked against runtime-loaded bytes. Roadmap-record storage tests also
   bind single-model records to persisted run/attempt/profile/version sources, recompute Performance Lab metrics from
   attempt summaries, verify suite case membership and aggregate outcomes, and reject forged profile, metric, and suite
   summary data.
@@ -56,8 +64,8 @@ Validation is proportional to the foundation and must remain honest about what i
 - Worker storage-boundary smoke: send one `foundation_check` JSON request to `prompt-arena-worker` and verify one
   completed JSON response. Resolver tests cover the fixed dev sibling and the target-triple-suffixed packaged
   `binaries/prompt-arena-worker-<TARGET_TRIPLE>` Tauri resource, while the config test checks the Windows/Linux sidecar
-  manifest and release preparation hook. The worker also accepts a bounded `GenerateOnce` request; the desktop command
-  owns persistence of its returned terminal outcome.
+  manifest and release preparation hook. The worker also accepts bounded `GenerateOnce` and `CancelGenerateOnce`
+  requests; the desktop command owns persistence of the returned terminal outcome.
 
 ## Not claimed yet
 

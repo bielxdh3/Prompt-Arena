@@ -53,6 +53,8 @@ describe("i18n", () => {
     expect(translateText("pt-BR", "Docker-backed text verification required")).toBe("Verificação de texto via Docker obrigatória");
     expect(translateText("pt-BR", "Verifier unavailable")).toBe("Verificação indisponível");
     expect(translateText("pt-BR", "Docker verifier status")).toBe("Status do verificador Docker");
+    expect(translateText("pt-BR", "Verifier cancelled")).toBe("Verificação cancelada");
+    expect(translateText("pt-BR", "Cancel Arena")).toBe("Cancelar Arena");
   });
 
   it("translates the overview local-model metric label", () => {

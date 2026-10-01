@@ -2113,11 +2113,27 @@ fn effective_config_snapshot(
         ("sourceId", "profileSourceId"),
         ("endpoint", "profileEndpoint"),
         ("path", "profilePath"),
+        ("modelDigest", "modelDigest"),
+        ("modelContentHash", "modelContentHash"),
+        ("modelContentHashStatus", "modelContentHashStatus"),
         ("quantizationLevel", "profileQuantizationLevel"),
     ] {
         if let Some(value) = plan.profile_revision.extra.get(profile_key) {
             snapshot.insert(snapshot_key.to_owned(), value.clone());
         }
+    }
+    if snapshot
+        .get("modelContentHash")
+        .is_some_and(|value| value.as_str().is_some())
+    {
+        snapshot.insert(
+            "modelContentHashIdentityScope".to_owned(),
+            json!("managed_import_record"),
+        );
+        snapshot.insert(
+            "modelContentHashRuntimeVerification".to_owned(),
+            json!("not_reverified_for_this_execution"),
+        );
     }
     snapshot.insert("model".to_owned(), json!(plan.generation.model));
     snapshot.insert(
@@ -3132,6 +3148,16 @@ mod tests {
         plan.profile_revision
             .extra
             .insert("quantizationLevel".to_owned(), json!("Q4_K_M"));
+        plan.profile_revision
+            .extra
+            .insert("modelDigest".to_owned(), json!("sha256:model"));
+        plan.profile_revision
+            .extra
+            .insert("modelContentHash".to_owned(), json!("a".repeat(64)));
+        plan.profile_revision.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("import_identity_not_rechecked"),
+        );
 
         let snapshot = effective_config_snapshot(
             &plan,
@@ -3145,6 +3171,16 @@ mod tests {
         assert_eq!(snapshot["profileModelId"], json!("model-q4"));
         assert_eq!(snapshot["profileSourceId"], json!("ollama-source"));
         assert_eq!(snapshot["profileQuantizationLevel"], json!("Q4_K_M"));
+        assert_eq!(snapshot["modelDigest"], json!("sha256:model"));
+        assert_eq!(snapshot["modelContentHash"], json!("a".repeat(64)));
+        assert_eq!(
+            snapshot["modelContentHashStatus"],
+            json!("import_identity_not_rechecked")
+        );
+        assert_eq!(
+            snapshot["modelContentHashRuntimeVerification"],
+            json!("not_reverified_for_this_execution")
+        );
     }
 
     #[test]

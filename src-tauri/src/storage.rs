@@ -16,8 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::domain::{
     canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
     validate_artifact_ref, validate_benchmark_document, validate_benchmark_document_size, Attempt,
-    BlindEvaluationRecord, ImmutableResultReference, ModelOperation, ModelRecord,
-    ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+    BlindEvaluationRecord, ImmutableResultReference, ModelContentHashStatus, ModelOperation,
+    ModelRecord, ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
     MAX_BENCHMARK_DOCUMENT_BYTES,
 };
 
@@ -998,11 +998,60 @@ impl StorageService {
         created_at: &str,
     ) -> Result<SaveOutcome, StorageError> {
         validate_profile_revision(revision)?;
+        let mut persisted_revision = revision.clone();
+        if let Some(model_content_hash) = revision
+            .extra
+            .get("modelContentHash")
+            .and_then(Value::as_str)
+        {
+            let model_id = revision
+                .extra
+                .get("modelId")
+                .and_then(Value::as_str)
+                .ok_or(StorageError::InvalidProfileRevision)?;
+            let record = self
+                .get_model_record(model_id)?
+                .ok_or(StorageError::InvalidProfileRevision)?;
+            let source_id = revision.extra.get("sourceId").and_then(Value::as_str);
+            let backend = revision.extra.get("backend").cloned().and_then(|value| {
+                serde_json::from_value::<crate::domain::ModelBackend>(value).ok()
+            });
+            let path = revision.extra.get("path").and_then(Value::as_str);
+            let endpoint = revision.extra.get("endpoint").and_then(Value::as_str);
+            let digest = revision.extra.get("modelDigest").and_then(Value::as_str);
+            let quantization = revision
+                .extra
+                .get("quantizationLevel")
+                .and_then(Value::as_str);
+            if !record.managed
+                || !matches!(record.backend, crate::domain::ModelBackend::LlamaCpp)
+                || revision.runtime != "llama_cpp"
+                || record.content_hash.as_deref() != Some(model_content_hash)
+                || record.name != revision.model
+                || source_id != Some(record.source_id.as_str())
+                || backend.as_ref() != Some(&record.backend)
+                || path != record.path.as_deref()
+                || path != record.managed_path.as_deref()
+                || endpoint != record.endpoint.as_deref()
+                || digest != record.digest.as_deref()
+                || quantization != record.quantization_level.as_deref()
+            {
+                return Err(StorageError::InvalidProfileRevision);
+            }
+            // Saving the profile cannot establish that the path or runtime still
+            // contains these bytes. Canonicalize from the immutable stored record
+            // and explicitly retain the import-time-only scope.
+            persisted_revision.extra.insert(
+                "modelContentHashStatus".to_owned(),
+                serde_json::json!("import_identity_not_rechecked"),
+            );
+        }
+        validate_profile_revision(&persisted_revision)?;
         save_immutable_json(
             &self.connection()?,
             JsonTable::ProfileRevisions,
-            &revision.profile_revision_id,
-            revision,
+            &persisted_revision.profile_revision_id,
+            &persisted_revision,
             created_at,
         )
     }
@@ -1444,6 +1493,80 @@ impl StorageService {
         Ok((size, bytes))
     }
 
+    /// Hashes the current bytes of a managed model for explicit import or another
+    /// caller that deliberately requests a full-file identity check. Discovery
+    /// must use `read_managed_model_prefix` instead so it never scans a multi-GB
+    /// model just to refresh catalog metadata.
+    pub fn hash_managed_model(&self, relative_path: &str) -> Result<(u64, String), StorageError> {
+        let (size, _, content_hash) = self.read_managed_model_prefix_and_hash(relative_path, 0)?;
+        Ok((size, content_hash))
+    }
+
+    /// Reads a bounded header prefix and hashes the same streamed byte sequence.
+    /// This is intended for explicit managed-model import, where both GGUF
+    /// metadata and the import-time artifact identity are required.
+    pub fn read_managed_model_prefix_and_hash(
+        &self,
+        relative_path: &str,
+        max_prefix_bytes: usize,
+    ) -> Result<(u64, Vec<u8>, String), StorageError> {
+        validate_managed_model_path(relative_path)?;
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(StorageError::InvalidRecordId);
+        }
+        if metadata.len() > MAX_MANAGED_MODEL_BYTES {
+            return Err(StorageError::MetadataTooLarge);
+        }
+
+        let mut file = fs::File::open(&target).map_err(StorageError::from_io)?;
+        let opened_metadata = file.metadata().map_err(StorageError::from_io)?;
+        if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+        let prefix_limit = max_prefix_bytes.min(MAX_MODEL_METADATA_BYTES);
+        let mut prefix = Vec::with_capacity(metadata.len().min(prefix_limit as u64) as usize);
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut size = 0_u64;
+        loop {
+            let read = file.read(&mut buffer).map_err(StorageError::from_io)?;
+            if read == 0 {
+                break;
+            }
+            size = size
+                .checked_add(read as u64)
+                .filter(|size| *size <= MAX_MANAGED_MODEL_BYTES)
+                .ok_or(StorageError::MetadataTooLarge)?;
+            hasher.update(&buffer[..read]);
+            if prefix.len() < prefix_limit {
+                let prefix_bytes = (prefix_limit - prefix.len()).min(read);
+                prefix.extend_from_slice(&buffer[..prefix_bytes]);
+            }
+        }
+        let final_metadata = file.metadata().map_err(StorageError::from_io)?;
+        let modified_during_read = opened_metadata
+            .modified()
+            .ok()
+            .zip(final_metadata.modified().ok())
+            .is_some_and(|(opened, finished)| opened != finished);
+        if size != metadata.len() || final_metadata.len() != metadata.len() || modified_during_read
+        {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+        let digest = hasher.finalize();
+        let content_hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        Ok((size, prefix, content_hash))
+    }
+
     pub fn remove_managed_model(
         &self,
         relative_path: &str,
@@ -1454,9 +1577,7 @@ impl StorageService {
             validate_sha256(expected_content_hash)?;
         }
 
-        let target =
-            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
-        let (size, content_hash) = hash_managed_model_file(&target)?;
+        let (size, content_hash) = self.hash_managed_model(relative_path)?;
         if expected_content_hash
             .is_some_and(|expected| !expected.eq_ignore_ascii_case(&content_hash))
         {
@@ -3793,6 +3914,29 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
                 .map_err(|_| StorageError::InvalidProfileRevision)?;
         }
     }
+    if let Some(status) = revision.extra.get("modelContentHashStatus") {
+        match status.as_str() {
+            Some("not_available") => {
+                if revision
+                    .extra
+                    .get("modelContentHash")
+                    .is_some_and(|hash| !hash.is_null())
+                {
+                    return Err(StorageError::InvalidProfileRevision);
+                }
+            }
+            Some("verified_at_import" | "import_identity_not_rechecked") => {
+                if !revision
+                    .extra
+                    .get("modelContentHash")
+                    .is_some_and(|hash| hash.as_str().is_some())
+                {
+                    return Err(StorageError::InvalidProfileRevision);
+                }
+            }
+            _ => return Err(StorageError::InvalidProfileRevision),
+        }
+    }
     if let Some(backend) = revision.extra.get("backend").and_then(Value::as_str) {
         if backend != revision.runtime {
             return Err(StorageError::InvalidProfileRevision);
@@ -3882,6 +4026,15 @@ fn validate_model_record(record: &ModelRecord) -> Result<(), StorageError> {
     }
     if let Some(content_hash) = &record.content_hash {
         validate_sha256(content_hash)?;
+    }
+    match record.content_hash_status {
+        ModelContentHashStatus::NotAvailable if record.content_hash.is_none() => {}
+        ModelContentHashStatus::VerifiedAtImport
+        | ModelContentHashStatus::ImportIdentityNotRechecked
+            if record.content_hash.is_some()
+                && record.managed
+                && matches!(record.backend, crate::domain::ModelBackend::LlamaCpp) => {}
+        _ => return Err(StorageError::InvalidRecordId),
     }
     validate_model_metadata(&record.metadata)
 }
@@ -3982,41 +4135,6 @@ fn safe_existing_managed_model_path(
         }
     }
     Ok(current)
-}
-
-fn hash_managed_model_file(target: &Path) -> Result<(u64, String), StorageError> {
-    let metadata = fs::symlink_metadata(target).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            StorageError::ArtifactNotFound
-        } else {
-            StorageError::from_io(error)
-        }
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(StorageError::InvalidRecordId);
-    }
-    if metadata.len() > MAX_MANAGED_MODEL_BYTES {
-        return Err(StorageError::MetadataTooLarge);
-    }
-
-    let mut file = fs::File::open(target).map_err(StorageError::from_io)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut size = 0_u64;
-    loop {
-        let read = file.read(&mut buffer).map_err(StorageError::from_io)?;
-        if read == 0 {
-            break;
-        }
-        size = size
-            .checked_add(read as u64)
-            .filter(|size| *size <= MAX_MANAGED_MODEL_BYTES)
-            .ok_or(StorageError::MetadataTooLarge)?;
-        hasher.update(&buffer[..read]);
-    }
-    let digest = hasher.finalize();
-    let content_hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    Ok((size, content_hash))
 }
 
 fn validate_model_metadata(
@@ -4321,7 +4439,7 @@ mod tests {
 
     use crate::domain::{
         sha256_hex, validate_benchmark_document, Attempt, ImmutableResultReference,
-        ProfileRevision, Run,
+        ModelAvailability, ModelBackend, ModelContentHashStatus, ModelRecord, ProfileRevision, Run,
     };
     use crate::external_providers::{
         estimate_external_cost, CostDecision, ExternalGenerationEvidencePayload,
@@ -5813,16 +5931,62 @@ mod tests {
     fn profile_model_artifact_identity_is_bounded_and_hash_checked() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
+        let model_id = "managed-model";
+        let source_id = "llama-source";
+        let managed_path = "models/tiny.gguf";
+        let model_hash = "a".repeat(64);
+        service
+            .save_model_record(
+                &ModelRecord {
+                    model_id: model_id.to_owned(),
+                    source_id: source_id.to_owned(),
+                    backend: ModelBackend::LlamaCpp,
+                    name: "local-model".to_owned(),
+                    endpoint: None,
+                    path: Some(managed_path.to_owned()),
+                    availability: ModelAvailability::Available,
+                    digest: None,
+                    content_hash: Some(model_hash.clone()),
+                    content_hash_status: ModelContentHashStatus::VerifiedAtImport,
+                    size_bytes: Some(8),
+                    family: None,
+                    parameter_size: None,
+                    quantization_level: None,
+                    context_length: None,
+                    modified_at: None,
+                    managed: true,
+                    managed_path: Some(managed_path.to_owned()),
+                    metadata: BTreeMap::new(),
+                },
+                "50",
+            )
+            .expect("managed model import record saves");
         let mut profile = profile_revision();
+        profile.runtime = "llama_cpp".to_owned();
         profile
             .extra
-            .insert("modelDigest".to_owned(), json!("sha256:model"));
+            .insert("modelContentHash".to_owned(), json!(model_hash));
+        profile.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("verified_at_import"),
+        );
+        profile.extra.insert("modelId".to_owned(), json!(model_id));
         profile
             .extra
-            .insert("modelContentHash".to_owned(), json!("a".repeat(64)));
+            .insert("sourceId".to_owned(), json!(source_id));
+        profile
+            .extra
+            .insert("backend".to_owned(), json!(ModelBackend::LlamaCpp));
+        profile.extra.insert("path".to_owned(), json!(managed_path));
         service
             .save_profile_revision(&profile, "100")
             .expect("valid local artifact identity saves");
+        assert_eq!(
+            service.list_profile_revisions().unwrap()[0]
+                .extra
+                .get("modelContentHashStatus"),
+            Some(&json!("import_identity_not_rechecked"))
+        );
 
         let mut invalid_digest = profile_revision();
         invalid_digest.profile_id = "invalid-digest".to_owned();
@@ -5844,6 +6008,34 @@ mod tests {
             .insert("modelContentHash".to_owned(), json!("not-a-sha256"));
         assert_eq!(
             service.save_profile_revision(&invalid_hash, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut unbound_hash = profile_revision();
+        unbound_hash.profile_id = "unbound-content-hash".to_owned();
+        unbound_hash.profile_revision_id = "unbound-content-hash@1".to_owned();
+        unbound_hash.runtime = "llama_cpp".to_owned();
+        unbound_hash
+            .extra
+            .insert("modelContentHash".to_owned(), json!("b".repeat(64)));
+        unbound_hash.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("verified_at_import"),
+        );
+        assert_eq!(
+            service.save_profile_revision(&unbound_hash, "350"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut missing_hash = profile_revision();
+        missing_hash.profile_id = "missing-content-hash".to_owned();
+        missing_hash.profile_revision_id = "missing-content-hash@1".to_owned();
+        missing_hash.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("verified_at_import"),
+        );
+        assert_eq!(
+            service.save_profile_revision(&missing_hash, "400"),
             Err(StorageError::InvalidProfileRevision)
         );
         let _ = fs::remove_dir_all(root);
@@ -5981,6 +6173,13 @@ mod tests {
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         let payload = b"managed model bytes";
         fs::write(&target, payload).unwrap();
+
+        let (read_size, prefix, read_hash) = service
+            .read_managed_model_prefix_and_hash(relative_path, 3)
+            .expect("explicit hash reader streams the whole model and bounds its prefix");
+        assert_eq!(read_size, payload.len() as u64);
+        assert_eq!(prefix, b"man");
+        assert_eq!(read_hash, sha256_hex(payload));
 
         let outside = root.join("outside.gguf");
         fs::write(&outside, payload).unwrap();

@@ -7,6 +7,7 @@ import {
   configureExternalProvider,
   executeExternalGeneration,
   executeRunOnce,
+  cancelRunOnce,
   isDesktopEnvironment,
   lockBlindEvaluation,
   materializeOfficialPack,
@@ -141,6 +142,7 @@ import {
   applyArenaProgress,
   createArenaTelemetry,
   executeArena,
+  hasCancelledDockerVerification,
   groupArenaExecutions,
   rankArenaCompetitors,
   refreshArenaTelemetry,
@@ -2641,6 +2643,8 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
   const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
   const cancelRequestedRef = useRef(false);
+  const activeRunIdRef = useRef<string | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
   const recordsRequestRef = useRef(0);
 
   async function refreshRecords() {
@@ -2800,6 +2804,25 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     }
   }
 
+  async function requestCancel() {
+    if (cancelRequestedRef.current) return;
+    cancelRequestedRef.current = true;
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      setCancelNotice(translate("Queued samples will be skipped; no run is active yet."));
+      return;
+    }
+    setCancelNotice(translate("Cancellation requested. The model service may continue inference."));
+    try {
+      const accepted = await cancelRunOnce(runId);
+      if (!accepted) {
+        setCancelNotice(translate("The active request had already finished; queued samples will be skipped."));
+      }
+    } catch {
+      setCancelNotice(translate("The active request could not be stopped; queued samples will be skipped."));
+    }
+  }
+
   async function handleExecute() {
     if (!isDesktopEnvironment()) {
       setSession({ status: "error", message: arenaPreviewCopy() });
@@ -2820,6 +2843,8 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       blind: blindExecution,
     };
     cancelRequestedRef.current = false;
+    activeRunIdRef.current = null;
+    setCancelNotice(null);
     setResponseState({ status: "idle" });
     const initialTelemetry = createArenaTelemetry(request, request.startedAtMs);
     setSession({
@@ -2853,6 +2878,11 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     });
     try {
       const results = await executeArena(request, executeRunOnce, (progress) => {
+        if (progress.status === "generating" || progress.status === "verifying") {
+          activeRunIdRef.current = progress.runId ?? null;
+        } else if (progress.status === "completed" || progress.status === "failed" || progress.status === "cancelled") {
+          if (activeRunIdRef.current === progress.runId) activeRunIdRef.current = null;
+        }
         setSession((current) => current.status === "busy"
           ? { ...current, progress, telemetry: applyArenaProgress(current.telemetry, progress) }
           : current);
@@ -2954,12 +2984,11 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                 {dockerExecutionBlocked && <StateMessage icon="!" title={translate("Docker evaluator unavailable")} description={translate("This case requires a Docker verifier that is unavailable for this execution policy. Host execution is never used.")} error />}
                 <div className="arena-actions">
                   <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}> {translate("Run Arena")} <span aria-hidden="true">→</span></button>
-                  {busy && <button className="secondary-button" type="button" onClick={() => { cancelRequestedRef.current = true; }}>{translate("Cancel queued work")}</button>}
                   <button className="text-button" type="button" onClick={onOpenRuns}> {translate("View history")} <span aria-hidden="true">→</span></button>
                 </div>
               </>
             )}
-            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} onCancel={() => { cancelRequestedRef.current = true; }} />}
+            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} cancelNotice={cancelNotice} onCancel={() => void requestCancel()} />}
             {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title={translate("Arena could not start")} description={session.message} error /></div>}
           </section>
         </div>
@@ -2974,11 +3003,13 @@ function ArenaExecutionMonitor({
   telemetry,
   blind,
   saving,
+  cancelNotice,
   onCancel,
 }: {
   telemetry: ArenaTelemetry;
   blind: boolean;
   saving: boolean;
+  cancelNotice: string | null;
   onCancel: () => void;
 }) {
   const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
@@ -3029,7 +3060,8 @@ function ArenaExecutionMonitor({
       {lastError && <p className="field-help" role="alert"> {translate("Failure recorded:")} {translate(lastError)}</p>}
       {telemetry.state === "cancelled" && <p className="field-help" role="status">{translate("Cancellation recorded. Queued samples were skipped; completed evidence was retained.")}</p>}
       {telemetry.state === "failed" && <p className="field-help" role="alert">{translate("One or more samples failed. Other sequential competitors continued where possible.")}</p>}
-      <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total}>{translate("Cancel queued work")}</button></div>
+      {cancelNotice && <p className="field-help" role="status">{cancelNotice}</p>}
+      <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total || cancelNotice !== null}>{translate("Cancel Arena")}</button></div>
       <p className="field-help">{translate("Sample time is measured from Arena dispatch to terminal result. Generation metrics use authoritative runtime values; unsupported values show unavailable. Local execution remains sequential.")}</p>
     </div>
   );
@@ -3126,6 +3158,7 @@ function ArenaResultsSurface({
   return (
     <section className="panel arena-results-panel">
       <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Arena results")}</p><h3>{showMeasuredResults ? formatMessage("{completed}/{total} samples completed", { completed: summary.completed, total: summary.total }) : translate("Blind results locked until reveal")}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? translate("Saved") : translate("Summary unavailable")}</span></div>
+      {results.some((item) => hasCancelledDockerVerification(item.execution)) && <p className="field-help" role="status">{translate("Generation completed and its response was saved; Docker verification was cancelled and produced no score.")}</p>}
       {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={formatMessage("{failed} failed · {cancelled} cancelled", { failed: summary.failed, cancelled: summary.cancelled })} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `${translate("Median")} ${formatLocaleNumber(summary.medianDurationMs, undefined, { maximumFractionDigits: 0 })} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>}
       {summaryPersistence.status === "error" && <StateMessage icon="!" title={translate("Aggregate summary unavailable")} description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
       {showMeasuredResults && summaryPersistence.status === "saved" && (

@@ -75,7 +75,8 @@ pub fn run() -> tauri::Result<()> {
             commands::get_blind_evaluation,
             commands::lock_blind_evaluation,
             commands::get_run_status,
-            commands::execute_run_once
+            commands::execute_run_once,
+            commands::cancel_run_once
         ])
         .run(tauri::generate_context!())
 }

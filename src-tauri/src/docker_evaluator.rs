@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use crate::domain::{
     sha256_hex, DockerVerifierId, ObjectiveVerificationEvidence, ObjectiveVerifierKind,
 };
+use crate::runtime::CancellationToken;
 
 pub const PINNED_PYTHON_IMAGE: &str = "docker.io/library/python:3.13-alpine3.22@sha256:e81548ac35b07a3bd4805f275107592ef458b1e893c0e04d45aedaa19416cca5";
 pub const VERIFIER_CONTRACT_VERSION: u16 = 1;
@@ -197,6 +198,7 @@ run()
 pub enum DockerEvaluationStatus {
     Passed,
     Failed,
+    Cancelled,
     Unavailable,
     TimedOut,
     OutputLimit,
@@ -208,6 +210,7 @@ impl DockerEvaluationStatus {
         match self {
             Self::Passed => "passed",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
             Self::Unavailable => "unavailable",
             Self::TimedOut => "timed_out",
             Self::OutputLimit => "output_limit",
@@ -265,6 +268,7 @@ pub struct DockerOutput {
 pub enum DockerCommandError {
     Spawn,
     Io,
+    Cancelled,
     TimedOut,
     OutputLimit,
 }
@@ -276,6 +280,7 @@ pub trait DockerCommandRunner: Send + Sync {
         input: &[u8],
         timeout: Duration,
         output_limit: usize,
+        cancellation: &CancellationToken,
     ) -> Result<DockerOutput, DockerCommandError>;
 }
 
@@ -317,6 +322,7 @@ impl DockerCommandRunner for SystemDockerCommandRunner {
         input: &[u8],
         timeout: Duration,
         output_limit: usize,
+        cancellation: &CancellationToken,
     ) -> Result<DockerOutput, DockerCommandError> {
         let mut command = Command::new(&self.executable);
         command
@@ -329,7 +335,7 @@ impl DockerCommandRunner for SystemDockerCommandRunner {
             .env_remove("DOCKER_TLS_VERIFY")
             .env_remove("DOCKER_CERT_PATH");
         let mut child = command.spawn().map_err(|_| DockerCommandError::Spawn)?;
-        run_child_bounded(&mut child, input, timeout, output_limit)
+        run_child_bounded(&mut child, input, timeout, output_limit, cancellation)
     }
 }
 
@@ -338,6 +344,7 @@ fn run_child_bounded(
     input: &[u8],
     timeout: Duration,
     output_limit: usize,
+    cancellation: &CancellationToken,
 ) -> Result<DockerOutput, DockerCommandError> {
     let stdout = child.stdout.take().ok_or(DockerCommandError::Io)?;
     let stderr = child.stderr.take().ok_or(DockerCommandError::Io)?;
@@ -362,8 +369,14 @@ fn run_child_bounded(
 
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
+    let mut cancelled = false;
     let mut io_failed = false;
     loop {
+        if cancellation.is_cancelled() {
+            cancelled = true;
+            let _ = child.kill();
+            break;
+        }
         if output_limited.load(Ordering::Acquire) {
             let _ = child.kill();
             break;
@@ -392,10 +405,13 @@ fn run_child_bounded(
             None
         }
     };
-    let stdout = stdout_reader.join().map_err(|_| DockerCommandError::Io)??;
-    let stderr = stderr_reader.join().map_err(|_| DockerCommandError::Io)??;
+    let stdout = stdout_reader.join().map_err(|_| DockerCommandError::Io)?;
+    let stderr = stderr_reader.join().map_err(|_| DockerCommandError::Io)?;
     let write_result = input_writer.join().map_err(|_| DockerCommandError::Io)?;
     let limited = output_limited.load(Ordering::Acquire);
+    if cancelled {
+        return Err(DockerCommandError::Cancelled);
+    }
     if io_failed || status.is_none() {
         return Err(DockerCommandError::Io);
     }
@@ -406,6 +422,8 @@ fn run_child_bounded(
         return Err(DockerCommandError::OutputLimit);
     }
     let status = status.expect("checked above");
+    let stdout = stdout?;
+    let stderr = stderr?;
     if write_result.is_err() && status.success() {
         return Err(DockerCommandError::Io);
     }
@@ -442,6 +460,14 @@ fn read_discard_after_limit<R: Read>(
 }
 
 pub fn evaluate(verifier_id: DockerVerifierId, response: &str) -> DockerEvaluation {
+    evaluate_cancellable(verifier_id, response, &CancellationToken::new())
+}
+
+pub fn evaluate_cancellable(
+    verifier_id: DockerVerifierId,
+    response: &str,
+    cancellation: &CancellationToken,
+) -> DockerEvaluation {
     if response.len() > MAX_RESPONSE_BYTES || response.contains('\0') {
         return DockerEvaluation {
             verifier_id,
@@ -472,13 +498,22 @@ pub fn evaluate(verifier_id: DockerVerifierId, response: &str) -> DockerEvaluati
             total_tests(verifier_id),
         );
     };
-    evaluate_with_runner(&runner, verifier_id, response)
+    evaluate_with_runner_cancellable(&runner, verifier_id, response, cancellation)
 }
 
 pub fn evaluate_with_runner<R: DockerCommandRunner>(
     runner: &R,
     verifier_id: DockerVerifierId,
     response: &str,
+) -> DockerEvaluation {
+    evaluate_with_runner_cancellable(runner, verifier_id, response, &CancellationToken::new())
+}
+
+pub fn evaluate_with_runner_cancellable<R: DockerCommandRunner>(
+    runner: &R,
+    verifier_id: DockerVerifierId,
+    response: &str,
+    cancellation: &CancellationToken,
 ) -> DockerEvaluation {
     if response.len() > MAX_RESPONSE_BYTES || response.contains('\0') {
         return DockerEvaluation {
@@ -489,11 +524,21 @@ pub fn evaluate_with_runner<R: DockerCommandRunner>(
             reason: "The generated response exceeds the fixed text contract input bound.",
         };
     }
-    let context = match local_context(runner) {
+    if cancellation.is_cancelled() {
+        return cancelled(verifier_id);
+    }
+    let context = match local_context(runner, cancellation) {
         Ok(context) => context,
+        Err(_reason) if cancellation.is_cancelled() => return cancelled(verifier_id),
         Err(reason) => return unavailable(verifier_id, reason, total_tests(verifier_id)),
     };
-    if !preflight(runner, &context) {
+    if cancellation.is_cancelled() {
+        return cancelled(verifier_id);
+    }
+    if !preflight(runner, &context, cancellation) {
+        if cancellation.is_cancelled() {
+            return cancelled(verifier_id);
+        }
         return unavailable(
             verifier_id,
             "Docker daemon or the pinned Python image is unavailable; no host fallback was used.",
@@ -537,7 +582,13 @@ pub fn evaluate_with_runner<R: DockerCommandRunner>(
         name: container_name.clone(),
         armed: true,
     };
-    let mut evaluation = match runner.invoke(&args, &[], PREFLIGHT_TIMEOUT, COMMAND_OUTPUT_BYTES) {
+    let mut evaluation = match runner.invoke(
+        &args,
+        &[],
+        PREFLIGHT_TIMEOUT,
+        COMMAND_OUTPUT_BYTES,
+        cancellation,
+    ) {
         Ok(output) if output.status == Some(0) && output.stdout.len() <= COMMAND_OUTPUT_BYTES => {
             let mut start_args = context_args(&context);
             start_args.extend([
@@ -552,7 +603,9 @@ pub fn evaluate_with_runner<R: DockerCommandRunner>(
                 response.as_bytes(),
                 CONTAINER_TIMEOUT,
                 MAX_CONTAINER_OUTPUT_BYTES,
+                cancellation,
             ) {
+                Err(DockerCommandError::Cancelled) => cancelled(verifier_id),
                 Err(DockerCommandError::TimedOut) => DockerEvaluation {
                     verifier_id,
                     status: DockerEvaluationStatus::TimedOut,
@@ -582,6 +635,7 @@ pub fn evaluate_with_runner<R: DockerCommandRunner>(
                 Ok(output) => parse_evaluation_output(verifier_id, &output.stdout),
             }
         }
+        Err(DockerCommandError::Cancelled) => cancelled(verifier_id),
         Err(DockerCommandError::TimedOut) => DockerEvaluation {
             verifier_id,
             status: DockerEvaluationStatus::TimedOut,
@@ -608,20 +662,39 @@ pub fn evaluate_with_runner<R: DockerCommandRunner>(
         ),
     };
     if cleanup.remove().is_err() {
-        evaluation.status = DockerEvaluationStatus::Unavailable;
-        evaluation.passed_tests = 0;
-        evaluation.reason = "Docker container cleanup failed; the result is unavailable.";
+        if evaluation.status == DockerEvaluationStatus::Cancelled {
+            evaluation.reason =
+                "Docker verification was cancelled; container cleanup could not be confirmed.";
+        } else {
+            evaluation.status = DockerEvaluationStatus::Unavailable;
+            evaluation.passed_tests = 0;
+            evaluation.reason = "Docker container cleanup failed; the result is unavailable.";
+        }
     }
     evaluation
 }
 
-fn local_context<R: DockerCommandRunner>(runner: &R) -> Result<String, &'static str> {
+fn cancelled(verifier_id: DockerVerifierId) -> DockerEvaluation {
+    DockerEvaluation {
+        verifier_id,
+        status: DockerEvaluationStatus::Cancelled,
+        passed_tests: 0,
+        total_tests: total_tests(verifier_id),
+        reason: "Docker verification was cancelled; app-owned container cleanup was attempted.",
+    }
+}
+
+fn local_context<R: DockerCommandRunner>(
+    runner: &R,
+    cancellation: &CancellationToken,
+) -> Result<String, &'static str> {
     let output = runner
         .invoke(
             &["context".into(), "show".into()],
             &[],
             PREFLIGHT_TIMEOUT,
             1024,
+            cancellation,
         )
         .map_err(|_| "Docker context could not be checked; no remote context was used.")?;
     if output.status != Some(0) {
@@ -643,7 +716,7 @@ fn local_context<R: DockerCommandRunner>(runner: &R) -> Result<String, &'static 
         "{{json .Endpoints.docker.Host}}".into(),
     ];
     let output = runner
-        .invoke(&args, &[], PREFLIGHT_TIMEOUT, 1024)
+        .invoke(&args, &[], PREFLIGHT_TIMEOUT, 1024, cancellation)
         .map_err(|_| {
             "Docker context endpoint could not be checked; remote endpoints are refused."
         })?;
@@ -687,14 +760,18 @@ fn local_endpoint(value: &str) -> bool {
     )
 }
 
-fn preflight<R: DockerCommandRunner>(runner: &R, context: &str) -> bool {
+fn preflight<R: DockerCommandRunner>(
+    runner: &R,
+    context: &str,
+    cancellation: &CancellationToken,
+) -> bool {
     let mut info_args = context_args(context);
     info_args.extend([
         "info".into(),
         "--format".into(),
         "{{.ServerVersion}}".into(),
     ]);
-    if !successful(runner, &info_args, PREFLIGHT_TIMEOUT, 1024) {
+    if !successful(runner, &info_args, PREFLIGHT_TIMEOUT, 1024, cancellation) {
         return false;
     }
     let mut image_args = context_args(context);
@@ -705,7 +782,7 @@ fn preflight<R: DockerCommandRunner>(runner: &R, context: &str) -> bool {
         "{{.Id}}".into(),
         PINNED_PYTHON_IMAGE.into(),
     ]);
-    successful(runner, &image_args, PREFLIGHT_TIMEOUT, 1024)
+    successful(runner, &image_args, PREFLIGHT_TIMEOUT, 1024, cancellation)
 }
 
 fn successful<R: DockerCommandRunner>(
@@ -713,8 +790,9 @@ fn successful<R: DockerCommandRunner>(
     args: &[String],
     timeout: Duration,
     output_limit: usize,
+    cancellation: &CancellationToken,
 ) -> bool {
-    matches!(runner.invoke(args, &[], timeout, output_limit), Ok(output) if output.status == Some(0))
+    matches!(runner.invoke(args, &[], timeout, output_limit, cancellation), Ok(output) if output.status == Some(0))
 }
 
 fn context_args(context: &str) -> Vec<String> {
@@ -852,7 +930,10 @@ impl<R: DockerCommandRunner> ContainerCleanup<'_, R> {
             "--force".into(),
             self.name.clone(),
         ]);
-        match self.runner.invoke(&args, &[], CLEANUP_TIMEOUT, 1024) {
+        match self
+            .runner
+            .invoke(&args, &[], CLEANUP_TIMEOUT, 1024, &CancellationToken::new())
+        {
             Ok(output) if output.status == Some(0) => {
                 self.armed = false;
                 Ok(())
@@ -881,7 +962,9 @@ impl<R: DockerCommandRunner> Drop for ContainerCleanup<'_, R> {
                 "--force".into(),
                 self.name.clone(),
             ]);
-            let _ = self.runner.invoke(&args, &[], CLEANUP_TIMEOUT, 1024);
+            let _ =
+                self.runner
+                    .invoke(&args, &[], CLEANUP_TIMEOUT, 1024, &CancellationToken::new());
         }
     }
 }
@@ -935,12 +1018,37 @@ mod tests {
                 .spawn()
                 .expect("bounded test child starts");
             assert_eq!(
-                run_child_bounded(&mut child, &[], timeout, output_limit),
+                run_child_bounded(
+                    &mut child,
+                    &[],
+                    timeout,
+                    output_limit,
+                    &CancellationToken::new(),
+                ),
                 Err(expected),
                 "{mode} child should be terminated at its limit"
             );
             assert!(child.try_wait().expect("child wait succeeds").is_some());
         }
+
+        let mut child = Command::new(&executable)
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_FIXTURE_ENV, "sleep")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("cancellable test child starts");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert_eq!(
+            run_child_bounded(&mut child, &[], Duration::from_secs(5), 4096, &cancellation,),
+            Err(DockerCommandError::Cancelled)
+        );
+        assert!(child
+            .try_wait()
+            .expect("cancelled child was reaped")
+            .is_some());
     }
 
     #[derive(Debug, Clone)]
@@ -982,6 +1090,7 @@ mod tests {
     struct FakeDocker {
         replies: Mutex<VecDeque<Reply>>,
         calls: Mutex<Vec<(Vec<String>, Vec<u8>, Duration, usize)>>,
+        cancel_on_start: bool,
     }
 
     impl FakeDocker {
@@ -989,6 +1098,7 @@ mod tests {
             Self {
                 replies: Mutex::new(replies.into_iter().collect()),
                 calls: Mutex::new(Vec::new()),
+                cancel_on_start: false,
             }
         }
         fn calls(&self) -> Vec<(Vec<String>, Vec<u8>, Duration, usize)> {
@@ -1003,6 +1113,7 @@ mod tests {
             input: &[u8],
             timeout: Duration,
             output_limit: usize,
+            cancellation: &CancellationToken,
         ) -> Result<DockerOutput, DockerCommandError> {
             self.calls
                 .lock()
@@ -1014,6 +1125,10 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .expect("unexpected docker invocation");
+            if self.cancel_on_start && args.iter().any(|argument| argument == "start") {
+                cancellation.cancel();
+                return Err(DockerCommandError::Cancelled);
+            }
             if let Some(error) = reply.error {
                 return Err(error);
             }
@@ -1057,6 +1172,33 @@ mod tests {
             evidence.details.as_ref().unwrap()["verifierId"],
             "missing_user_text_v1"
         );
+    }
+
+    #[test]
+    fn cancelled_docker_verification_has_explicit_status_and_forces_container_cleanup() {
+        let pass = br#"{"status":"passed","passedTests":3,"totalTests":3}"#;
+        let runner = FakeDocker {
+            replies: Mutex::new(ready_replies(pass).into()),
+            calls: Mutex::new(Vec::new()),
+            cancel_on_start: true,
+        };
+        let evaluation = evaluate_with_runner_cancellable(
+            &runner,
+            DockerVerifierId::MissingUserTextV1,
+            "response text",
+            &CancellationToken::new(),
+        );
+        assert_eq!(evaluation.status, DockerEvaluationStatus::Cancelled);
+        assert_eq!(evaluation.passed_tests, 0);
+        let calls = runner.calls();
+        let cleanup = calls
+            .last()
+            .expect("cancellation attempts container cleanup");
+        assert!(cleanup
+            .0
+            .windows(2)
+            .any(|arguments| arguments[0] == "container" && arguments[1] == "rm"));
+        assert!(cleanup.0.iter().any(|argument| argument == "--force"));
     }
 
     #[test]
