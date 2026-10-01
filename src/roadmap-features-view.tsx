@@ -8,6 +8,7 @@ import {
   readBenchmarkVersion,
   readBenchmarkVersions,
   readArenaSummaries,
+  readAttemptResponse,
   readLiveProfileModelIdentity,
   readProfileRevisions,
   readRoadmapRecords,
@@ -33,13 +34,14 @@ import {
   type SingleModelBenchmarkPayload,
 } from "./single-model-benchmark";
 import { buildSingleModelSuitePayload, executeSingleModelSuiteCases, singleModelSuiteRecord, type SingleModelSuitePayload } from "./single-model-suite";
-import { buildPerformanceRecord, performanceEvidenceFromExecution } from "./performance-lab";
+import { buildPerformanceRecord, performanceEvidenceFromExecution, type MetricEvidence } from "./performance-lab";
 import { buildHistoricalRegressionExport, compareHistoricalRuns, compareRepeatedHistoricalRuns, REPEATED_METRIC_CONFIDENCE_LEVEL, type HistoricalRegression, type HistoricalSource, type RepeatedRunHistoricalRegression } from "./historical-regression";
 import { computeGlobalAndCategoryRatings, isRatingSet, ratingOutcomesFromArenaSummaries, type ModelRating, type RatingRuleVersion, type RatingSet, type RatingUncertaintyMethod } from "./model-ratings";
 import { executeRobustnessVariants, generatePerturbations, isEffectivePerturbation, scoreRobustness, type PerturbationType, type RobustnessResult, type RobustnessVariantOutcome } from "./robustness-arena";
+import { compareRobustnessHistory, exportRobustnessHistoryComparison, type RobustnessHistoryComparison } from "./robustness-history";
 import { canReproRunWithLocalIdentity, compareReproLocalIdentity, decodeReproBenchmarkDocumentChunks, encodeReproBenchmarkDocumentChunks, exportReproBundle, importReproBundle, matchesReproSource, reproModelArtifactFromProfile, reproRunRequest, verifyReproBenchmarkSnapshot, MAX_REPRO_BUNDLE_BYTES, ReproBundleImportError, type ReproBundleDifference, type ReproIdentityDifference, type ReproRunRequest } from "./repro-bundle";
 import { AccessibleListbox } from "./accessible-listbox";
-import { formatLocaleNumber, formatLocalePercent, formatMessage, translate } from "./i18n";
+import { formatLocaleDate, formatLocaleNumber, formatLocalePercent, formatMessage, translate } from "./i18n";
 
 type SurfaceState =
   | { status: "loading" }
@@ -151,6 +153,10 @@ export function RoadmapFeaturesView() {
   const [comparisonDownload, setComparisonDownload] = useState<{ url: string; fileName: string } | null>(null);
   const [ratingRuleVersion, setRatingRuleVersion] = useState<RatingRuleVersion>("elo-v1");
   const [selectedRobustnessRecordId, setSelectedRobustnessRecordId] = useState("");
+  const [robustnessBaselineId, setRobustnessBaselineId] = useState("");
+  const [robustnessCandidateId, setRobustnessCandidateId] = useState("");
+  const [robustnessComparison, setRobustnessComparison] = useState<RobustnessHistoryComparison | null>(null);
+  const [robustnessComparisonDownload, setRobustnessComparisonDownload] = useState<string | null>(null);
   const [bundle, setBundle] = useState("");
   const [bundleDownloadUrl, setBundleDownloadUrl] = useState<string | null>(null);
   const bundleInput = useRef<HTMLInputElement>(null);
@@ -194,6 +200,10 @@ export function RoadmapFeaturesView() {
   useEffect(() => () => {
     if (comparisonDownload) URL.revokeObjectURL(comparisonDownload.url);
   }, [comparisonDownload]);
+
+  useEffect(() => () => {
+    if (robustnessComparisonDownload) URL.revokeObjectURL(robustnessComparisonDownload);
+  }, [robustnessComparisonDownload]);
 
   useEffect(() => {
     if (!versionId || !isDesktopEnvironment()) return;
@@ -248,7 +258,9 @@ export function RoadmapFeaturesView() {
   }, [importedBundle, state]);
   const importedLocalVersionExists = importedBundle !== null && state.status === "ready"
     && state.versions.some((item) => item.versionId === importedBundle.benchmarkVersionId);
+  const importedRuntimeSupportsLiveIdentity = importedBundle?.profileRevision.runtime === "ollama";
   const importedRerunReady = importedBundle !== null && importedBundle.executionControls.seed === null
+    && importedRuntimeSupportsLiveIdentity
     && importedLocalIdentity !== null
     && canReproRunWithLocalIdentity(importedLocalIdentity, importedLocalVersionExists);
   const importedSourceVerified = importedBundle !== null
@@ -270,7 +282,7 @@ export function RoadmapFeaturesView() {
     })),
     ...comparableArenaSummaries.map((summary) => ({
       value: encodeHistoricalSelection("arena_summary", summary.arenaId),
-      label: `${translate("Arena")} / ${displayName(summary.taskId, "Task")} / ${displayName(summary.caseId, "Case")}`,
+      label: `${numberedName("Arena", summary.arenaId, comparableArenaSummaries.map((item) => item.arenaId))} / ${displayName(summary.taskId, "Task")} / ${displayName(summary.caseId, "Case")} / ${formatLocaleDate(summary.createdAt)}`,
     })),
   ];
   const repeatedRunGroupsOverlap = baselineRunIds.some((runId) => candidateRunIds.includes(runId));
@@ -300,10 +312,20 @@ export function RoadmapFeaturesView() {
   const robustnessHistory = useMemo(() => state.status === "ready"
     ? state.records.filter((record) => record.kind === "robustness_arena" && isRobustnessResult(record.payload)).map((record) => ({
       recordId: record.recordId,
+      contentHash: record.contentHash,
       result: record.payload as unknown as RobustnessResult,
     })).sort((left, right) => right.result.createdAt.localeCompare(left.result.createdAt))
     : [], [state]);
   const selectedRobustness = robustnessHistory.find((record) => record.recordId === selectedRobustnessRecordId) ?? robustnessHistory[0] ?? null;
+  const defaultRobustnessBaseline = robustnessHistory[1] ?? robustnessHistory[0] ?? null;
+  const selectedRobustnessBaseline = robustnessHistory.find((record) => record.recordId === robustnessBaselineId) ?? defaultRobustnessBaseline;
+  const selectedRobustnessCandidate = robustnessHistory.find((record) => record.recordId === robustnessCandidateId && record.recordId !== selectedRobustnessBaseline?.recordId)
+    ?? robustnessHistory.find((record) => record.recordId !== selectedRobustnessBaseline?.recordId)
+    ?? null;
+  const robustnessComparisonOptions = robustnessHistory.map(({ recordId, result }) => ({
+    value: recordId,
+    label: `${displayName(state.status === "ready" ? state.profiles.find((profile) => profile.profileRevisionId === result.profileRevisionId)?.model : undefined, "Model")} · ${displayName(result.taskId, "Task")} / ${displayName(result.caseId, "Case")} · ${formatLocaleDate(result.createdAt)} · ${result.robustnessScore === null ? translate("Unavailable") : formatLocalePercent(result.robustnessScore)} · ${recordId}`,
+  }));
   const activeOperationLabel = activeOperation === null ? null
     : activeOperation.kind === "single" ? translate("Running single benchmark")
       : activeOperation.kind === "repro" ? translate("Running reproduced benchmark")
@@ -465,9 +487,13 @@ export function RoadmapFeaturesView() {
         || sourceVersion.summary.contentHash !== source.benchmarkContentHash) {
         throw new Error(translate("The source benchmark snapshot does not match its immutable evidence."));
       }
+      const attemptId = typeof source.attempt.attemptId === "string" ? source.attempt.attemptId : null;
+      if (!attemptId) throw new Error(translate("The saved source attempt could not be identified."));
+      const response = await readAttemptResponse(source.runId, attemptId);
       const profile = source.profileRevision;
       const serialized = await exportReproBundle({
         ...source,
+        ...(response ? { responseOutput: response } : {}),
         reproductionSnapshot: {
           schemaVersion: 1,
           benchmark: {
@@ -486,9 +512,9 @@ export function RoadmapFeaturesView() {
       setBundleDownloadUrl(URL.createObjectURL(new Blob([serialized], { type: "application/json" })));
       try {
         await saveRoadmapRecord({ recordId: `bundle-${source.runId}`, kind: "repro_bundle", payload: JSON.parse(serialized) as Record<string, unknown> });
-        setNotice(translate("Repro bundle generated. Review profile prompt text before sharing."));
+        setNotice(translate("Repro bundle generated. Review the prompt, saved response, profile, and host CPU/RAM evidence before sharing."));
       } catch (error: unknown) {
-        setNotice(translate("Bundle file is ready, but its local history record could not be saved."));
+        setNotice(translate("Bundle file is ready, but its local history record could not be saved. Review the prompt, saved response, profile, and host CPU/RAM evidence before sharing."));
         setErrorDetail(error instanceof Error ? error.message : String(error));
       }
     } catch (error: unknown) {
@@ -546,6 +572,8 @@ export function RoadmapFeaturesView() {
           ? "This bundle uses a seed control that the local single-model runner cannot apply; rerunning is disabled."
         : !identityAllowsRerun
           ? "The imported benchmark/profile identity is unavailable locally or differs from local records; rerunning is disabled."
+          : runRequest.profileRevision.runtime !== "ollama"
+            ? "The imported benchmark and saved profile match local records, but this runtime does not provide the live model identity check required for Re-run. Re-running is disabled."
           : mayReconstructBenchmark
             ? "The benchmark snapshot is verified and will be validated and saved locally only when you click Re-run. The saved profile matches; the current Ollama model digest is checked before and after generation."
             : sourceIsLocal
@@ -729,6 +757,46 @@ export function RoadmapFeaturesView() {
     if (comparisonDownload) URL.revokeObjectURL(comparisonDownload.url);
     setComparisonDownload({ url: URL.createObjectURL(new Blob([serialized], { type: "application/json" })), fileName: `prompt-arena-regression-${comparison.createdAt.slice(0, 10)}.json` });
     setNotice(translate("The derived comparison export includes source IDs and content hashes."));
+  }
+
+  function compareSavedRobustnessResults() {
+    if (!selectedRobustnessBaseline || !selectedRobustnessCandidate) {
+      setNotice(translate("Select two saved robustness results."));
+      return;
+    }
+    const comparison = compareRobustnessHistory(selectedRobustnessBaseline, selectedRobustnessCandidate);
+    if (!comparison) {
+      setNotice(translate("The selected robustness results cannot be compared."));
+      return;
+    }
+    clearRobustnessComparison();
+    setRobustnessBaselineId(selectedRobustnessBaseline.recordId);
+    setRobustnessCandidateId(selectedRobustnessCandidate.recordId);
+    setRobustnessComparison(comparison);
+  }
+
+  function clearRobustnessComparison() {
+    setRobustnessComparison(null);
+    if (robustnessComparisonDownload) URL.revokeObjectURL(robustnessComparisonDownload);
+    setRobustnessComparisonDownload(null);
+  }
+
+  async function exportSavedRobustnessComparison() {
+    if (!robustnessComparison) return;
+    try {
+      const serialized = await exportRobustnessHistoryComparison(robustnessComparison, robustnessHistory.map(({ recordId, contentHash, result }) => ({
+        recordId,
+        kind: "robustness_arena" as const,
+        contentHash,
+        payload: result,
+      })));
+      if (robustnessComparisonDownload) URL.revokeObjectURL(robustnessComparisonDownload);
+      setRobustnessComparisonDownload(URL.createObjectURL(new Blob([serialized], { type: "application/json" })));
+      setNotice(translate("Robustness comparison includes source IDs and content hashes."));
+    } catch (error: unknown) {
+      setNotice(translate("Robustness comparison could not be exported."));
+      setErrorDetail(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function calculateRepeatedRegression() {
@@ -930,7 +998,7 @@ export function RoadmapFeaturesView() {
 
       <section className="panel" aria-labelledby="performance-lab-heading">
         <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Metrics")}</p><h3 id="performance-lab-heading">{translate("Performance Lab")}</h3></div></div>
-        <p className="field-help">{translate("Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.")}</p>
+        <p className="field-help">{translate("Runtime and derived metrics retain unit, source, confidence, warm/cold state, and explicit unavailable values.")} {translate("Host CPU and RAM cover the whole system during generation; they are not attributed to the model process.")}</p>
         {singlePayloads.length > 0 && <FieldSelect id="insights-performance-run" label={translate("Select run for metrics")} value={performancePayload?.runId ?? ""} options={singleRunOptions} onChange={setPerformanceRunId} />}
         {performancePayload ? <MetricTable payload={performancePayload} /> : <StateMessage title={translate("No performance evidence yet")} description={translate("Run a single-model benchmark to populate this local table.")} />}
       </section>
@@ -953,7 +1021,7 @@ export function RoadmapFeaturesView() {
           <button className="secondary-button" type="button" onClick={() => void calculateRepeatedRegression()} disabled={baselineRunIds.length < 5 || candidateRunIds.length < 5 || repeatedRunGroupsOverlap}>{translate("Compare repeated runs")}</button>
           {repeatedRegression && <><RepeatedRegressionTable comparison={repeatedRegression} payloads={singlePayloads} /><button className="secondary-button" type="button" onClick={() => exportRegressionComparison(repeatedRegression)}>{translate("Export derived comparison")}</button></>}
         </div>
-        {regressionHistory.length > 0 && <details className="roadmap-table"><summary>{translate("Saved comparisons")} · {formatLocaleNumber(regressionHistory.length)}</summary><table><thead><tr><th>{translate("Recorded")}</th><th>{translate("Baseline")}</th><th>{translate("Candidate")}</th></tr></thead><tbody>{regressionHistory.map(({ recordId, createdAt, comparison }) => {
+        {regressionHistory.length > 0 && <details className="roadmap-table" role="region" aria-label={translate("Saved comparisons")} tabIndex={0}><summary>{translate("Saved comparisons")} · {formatLocaleNumber(regressionHistory.length)}</summary><table><thead><tr><th>{translate("Recorded")}</th><th>{translate("Baseline")}</th><th>{translate("Candidate")}</th></tr></thead><tbody>{regressionHistory.map(({ recordId, createdAt, comparison }) => {
           const isRepeated = comparison.kind === "repeated_run_historical_regression";
           const baselineRuns = isRepeated ? comparison.baselineRunIds : [comparison.baselineId];
           const candidateRuns = isRepeated ? comparison.candidateRunIds : [comparison.candidateId];
@@ -982,6 +1050,7 @@ export function RoadmapFeaturesView() {
         <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Robustness Arena")}</p><h3 id="robustness-arena-heading">{translate("Robustness Arena")}</h3></div></div>
         <p className="field-help">{translate("Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.")}</p>
         <p className="field-help">{translate("Unverified app-calculated snapshot. The local store preserves it immutably but does not verify it against source evidence.")}</p>
+        <p className="field-help">{translate("Robustness comparison exports include prompt variants and saved results. Review the file before sharing.")}</p>
         <button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>{activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants" ? translate("Running…") : translate("Run robustness variants")}</button>
         {(activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants") && activeOperationLabel && <p className="field-help" role="status" aria-live="polite" aria-atomic="true">{activeOperationLabel}</p>}
         <p className="field-help">{translate("Deterministic prompt transformations do not prove semantic equivalence. The original benchmark verifier and expected-answer contract remain authoritative.")}</p>
@@ -991,12 +1060,26 @@ export function RoadmapFeaturesView() {
             return <tr key={recordId}><td>{result.createdAt}</td><td>{displayName(state.profiles.find((profile) => profile.profileRevisionId === result.profileRevisionId)?.model, "Model")}</td><td>{displayName(result.taskId, "Task")} / {displayName(result.caseId, "Case")}</td><td>{result.robustnessScore === null ? translate("Unavailable") : formatLocalePercent(result.robustnessScore)}</td><td><button className="secondary-button" type="button" aria-pressed={isSelected} onClick={() => setSelectedRobustnessRecordId(recordId)}>{translate("Open")}</button></td></tr>;
           })}</tbody></table></div>
           {selectedRobustness && <RobustnessResultDetails result={selectedRobustness.result} recordId={selectedRobustness.recordId} model={state.profiles.find((profile) => profile.profileRevisionId === selectedRobustness.result.profileRevisionId)?.model} />}
+          {robustnessHistory.length > 1 && <>
+            <h4>{translate("Robustness history comparison")}</h4>
+            <p className="field-help">{translate("Select two saved robustness results.")}</p>
+            <div className="field-grid">
+              <FieldSelect id="insights-robustness-baseline" label={translate("Baseline")} value={selectedRobustnessBaseline?.recordId ?? ""} options={robustnessComparisonOptions} onChange={(value) => { setRobustnessBaselineId(value); clearRobustnessComparison(); }} />
+              <FieldSelect id="insights-robustness-candidate" label={translate("Candidate")} value={selectedRobustnessCandidate?.recordId ?? ""} options={robustnessComparisonOptions.filter((option) => option.value !== selectedRobustnessBaseline?.recordId)} onChange={(value) => { setRobustnessCandidateId(value); clearRobustnessComparison(); }} />
+            </div>
+            <button className="secondary-button" type="button" onClick={compareSavedRobustnessResults}>{translate("Compare robustness results")}</button>
+            {robustnessComparison && <>
+              <RobustnessHistoryComparisonDetails comparison={robustnessComparison} />
+              <button className="secondary-button" type="button" onClick={() => void exportSavedRobustnessComparison()}>{translate("Export derived comparison")}</button>
+              {robustnessComparisonDownload && <a className="secondary-button" href={robustnessComparisonDownload} download={`prompt-arena-robustness-comparison-${robustnessComparison.createdAt.slice(0, 10)}.json`}>{translate("Download comparison JSON")}</a>}
+            </>}
+          </>}
         </>}
       </section>
 
       <section className="panel" aria-labelledby="repro-bundle-heading">
         <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Repro Bundle")}</p><h3 id="repro-bundle-heading">{translate("Repro Bundle")}</h3></div></div>
-        <p className="field-help">{translate("Credential fields are filtered, but profile prompt text remains and may contain private information. Review the bundle before sharing; its checksum does not identify the creator.")}</p>
+        <p className="field-help">{translate("Credential fields are filtered, but the bundle can contain profile prompts, saved response text, and host CPU/RAM evidence. Review the complete bundle before sharing; response text and prompts may contain private information, and the checksum does not identify the creator.")}</p>
         <p className="field-help">{translate("SHA-256 detects changes but does not authenticate the bundle source.")}</p>
         <p className="field-help">{translate("Re-run checks the current Ollama model digest at the saved loopback endpoint before and after generation. Providers without a current model digest remain read-only.")}</p>
         <p className="field-help">{translate("After generation, Re-run also confirms that Ollama reports the matching digest for the loaded model. These checks are best-effort and do not atomically pin a digest to the generation request.")}</p>
@@ -1009,7 +1092,8 @@ export function RoadmapFeaturesView() {
         </div>
         {legacyBundleUnverifiable && <p className="field-help" role="status">{translate("This legacy single-model bundle has no complete portable snapshot; importing it is read-only and rerunning is disabled.")}</p>}
         {importedBundle && importedLocalIdentity?.matches === false && !importedRerunReady && <div className="field-help" role="status"><p>{translate("The imported benchmark/profile identity is unavailable locally or differs from local records; rerunning is disabled.")}</p><ul>{importedLocalIdentity.differences.map((difference) => <li key={difference}>{reproIdentityDifferenceLabel(difference)}</li>)}</ul></div>}
-        {importedBundle && importedLocalIdentity?.matches === true && <p className="field-help" role="status">{translate(importedSourceVerified ? "Imported benchmark and saved profile match local records. The source run is also stored locally; the current Ollama model digest is checked before and after Re-run." : "Imported benchmark and saved profile match local records, but the source run is not stored locally; its ID remains an unverified external reference. The current Ollama model digest is checked before and after Re-run.")}</p>}
+        {importedBundle && importedLocalIdentity?.matches === true && importedRuntimeSupportsLiveIdentity && <p className="field-help" role="status">{translate(importedSourceVerified ? "Imported benchmark and saved profile match local records. The source run is also stored locally; the current Ollama model digest is checked before and after Re-run." : "Imported benchmark and saved profile match local records, but the source run is not stored locally; its ID remains an unverified external reference. The current Ollama model digest is checked before and after Re-run.")}</p>}
+        {importedBundle && importedLocalIdentity?.matches === true && !importedRuntimeSupportsLiveIdentity && <p className="field-help" role="status">{translate("The imported benchmark and saved profile match local records, but this runtime does not provide the live model identity check required for Re-run. Re-running is disabled.")}</p>}
         {bundleDifferences.length > 0 && <div className="field-help"><p>{translate("Imported configuration differences")}</p><ul>{bundleDifferences.map((difference, index) => <li key={`${difference.kind}:${index}`}>{reproBundleDifferenceLabel(difference)}</li>)}</ul></div>}
         {bundle && <pre className="roadmap-bundle-preview">{bundle}</pre>}
       </section>
@@ -1173,7 +1257,35 @@ function EvidenceSummary({ payload }: { payload: SingleModelBenchmarkPayload }) 
 }
 
 function MetricTable({ payload }: { payload: SingleModelBenchmarkPayload }) {
-  return <div className="roadmap-table" role="region" aria-label={translate("Scrollable comparison table")} tabIndex={0}><table><thead><tr><th>{translate("Metric")}</th><th>{translate("Value")}</th><th>{translate("Evidence")}</th></tr></thead><tbody>{Object.entries(payload.performance.metrics).map(([name, metric]) => <tr key={name}><td>{metricDisplayName(name)}</td><td>{metric.value === null ? translate("Unavailable") : formatLocaleNumber(metric.value)}</td><td>{metric.unit}<details><summary>{translate("Technical details")}</summary>{metric.source} / {translate(metric.confidence)} / {translate(metric.temperature)}</details></td></tr>)}</tbody></table></div>;
+  return <div className="roadmap-table" role="region" aria-label={translate("Scrollable comparison table")} tabIndex={0}><table><thead><tr><th>{translate("Metric")}</th><th>{translate("Value")}</th><th>{translate("Evidence")}</th></tr></thead><tbody>{Object.entries(payload.performance.metrics).map(([name, metric]) => <tr key={name}><td>{metricDisplayName(name)}</td><td>{metric.value === null ? translate("Unavailable") : formatLocaleNumber(metric.value)}</td><td>{metric.unit}<MetricEvidenceDetails metricName={name} metric={metric} /></td></tr>)}</tbody></table></div>;
+}
+
+function MetricEvidenceDetails({ metricName, metric }: { metricName: string; metric: MetricEvidence }) {
+  const hostMetric = metric.scope === "host" || ["cpuUtilizationPercent", "ramAverageBytes", "ramPeakBytes"].includes(metricName);
+  const hasOsSamples = metric.samplingMethod === "os_counter" || metric.samplingMethod === "os_sample";
+  const samplingMethod = metric.samplingMethod === "os_counter"
+    ? translate("Operating system counter")
+    : metric.samplingMethod === "os_sample"
+      ? translate("Operating system snapshot")
+      : metric.samplingMethod === "runtime"
+        ? translate("Runtime-reported")
+        : metric.samplingMethod === "derived"
+          ? translate("Derived metric")
+          : translate("Unavailable");
+  return <details>
+    <summary>{translate("Technical details")}</summary>
+    <p>{translate("Source")}: <code>{metric.source}</code></p>
+    <p>{translate("Scope")}: {hostMetric ? translate("Whole host") : translate("Not applicable")}</p>
+    <p>{translate("Sampling method")}: {samplingMethod}</p>
+    {typeof metric.method === "string" && metric.method.length > 0 && <p>{translate("Aggregation method")}: <code>{metric.method}</code></p>}
+    {hasOsSamples && <>
+      <p>{translate("Average sampling interval")}: {typeof metric.samplingIntervalMs !== "number" || !Number.isFinite(metric.samplingIntervalMs) ? translate("Unavailable") : `${formatLocaleNumber(metric.samplingIntervalMs, undefined, { maximumFractionDigits: 2 })} ms`}</p>
+      <p>{translate("Sample count")}: {typeof metric.sampleCount !== "number" || !Number.isFinite(metric.sampleCount) ? translate("Unavailable") : formatLocaleNumber(metric.sampleCount)}</p>
+      <p>{translate("Interval count")}: {typeof metric.intervalCount !== "number" || !Number.isFinite(metric.intervalCount) ? translate("Unavailable") : formatLocaleNumber(metric.intervalCount)}</p>
+      {typeof metric.samplesTruncated === "boolean" && <p>{translate("Raw samples truncated")}: {translate(metric.samplesTruncated ? "Yes" : "No")}</p>}
+    </>}
+    <p>{translate(metric.confidence)} / {translate(metric.temperature)}</p>
+  </details>;
 }
 
 function RegressionTable({ comparison, sources }: { comparison: HistoricalRegression; sources: HistoricalSource[] }) {
@@ -1289,6 +1401,7 @@ function reproBundleImportErrorKey(error: unknown): string {
     case "invalid_byte_count": return "The bundle byte count does not match its manifest.";
     case "integrity_mismatch": return "The bundle checksum does not match; the file may have changed.";
     case "invalid_reproduction_snapshot": return "The embedded benchmark or model identity snapshot is inconsistent.";
+    case "invalid_response_output": return "The saved response output is inconsistent or exceeds the local size limit.";
   }
 }
 
@@ -1306,6 +1419,21 @@ function RobustnessResultDetails({ result, recordId, model }: { result: Robustne
     <p><strong>{translate("Variance")}</strong>: {result.variance === null ? translate("Unavailable") : formatLocaleNumber(result.variance, undefined, { maximumFractionDigits: 3 })}</p>
     <p><strong>{translate("Failure clusters")}</strong>: {result.failureClusters.length ? result.failureClusters.map(metricDisplayName).join(", ") : translate("None")}</p>
     <ul className="roadmap-list">{result.variants.map((variant) => <li key={variant.perturbationId}><strong>{metricDisplayName(variant.transformationType)}</strong><span>{variant.provenance} · {variant.passed === null ? translate(variant.executionStatus) : variant.passed ? translate("Pass") : translate("Fail")}{variant.errorCode ? ` · ${translate(variant.errorCode)}` : ""}</span></li>)}</ul>
+  </div>;
+}
+
+function RobustnessHistoryComparisonDetails({ comparison }: { comparison: RobustnessHistoryComparison }) {
+  const score = comparison.metrics.robustnessScore;
+  const variance = comparison.metrics.variance;
+  const baseOutcome = (passed: boolean | null) => translate(passed === null ? "Unavailable" : passed ? "Pass" : "Fail");
+  return <div className="field-grid" aria-live="polite">
+    <p><strong>{translate("Baseline")}</strong>: <code>{comparison.baselineId}</code></p>
+    <p><strong>{translate("Candidate")}</strong>: <code>{comparison.candidateId}</code></p>
+    <p><strong>{translate("Robustness score")}</strong>: {score.baseline === null ? translate("Unavailable") : formatLocalePercent(score.baseline)} → {score.candidate === null ? translate("Unavailable") : formatLocalePercent(score.candidate)} · {translate("Delta")}: {score.absoluteDelta === null ? translate("Unavailable") : formatLocalePercent(score.absoluteDelta)}</p>
+    <p><strong>{translate("Variance")}</strong>: {variance.baseline === null ? translate("Unavailable") : formatLocaleNumber(variance.baseline, undefined, { maximumFractionDigits: 3 })} → {variance.candidate === null ? translate("Unavailable") : formatLocaleNumber(variance.candidate, undefined, { maximumFractionDigits: 3 })} · {translate("Delta")}: {variance.absoluteDelta === null ? translate("Unavailable") : formatLocaleNumber(variance.absoluteDelta, undefined, { maximumFractionDigits: 3 })}</p>
+    <p><strong>{translate("Base result")}</strong>: {baseOutcome(comparison.metrics.basePassed.baseline)} → {baseOutcome(comparison.metrics.basePassed.candidate)}</p>
+    <p role="status">{translate(comparison.compatibility.compatible ? "Robustness conditions match." : "Robustness conditions differ; interpret deltas with caution.")}</p>
+    {comparison.compatibility.changedDimensions.length > 0 && <p><strong>{translate("Changed conditions")}</strong>: {comparison.compatibility.changedDimensions.map((dimension) => displayName(dimension, "condition")).join(", ")}</p>}
   </div>;
 }
 

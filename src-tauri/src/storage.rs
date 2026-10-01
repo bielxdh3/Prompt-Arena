@@ -3760,10 +3760,95 @@ fn performance_metric(
         "value": numeric_value,
         "unit": unit,
         "source": source,
+        "scope": null,
+        "method": null,
         "samplingMethod": sampling_method,
         "samplingIntervalMs": null,
+        "sampleCount": null,
+        "intervalCount": null,
+        "samplesTruncated": null,
         "state": if available { if derived { "estimated" } else { "observed" } } else { "unavailable" },
         "confidence": if available { if derived { "medium" } else { "high" } } else { "unavailable" },
+        "temperature": temperature,
+    })
+}
+
+fn host_telemetry_performance_metric(
+    attempt: &Attempt,
+    key: &str,
+    unit: &str,
+    fallback_source: &str,
+    expected_sampling_method: &str,
+    minimum_samples: u64,
+    minimum_intervals: u64,
+    maximum_value: Option<f64>,
+    temperature: &str,
+) -> Value {
+    let telemetry = attempt
+        .extra
+        .get("hostHardwareTelemetry")
+        .filter(|value| value.get("scope").and_then(Value::as_str) == Some("host"));
+    let metric = telemetry.and_then(|value| value.get(key));
+    let sample_count = metric
+        .and_then(|value| value.get("sampleCount"))
+        .and_then(Value::as_u64);
+    let interval_count = metric
+        .and_then(|value| value.get("intervalCount"))
+        .and_then(Value::as_u64);
+    let raw_value = metric
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let method = metric
+        .and_then(|value| value.get("method"))
+        .and_then(Value::as_str)
+        .filter(|method| !method.is_empty());
+    let sampling_method = metric
+        .and_then(|value| value.get("samplingMethod"))
+        .and_then(Value::as_str)
+        .filter(|method| matches!(*method, "os_counter" | "os_sample"));
+    let value = raw_value.filter(|value| {
+        metric
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+            == Some("available")
+            && sample_count.is_some_and(|count| count >= minimum_samples)
+            && interval_count.is_some_and(|count| count >= minimum_intervals)
+            && method.is_some()
+            && sampling_method == Some(expected_sampling_method)
+            && maximum_value.map_or(true, |maximum| *value <= maximum)
+    });
+    let source = metric
+        .and_then(|value| value.get("source"))
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_source);
+    let sampling_method =
+        if telemetry.is_some() && sampling_method == Some(expected_sampling_method) {
+            expected_sampling_method
+        } else {
+            "unavailable"
+        };
+    let scope = telemetry.map(|_| "host");
+    let samples_truncated = telemetry
+        .and_then(|value| value.get("samplesTruncated"))
+        .and_then(Value::as_bool);
+    let sampling_interval_ms = metric
+        .and_then(|value| value.get("samplingIntervalMs"))
+        .and_then(Value::as_f64)
+        .filter(|interval| interval.is_finite() && *interval >= 0.0);
+    serde_json::json!({
+        "value": value,
+        "unit": unit,
+        "source": source,
+        "scope": scope,
+        "method": method,
+        "samplingMethod": sampling_method,
+        "samplingIntervalMs": sampling_interval_ms,
+        "sampleCount": sample_count,
+        "intervalCount": interval_count,
+        "samplesTruncated": samples_truncated,
+        "state": if value.is_some() { "observed" } else { "unavailable" },
+        "confidence": if value.is_some() { "medium" } else { "unavailable" },
         "temperature": temperature,
     })
 }
@@ -3820,9 +3905,9 @@ fn performance_evidence_from_attempt(attempt: &Attempt) -> Value {
             "thinkingTimeMs": unavailable("ms", "runtime.reasoning.thinkingTime"),
             "vramAverageBytes": unavailable("bytes", "os.gpu.vram.average"),
             "vramPeakBytes": unavailable("bytes", "os.gpu.vram.peak"),
-            "ramAverageBytes": unavailable("bytes", "os.memory.ram.average"),
-            "ramPeakBytes": unavailable("bytes", "os.memory.ram.peak"),
-            "cpuUtilizationPercent": unavailable("percent", "os.cpu.utilization"),
+            "ramAverageBytes": host_telemetry_performance_metric(attempt, "ramAverageBytes", "bytes", "os.memory.ram.average", "os_sample", 2, 1, None, temperature),
+            "ramPeakBytes": host_telemetry_performance_metric(attempt, "ramPeakBytes", "bytes", "os.memory.ram.peak", "os_sample", 2, 1, None, temperature),
+            "cpuUtilizationPercent": host_telemetry_performance_metric(attempt, "cpuUtilizationPercent", "percent", "os.cpu.utilization", "os_counter", 2, 1, Some(100.0), temperature),
             "gpuUtilizationPercent": unavailable("percent", "os.gpu.utilization"),
             "energyWh": unavailable("Wh", "os.power.energy"),
         },
@@ -4455,7 +4540,7 @@ mod tests {
         ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
         BLIND_EVALUATIONS_MIGRATION, EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION,
         MAX_ARTIFACT_BYTES, MAX_CONTEXT_WINDOW_TOKENS, MAX_DRAFT_DOCUMENT_BYTES,
-        MAX_DRAFT_TITLE_BYTES, MAX_OUTPUT_TOKENS, MAX_PROFILE_MODEL_BYTES,
+        MAX_DRAFT_TITLE_BYTES, MAX_METADATA_BYTES, MAX_OUTPUT_TOKENS, MAX_PROFILE_MODEL_BYTES,
         MAX_PROFILE_REQUEST_BYTES, ROADMAP_RECORDS_MIGRATION,
     };
 
@@ -4568,6 +4653,207 @@ mod tests {
             artifacts: Vec::new(),
             extra: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn performance_projection_uses_only_host_scoped_hardware_samples() {
+        let mut source = attempt();
+        source.extra.insert(
+            "hostHardwareTelemetry".to_owned(),
+            json!({
+                "scope": "host",
+                "samplesTruncated": false,
+                "cpuUtilizationPercent": {
+                    "value": 42.5,
+                    "status": "available",
+                    "source": "host.linux.procfs./proc/stat:cpu",
+                    "samplingMethod": "os_counter",
+                    "method": "counter_delta_weighted_host_busy_percent",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramAverageBytes": {
+                    "value": 3_000,
+                    "status": "available",
+                    "source": "host.linux.procfs./proc/meminfo:MemTotal-MemAvailable",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_mean",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramPeakBytes": {
+                    "value": 4_000,
+                    "status": "available",
+                    "source": "host.linux.procfs./proc/meminfo:MemTotal-MemAvailable",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_peak",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                }
+            }),
+        );
+        let evidence = super::performance_evidence_from_attempt(&source);
+        assert_eq!(evidence["metrics"]["cpuUtilizationPercent"]["value"], 42.5);
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["samplingMethod"],
+            "os_counter"
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["scope"],
+            "host"
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["method"],
+            "counter_delta_weighted_host_busy_percent"
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["sampleCount"],
+            3
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["intervalCount"],
+            2
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["samplesTruncated"],
+            false
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["samplingIntervalMs"],
+            100.0
+        );
+        assert_eq!(
+            evidence["metrics"]["ramAverageBytes"]["value"].as_f64(),
+            Some(3_000.0)
+        );
+        assert_eq!(
+            evidence["metrics"]["ramPeakBytes"]["value"].as_f64(),
+            Some(4_000.0)
+        );
+        assert_eq!(
+            evidence["metrics"]["ramPeakBytes"]["source"],
+            "host.linux.procfs./proc/meminfo:MemTotal-MemAvailable"
+        );
+        assert_eq!(
+            evidence["metrics"]["ramAverageBytes"]["samplingMethod"],
+            "os_sample"
+        );
+        assert_eq!(evidence["metrics"]["ramAverageBytes"]["scope"], "host");
+
+        source
+            .extra
+            .get_mut("hostHardwareTelemetry")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("telemetry is an object")
+            .insert("scope".to_owned(), json!("process"));
+        let untrusted_scope = super::performance_evidence_from_attempt(&source);
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["state"],
+            "unavailable"
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["ramAverageBytes"]["state"],
+            "unavailable"
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["scope"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["method"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["samplesTruncated"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn capped_telemetry_fits_a_single_model_record_below_one_mib() {
+        let mut source_attempt = attempt();
+        let raw_samples = (0..8_192_u64)
+            .map(|index| {
+                json!([
+                    index * 1_000,
+                    u64::MAX.to_string(),
+                    u64::MAX.to_string(),
+                    u64::MAX
+                ])
+            })
+            .collect::<Vec<_>>();
+        source_attempt.extra.insert(
+            "hostHardwareTelemetry".to_owned(),
+            json!({
+                "scope": "host",
+                "platform": "windows",
+                "windowDurationMs": 8_191_000,
+                "targetSamplingIntervalMs": 1_000,
+                "rawSamples": raw_samples,
+                "samplesTruncated": false,
+                "cpuUtilizationPercent": {
+                    "value": 50.0,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GetSystemTimes",
+                    "samplingMethod": "os_counter",
+                    "method": "counter_delta_weighted_host_busy_percent",
+                    "samplingIntervalMs": 1_000.0,
+                    "sampleCount": 8_192,
+                    "intervalCount": 8_191
+                },
+                "ramAverageBytes": {
+                    "value": 4_096,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_mean",
+                    "samplingIntervalMs": 1_000.0,
+                    "sampleCount": 8_192,
+                    "intervalCount": 8_191
+                },
+                "ramPeakBytes": {
+                    "value": 8_192,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_peak",
+                    "samplingIntervalMs": 1_000.0,
+                    "sampleCount": 8_192,
+                    "intervalCount": 8_191
+                }
+            }),
+        );
+        let performance = super::performance_evidence_from_attempt(&source_attempt);
+        let request = RoadmapRecordRequest {
+            record_id: "benchmark-run-telemetry-bound".to_owned(),
+            kind: "single_model_benchmark".to_owned(),
+            payload: json!({
+                "schemaVersion": 2,
+                "kind": "single_model_benchmark",
+                "runId": "run-1",
+                "benchmarkVersionId": "logic@1",
+                "benchmarkContentHash": "a".repeat(64),
+                "taskId": "task-1",
+                "caseId": "case-1",
+                "profileRevision": profile_revision(),
+                "sourceRun": run(),
+                "attempt": source_attempt,
+                "status": "completed",
+                "objective": null,
+                "performance": performance,
+                "hardware": null,
+                "createdAt": "2026-09-30T00:00:00Z"
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("single-model record envelope");
+        assert!(
+            bytes.len() < MAX_METADATA_BYTES,
+            "8,192 telemetry tuples produced {} bytes, above the 1 MiB record ceiling",
+            bytes.len()
+        );
     }
 
     #[test]
@@ -4723,6 +5009,46 @@ mod tests {
             json!({
                 "usage": {"promptTokens": 5, "completionTokens": 3, "totalTokens": 8},
                 "timing": {"totalDurationNs": 2000000, "loadDurationNs": 1000000, "promptEvalDurationNs": 500000, "evalDurationNs": 500000, "ttftDurationNs": 100000}
+            }),
+        );
+        source_attempt.extra.insert(
+            "hostHardwareTelemetry".to_owned(),
+            json!({
+                "scope": "host",
+                "samplesTruncated": false,
+                "platform": "windows",
+                "windowDurationMs": 250.0,
+                "targetSamplingIntervalMs": 100,
+                "cpuUtilizationPercent": {
+                    "value": 42.5,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GetSystemTimes",
+                    "samplingMethod": "os_counter",
+                    "method": "counter_delta_weighted_host_busy_percent",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramAverageBytes": {
+                    "value": 3000,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_mean",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramPeakBytes": {
+                    "value": 4000,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_peak",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                }
             }),
         );
         service

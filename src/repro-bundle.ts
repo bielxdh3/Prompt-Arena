@@ -2,6 +2,7 @@ import { canonicalJson, sanitizeRecord } from "./roadmap-records";
 
 export const MAX_REPRO_BUNDLE_BYTES = 8 * 1_048_576;
 export const MAX_REPRO_BENCHMARK_DOCUMENT_BYTES = 1_048_576;
+export const MAX_REPRO_RESPONSE_OUTPUT_BYTES = 4 * 1_048_576;
 const REPRO_BENCHMARK_CHUNK_BYTES = 48 * 1_024;
 const MAX_REPRO_BENCHMARK_CHUNK_CHARS = REPRO_BENCHMARK_CHUNK_BYTES * 4 / 3;
 const MAX_REPRO_BENCHMARK_CHUNKS = Math.ceil(MAX_REPRO_BENCHMARK_DOCUMENT_BYTES / REPRO_BENCHMARK_CHUNK_BYTES);
@@ -12,6 +13,14 @@ export type ReproBenchmarkSnapshot = {
   versionId: string;
   contentHash: string;
   documentJsonBase64Chunks: string[];
+};
+
+export type ReproResponseOutputSnapshot = {
+  runId: string;
+  attemptId: string;
+  byteCount: number;
+  sha256: string;
+  text: string;
 };
 
 export type ReproModelArtifactIdentity = {
@@ -364,8 +373,36 @@ async function sha256(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function isValidResponseOutputSnapshot(value: unknown, payload: Record<string, unknown>): Promise<boolean> {
+  if (!isRecord(value) || Object.keys(value).length !== 5
+    || !["runId", "attemptId", "byteCount", "sha256", "text"].every((key) => Object.hasOwn(value, key))) return false;
+  if (payload.kind !== "single_model_benchmark" || !portableId(payload.runId)
+    || value.runId !== payload.runId || !portableId(value.runId)
+    || !portableId(value.attemptId) || !isRecord(payload.attempt)
+    || payload.attempt.attemptId !== value.attemptId
+    || (isRecord(payload.sourceRun) && payload.sourceRun.runId !== value.runId)
+    || typeof value.text !== "string" || !isSha256(value.sha256)
+    || typeof value.byteCount !== "number" || !Number.isSafeInteger(value.byteCount)
+    || value.byteCount < 0 || value.byteCount > MAX_REPRO_RESPONSE_OUTPUT_BYTES) return false;
+  const bytes = new TextEncoder().encode(value.text);
+  if (bytes.byteLength !== value.byteCount || bytes.byteLength > MAX_REPRO_RESPONSE_OUTPUT_BYTES) return false;
+  try {
+    if (new TextDecoder("utf-8", { fatal: true }).decode(bytes) !== value.text) return false;
+  } catch {
+    return false;
+  }
+  return value.sha256.toLowerCase() === await sha256(value.text);
+}
+
 export async function exportReproBundle(input: Record<string, unknown>): Promise<string> {
-  const payload = sanitizeRecord(input);
+  const { responseOutput: responseOutputInput, ...inputWithoutResponseOutput } = input;
+  const payload = sanitizeRecord(inputWithoutResponseOutput);
+  if (responseOutputInput !== undefined) {
+    if (!await isValidResponseOutputSnapshot(responseOutputInput, payload)) {
+      throw new Error("The Repro Bundle response output is incomplete, over the size limit, or does not match its saved attempt.");
+    }
+    payload.responseOutput = responseOutputInput as ReproResponseOutputSnapshot;
+  }
   if (isRecord(payload.reproductionSnapshot) && payload.kind === "single_model_benchmark") {
     if (!await reproRunRequest(payload)) throw new Error("The Repro Bundle benchmark snapshot is incomplete or does not match its immutable identity.");
   }
@@ -396,7 +433,7 @@ export type ReproBundleDifference =
   | { kind: "model_artifact_hash_unavailable" }
   | { kind: "seed_control_unsupported" }
   | { kind: "hardware_platform_differs"; source: string; current: string };
-export type ReproBundleImportErrorCode = "too_large" | "malformed_json" | "invalid_shape" | "unsupported_schema" | "invalid_integrity_schema" | "invalid_manifest" | "invalid_byte_count" | "integrity_mismatch" | "invalid_reproduction_snapshot";
+export type ReproBundleImportErrorCode = "too_large" | "malformed_json" | "invalid_shape" | "unsupported_schema" | "invalid_integrity_schema" | "invalid_manifest" | "invalid_byte_count" | "integrity_mismatch" | "invalid_reproduction_snapshot" | "invalid_response_output";
 
 export class ReproBundleImportError extends Error {
   constructor(readonly code: ReproBundleImportErrorCode, message: string) {
@@ -453,6 +490,9 @@ export async function importReproBundle(serialized: string, context: ReproImport
 
   const sourceSchemaVersion = root.schemaVersion as 1 | 2 | 3;
   const payload = root.payload;
+  if (Object.hasOwn(payload, "responseOutput") && !await isValidResponseOutputSnapshot(payload.responseOutput, payload)) {
+    throw new ReproBundleImportError("invalid_response_output", "The saved response output is inconsistent, over the size limit, or does not match its attempt.");
+  }
   const hasSnapshot = Object.hasOwn(payload, "reproductionSnapshot");
   let request: ReproRunRequest | null = null;
   if (hasSnapshot && payload.kind === "single_model_benchmark") {

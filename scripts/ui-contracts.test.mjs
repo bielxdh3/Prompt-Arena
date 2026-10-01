@@ -94,4 +94,27 @@ describe("static UI parity contracts", () => {
     expect(styles).toMatch(/\.arena-live-table\s*\{[^}]*overflow-x:\s*auto/s);
     expect(styles).toMatch(/@media \(max-width: 900px\) \{[\s\S]*?\.models-layout\s*\{[^}]*grid-template-columns:\s*1fr;/s);
   });
+
+  it("keeps historical sources distinguishable and scrollable by keyboard, and gates unsupported repro runtimes", () => {
+    expect(roadmapSource).toContain('numberedName("Arena", summary.arenaId, comparableArenaSummaries.map((item) => item.arenaId))');
+    expect(roadmapSource).toContain('formatLocaleDate(summary.createdAt)');
+    expect(roadmapSource).toContain('role="region" aria-label={translate("Saved comparisons")} tabIndex={0}');
+    expect(roadmapSource).toContain('const importedRuntimeSupportsLiveIdentity = importedBundle?.profileRevision.runtime === "ollama";');
+    expect(roadmapSource).toContain('&& importedRuntimeSupportsLiveIdentity');
+    expect(roadmapSource).toContain(': runRequest.profileRevision.runtime !== "ollama"');
+    expect(roadmapSource).toContain('translate("The imported benchmark and saved profile match local records, but this runtime does not provide the live model identity check required for Re-run. Re-running is disabled.")');
+  });
+
+  it("connects robustness history to comparison and hash-linked export", () => {
+    expect(roadmapSource).toContain('id="insights-robustness-baseline"');
+    expect(roadmapSource).toContain('id="insights-robustness-candidate"');
+    expect(roadmapSource).toContain('onClick={compareSavedRobustnessResults}');
+    expect(roadmapSource).toContain('onClick={() => void exportSavedRobustnessComparison()}');
+    expect(roadmapSource).toContain('download={`prompt-arena-robustness-comparison-');
+    expect(roadmapSource).toContain('setRobustnessBaselineId(selectedRobustnessBaseline.recordId);');
+    expect(roadmapSource).toContain('setRobustnessCandidateId(selectedRobustnessCandidate.recordId);');
+    expect(roadmapSource).toContain('${displayName(result.taskId, "Task")} / ${displayName(result.caseId, "Case")}');
+    expect(roadmapSource).toContain('${recordId}`');
+    expect(roadmapSource).toContain('translate("Robustness comparison exports include prompt variants and saved results. Review the file before sharing.")');
+  });
 });

@@ -8,6 +8,7 @@ import {
   exportReproBundle,
   importReproBundle,
   MAX_REPRO_BUNDLE_BYTES,
+  MAX_REPRO_RESPONSE_OUTPUT_BYTES,
   matchesReproSource,
   reproModelArtifactFromProfile,
   reproRunRequest,
@@ -110,6 +111,72 @@ describe("repro bundle", () => {
     expect(imported.integrityVerified).toBe(true);
     expect(imported.reproductionSnapshotVerified).toBe(false);
     expect(imported.payload.runId).toBe("run-alpha");
+  });
+
+  it("exports and verifies the exact saved response output while filtering credential-keyed fields", async () => {
+    const payload = {
+      ...await sourcePayload(),
+      sourceRun: { runId: "run-alpha" },
+      attempt: { attemptId: "attempt-alpha" },
+    };
+    const text = "The answer is 42.\nUnicode: café 🧪";
+    const responseOutput = {
+      runId: "run-alpha",
+      attemptId: "attempt-alpha",
+      byteCount: new TextEncoder().encode(text).byteLength,
+      sha256: await sha256(text),
+      text,
+    };
+
+    const serialized = await exportReproBundle({ ...payload, responseOutput, apiKey: "must-not-export" });
+    const imported = await importReproBundle(serialized);
+
+    expect(serialized).not.toContain("must-not-export");
+    expect(imported.payload.responseOutput).toEqual(responseOutput);
+    expect(imported.integrityVerified).toBe(true);
+  });
+
+  it("rejects an oversized, mismatched, or tampered response output snapshot", async () => {
+    const payload = { ...await sourcePayload(), attempt: { attemptId: "attempt-alpha" } };
+    const text = "saved response";
+    const validOutput = {
+      runId: "run-alpha",
+      attemptId: "attempt-alpha",
+      byteCount: new TextEncoder().encode(text).byteLength,
+      sha256: await sha256(text),
+      text,
+    };
+
+    await expect(exportReproBundle({ ...payload, responseOutput: { ...validOutput, byteCount: MAX_REPRO_RESPONSE_OUTPUT_BYTES + 1 } }))
+      .rejects.toThrow("response output is incomplete");
+    await expect(exportReproBundle({ ...payload, responseOutput: { ...validOutput, attemptId: "another-attempt" } }))
+      .rejects.toThrow("response output is incomplete");
+
+    const tampered = { ...payload, responseOutput: { ...validOutput, sha256: "c".repeat(64) } };
+    await expect(importReproBundle(await bundleWithSchema(3, tampered)))
+      .rejects.toMatchObject({ name: "ReproBundleImportError", code: "invalid_response_output" });
+
+    const oversizedText = "x".repeat(MAX_REPRO_RESPONSE_OUTPUT_BYTES + 1);
+    const oversized = {
+      ...payload,
+      responseOutput: {
+        runId: "run-alpha",
+        attemptId: "attempt-alpha",
+        byteCount: new TextEncoder().encode(oversizedText).byteLength,
+        sha256: await sha256(oversizedText),
+        text: oversizedText,
+      },
+    };
+    await expect(importReproBundle(await bundleWithSchema(3, oversized)))
+      .rejects.toMatchObject({ name: "ReproBundleImportError", code: "invalid_response_output" });
+  });
+
+  it("continues to import older bundles that have no response output snapshot", async () => {
+    const payload = { schemaVersion: 1, kind: "single_model_benchmark", runId: "run-alpha", benchmarkVersionId: "logic@1", taskId: "reasoning", caseId: "case-1", profileRevision: { profileRevisionId: "profile-alpha@2" } };
+    const imported = await importReproBundle(await legacyV1Bundle(payload));
+
+    expect(imported.integrityVerified).toBe(true);
+    expect(imported.payload).toEqual(payload);
   });
 
   it("requires a hash-matching full benchmark snapshot and exact selected task/case", async () => {
@@ -308,6 +375,25 @@ describe("repro bundle", () => {
     values[32] = "x".repeat(MAX_REPRO_BUNDLE_BYTES - new TextEncoder().encode(baseBody).byteLength - 16);
 
     await expect(exportReproBundle({ values })).rejects.toThrow("bounded export limit");
+  });
+
+  it("enforces the total bundle limit when a maximum-size response output is included", async () => {
+    const payload = {
+      ...await sourcePayload(),
+      attempt: { attemptId: "attempt-alpha" },
+      evidenceChunks: Array.from({ length: 17 }, () => "p".repeat(256 * 1024)),
+    };
+    const text = "r".repeat(MAX_REPRO_RESPONSE_OUTPUT_BYTES);
+    const responseOutput = {
+      runId: "run-alpha",
+      attemptId: "attempt-alpha",
+      byteCount: new TextEncoder().encode(text).byteLength,
+      sha256: await sha256(text),
+      text,
+    };
+
+    await expect(exportReproBundle({ ...payload, responseOutput }))
+      .rejects.toThrow("bounded export limit");
   });
 
   it("checks the original manifest before applying v1 envelope migration", async () => {

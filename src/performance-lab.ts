@@ -1,4 +1,4 @@
-import type { PersistedExecution } from "./bridge";
+import type { HostTelemetryMetricEvidence, PersistedExecution } from "./bridge";
 import type { RoadmapRecordRequest } from "./roadmap-records";
 import type { SingleModelBenchmarkPayload } from "./single-model-benchmark";
 
@@ -6,8 +6,13 @@ export type MetricEvidence<T extends number | null = number | null> = {
   value: T;
   unit: string;
   source: string;
-  samplingMethod: "runtime" | "os_counter" | "derived" | "unavailable";
+  scope: "host" | null;
+  method: string | null;
+  samplingMethod: "runtime" | "os_counter" | "os_sample" | "derived" | "unavailable";
   samplingIntervalMs: number | null;
+  sampleCount: number | null;
+  intervalCount: number | null;
+  samplesTruncated: boolean | null;
   state: "observed" | "estimated" | "unavailable";
   confidence: "high" | "medium" | "low" | "unavailable";
   temperature: "cold" | "warm" | "unknown";
@@ -46,7 +51,45 @@ function integer(value: unknown): number | null {
 }
 
 function metric(value: number | null, unit: string, source: string, samplingMethod: MetricEvidence["samplingMethod"], temperature: MetricEvidence["temperature"], state: MetricEvidence["state"] = value === null ? "unavailable" : "observed", confidence: MetricEvidence["confidence"] = value === null ? "unavailable" : "high"): MetricEvidence {
-  return { value, unit, source, samplingMethod, samplingIntervalMs: null, state, confidence, temperature };
+  return { value, unit, source, scope: null, method: null, samplingMethod, samplingIntervalMs: null, sampleCount: null, intervalCount: null, samplesTruncated: null, state, confidence, temperature };
+}
+
+function unavailableHostMetric(unit: string, source: string, method: string, temperature: MetricEvidence["temperature"]): MetricEvidence {
+  return {
+    ...metric(null, unit, source, "unavailable", temperature),
+    scope: "host",
+    method,
+  };
+}
+
+function hostMetricEvidence(metricValue: HostTelemetryMetricEvidence | undefined, samplesTruncated: boolean | undefined, unit: string, temperature: MetricEvidence["temperature"], expectedSamplingMethod: "os_counter" | "os_sample", minimumSamples: number, minimumIntervals: number, maximumValue: number | null = null): MetricEvidence | null {
+  if (!metricValue) return null;
+  const value = finite(metricValue.value);
+  const sampleCount = integer(metricValue.sampleCount);
+  const intervalCount = integer(metricValue.intervalCount);
+  const method = typeof metricValue.method === "string" && metricValue.method.length > 0 ? metricValue.method : null;
+  const available = metricValue.status === "available"
+    && value !== null
+    && (maximumValue === null || value <= maximumValue)
+    && sampleCount !== null
+    && sampleCount >= minimumSamples;
+  const intervalsSufficient = intervalCount !== null && intervalCount >= minimumIntervals;
+  const methodMatches = metricValue.samplingMethod === expectedSamplingMethod && method !== null;
+  return {
+    value: available && intervalsSufficient && methodMatches ? value : null,
+    unit,
+    source: metricValue.source,
+    scope: "host",
+    method,
+    samplingMethod: methodMatches ? metricValue.samplingMethod : "unavailable",
+    samplingIntervalMs: finite(metricValue.samplingIntervalMs),
+    sampleCount,
+    intervalCount,
+    samplesTruncated: typeof samplesTruncated === "boolean" ? samplesTruncated : null,
+    state: available && intervalsSufficient && methodMatches ? "observed" : "unavailable",
+    confidence: available && intervalsSufficient && methodMatches ? "medium" : "unavailable",
+    temperature,
+  };
 }
 
 export function performanceEvidenceFromExecution(execution: PersistedExecution | null, temperature: MetricEvidence["temperature"] = "unknown"): PerformanceEvidence {
@@ -63,6 +106,9 @@ export function performanceEvidenceFromExecution(execution: PersistedExecution |
   const ttftMs = timing?.ttftDurationNs == null ? null : finite(timing.ttftDurationNs / 1_000_000);
   const promptTokensPerSecond = promptTokens !== null && promptEvalDurationMs !== null && promptEvalDurationMs > 0 ? finite(promptTokens / (promptEvalDurationMs / 1_000)) : null;
   const generationTokensPerSecond = completionTokens !== null && generationTimeMs !== null && generationTimeMs > 0 ? finite(completionTokens / (generationTimeMs / 1_000)) : null;
+  const hostTelemetry = execution?.attempt.hostHardwareTelemetry?.scope === "host"
+    ? execution.attempt.hostHardwareTelemetry
+    : undefined;
   const unavailable = (unit: string, source: string): MetricEvidence => metric(null, unit, source, "unavailable", temperature);
   return {
     schemaVersion: 1,
@@ -80,9 +126,9 @@ export function performanceEvidenceFromExecution(execution: PersistedExecution |
       thinkingTimeMs: unavailable("ms", "runtime.reasoning.thinkingTime"),
       vramAverageBytes: unavailable("bytes", "os.gpu.vram.average"),
       vramPeakBytes: unavailable("bytes", "os.gpu.vram.peak"),
-      ramAverageBytes: unavailable("bytes", "os.memory.ram.average"),
-      ramPeakBytes: unavailable("bytes", "os.memory.ram.peak"),
-      cpuUtilizationPercent: unavailable("percent", "os.cpu.utilization"),
+      ramAverageBytes: hostMetricEvidence(hostTelemetry?.ramAverageBytes, hostTelemetry?.samplesTruncated, "bytes", temperature, "os_sample", 2, 1) ?? unavailableHostMetric("bytes", "os.memory.ram.average", "sampled_host_physical_used_mean", temperature),
+      ramPeakBytes: hostMetricEvidence(hostTelemetry?.ramPeakBytes, hostTelemetry?.samplesTruncated, "bytes", temperature, "os_sample", 2, 1) ?? unavailableHostMetric("bytes", "os.memory.ram.peak", "sampled_host_physical_used_peak", temperature),
+      cpuUtilizationPercent: hostMetricEvidence(hostTelemetry?.cpuUtilizationPercent, hostTelemetry?.samplesTruncated, "percent", temperature, "os_counter", 2, 1, 100) ?? unavailableHostMetric("percent", "os.cpu.utilization", "counter_delta_weighted_host_busy_percent", temperature),
       gpuUtilizationPercent: unavailable("percent", "os.gpu.utilization"),
       energyWh: unavailable("Wh", "os.power.energy"),
     },

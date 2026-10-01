@@ -153,8 +153,9 @@ choose them. This is one restricted challenge, not general-purpose code executio
 contexts, requires the pinned image already present (`--pull=never`), and records daemon/image/timeout/output/cleanup
 failures without turning infrastructure errors into a model score or falling back to host execution. The container has
 no network or host mounts, uses a non-root UID, a read-only root filesystem, dropped capabilities, no-new-privileges,
-and CPU, memory, process, wall-clock, input, and combined-output bounds. User-triggered cancellation is not yet wired
-into the app command; evaluator wall-clock timeout kills the Docker CLI process and attempts named-container cleanup.
+and CPU, memory, process, wall-clock, input, and combined-output bounds. Arena user-triggered cancellation propagates to
+the Docker evaluator, which kills the Docker CLI process and attempts named-container cleanup; the single-model benchmark
+screen currently has no cancel control. Evaluator wall-clock timeout uses the same process-termination and cleanup path.
 
 Docker is an additional local dependency only when running these cases. Rootless daemons are supported at the standard
 `/run/user/<uid>/docker.sock` endpoint; the app also accepts the standard local system sockets and Docker Desktop named

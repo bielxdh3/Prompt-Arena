@@ -1695,7 +1695,7 @@ export function ModelsView() {
 
   async function handleRegister() {
     if (!desktop) {
-      setFeedback({ kind: "info", message: profilePreviewCopy() });
+      setFeedback({ kind: "info", message: translate(profilePreviewCopy()) });
       return;
     }
     setBusy(true);
@@ -1725,7 +1725,7 @@ export function ModelsView() {
       <section className="panel page-intro">
         <p className="eyebrow">{translate("Model library")}</p>
         <h2>{translate("Profiles and local models")}</h2>
-        <p>{translate("Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp models through explicit loopback endpoints. Import only app-managed relative GGUF paths, track persisted local operations, and keep removal evidence alongside a read-only hardware baseline. No credentials, telemetry, or cloud provider.")}</p>
+        <p>{translate("Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp through explicit loopback endpoints. Import only app-managed relative GGUF paths and keep operation and removal evidence locally. Model inventory is not sent to a cloud provider. The hardware baseline is read-only; local generation can record host CPU/RAM with attempt evidence.")}</p>
       </section>
 
       <div className="models-layout">
@@ -1995,7 +1995,7 @@ export function ModelsView() {
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
             <AccessibleListbox
               id="profile-discovered-model"
-              label="Discovered local model (optional)"
+              label={translate("Discovered local model (optional)")}
               value={selectedProfileModelId}
               placeholder={translate("Manual Ollama model")}
               options={modelState.status === "ready" ? modelState.catalog.models.map((model) => ({ value: model.modelId, label: model.name, detail: `${modelBackendLabel(model.backend)} · ${modelRecordQuantizationLabel(model)}` })) : []}
@@ -2052,7 +2052,7 @@ export function ModelsView() {
               {" "} {translate("Derived immutable ID:")} <TechnicalDetails label={translate("Profile revision")} value={profileRevisionIdPreview(form)} />
             </div>
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>{translate("Register immutable revision")}</button>
-            {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
+            {!isDesktopEnvironment() && <p className="field-help">{translate(profilePreviewCopy())}</p>}
           </div>
 
           <div className="profile-records">
@@ -2063,7 +2063,7 @@ export function ModelsView() {
               </div>
               <button className="text-button" type="button" onClick={() => void refreshProfiles()} disabled={!isDesktopEnvironment() || busy}>{translate("Refresh")}</button>
             </div>
-            {profileState.status === "preview" && <StateMessage icon="◇" title={translate("Browser preview")} description={profilePreviewCopy()} />}
+            {profileState.status === "preview" && <StateMessage icon="◇" title={translate("Browser preview")} description={translate(profilePreviewCopy())} />}
             {profileState.status === "loading" && <StateMessage icon="…" title={translate("Loading profiles")} description="Reading immutable profile revisions from SQLite." />}
             {profileState.status === "error" && <StateMessage icon="!" title={translate("Profiles unavailable")} description={profileState.message} error />}
             {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title={translate("No registered profiles")} description={profileEmptyCopy()} />}

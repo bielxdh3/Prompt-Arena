@@ -61,6 +61,39 @@ describe("i18n", () => {
     expect(translateText("pt-BR", "Local models")).toBe("Modelos locais");
   });
 
+  it("translates robustness history comparison and export notices", () => {
+    expect(translateText("pt-BR", "Robustness history comparison")).toBe("Comparação histórica de robustez");
+    expect(translateText("pt-BR", "Compare robustness results")).toBe("Comparar resultados de robustez");
+    expect(translateText("pt-BR", "Robustness comparison exports include prompt variants and saved results. Review the file before sharing."))
+      .toBe("As exportações de comparação de robustez incluem variantes de prompt e resultados salvos. Revise o arquivo antes de compartilhar.");
+  });
+
+  it("translates feature navigation and the discovered-model selector", () => {
+    expect(translateText("pt-BR", "Insights")).toBe("Análises");
+    expect(translateText("pt-BR", "Benchmarks")).toBe("Testes de referência");
+    expect(translateText("pt-BR", "Discovered local model (optional)")).toBe("Modelo local descoberto (opcional)");
+    expect(translateText("pt-BR", "Browser preview shows only unsaved profile fields. It does not list or register profile revisions.")).toBe("A pré-visualização do navegador mostra apenas campos de perfil não salvos. Ela não lista nem registra revisões de perfil.");
+    expect(translateText("pt-BR", "Host CPU usage")).toBe("Uso da CPU do host");
+    expect(translateText("pt-BR", "Average host RAM")).toBe("Uso médio da RAM do host");
+    expect(translateText("pt-BR", "Peak host RAM")).toBe("Pico de RAM usada no host");
+    expect(translateText("pt-BR", "Host CPU and RAM cover the whole system during generation; they are not attributed to the model process.")).toBe("CPU e RAM do host abrangem o sistema inteiro durante a geração; os valores não são atribuídos ao processo do modelo.");
+    expect(translateText("pt-BR", "Scope")).toBe("Escopo");
+    expect(translateText("pt-BR", "Whole host")).toBe("Sistema inteiro");
+    expect(translateText("pt-BR", "Operating system snapshot")).toBe("Leitura pontual do sistema operacional");
+    expect(translateText("pt-BR", "Runtime-reported")).toBe("Informado pelo runtime");
+    expect(translateText("pt-BR", "Derived metric")).toBe("Métrica derivada");
+    expect(translateText("pt-BR", "Aggregation method")).toBe("Método de agregação");
+    expect(translateText("pt-BR", "Average sampling interval")).toBe("Intervalo médio de amostragem");
+    expect(translateText("pt-BR", "Sample count")).toBe("Quantidade de amostras");
+    expect(translateText("pt-BR", "Interval count")).toBe("Quantidade de intervalos");
+    expect(translateText("pt-BR", "Raw samples truncated")).toBe("Série de amostras brutas truncada");
+    expect(translateText("pt-BR", "Repro bundle generated. Review the prompt, saved response, profile, and host CPU/RAM evidence before sharing.")).toBe("Pacote de reprodução gerado. Revise o prompt, a resposta salva, o perfil e as evidências de CPU/RAM do host antes de compartilhar.");
+    expect(translateText("pt-BR", "Bundle file is ready, but its local history record could not be saved. Review the prompt, saved response, profile, and host CPU/RAM evidence before sharing.")).toBe("O arquivo do pacote está pronto, mas não foi possível salvar seu registro no histórico local. Revise o prompt, a resposta salva, o perfil e as evidências de CPU/RAM do host antes de compartilhá-lo.");
+    expect(translateText("pt-BR", "Credential fields are filtered, but the bundle can contain profile prompts, saved response text, and host CPU/RAM evidence. Review the complete bundle before sharing; response text and prompts may contain private information, and the checksum does not identify the creator.")).toBe("Campos de credenciais são filtrados, mas o pacote pode conter prompts do perfil, texto da resposta salva e evidências de CPU/RAM do host. Revise o pacote completo antes de compartilhá-lo; respostas e prompts podem conter informações privadas, e o checksum não identifica quem o criou.");
+    expect(translateText("pt-BR", "The saved response output is inconsistent or exceeds the local size limit.")).toBe("A resposta salva é inconsistente ou excede o limite de tamanho local.");
+    expect(translateText("pt-BR", "Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp through explicit loopback endpoints. Import only app-managed relative GGUF paths and keep operation and removal evidence locally. Model inventory is not sent to a cloud provider. The hardware baseline is read-only; local generation can record host CPU/RAM with attempt evidence.")).toBe("Registre revisões imutáveis de perfis locais e descubra Ollama, LM Studio e llama.cpp por endpoints de loopback explícitos. Importe apenas caminhos GGUF relativos gerenciados pelo aplicativo e mantenha localmente as evidências de operação e remoção. O inventário de modelos não é enviado a provedores em nuvem. A linha de base de hardware é somente leitura; a geração local pode registrar CPU/RAM do host na evidência da tentativa.");
+  });
+
   it("translates the profile output-token control", () => {
     expect(translateText("pt-BR", "Maximum output tokens")).toBe("Máximo de tokens de saída");
     expect(translateText("pt-BR", "Optional. Leave blank to preserve the runtime default. A set value caps generated output; change the revision to save a different budget.")).toBe("Opcional. Deixe em branco para preservar o padrão do runtime. Um valor definido limita a saída gerada; altere a revisão para salvar outro limite.");
@@ -74,6 +107,7 @@ describe("i18n", () => {
 
   it("translates the unsupported Repro Bundle seed warning", () => {
     expect(translateText("pt-BR", "This bundle uses a seed control that the local single-model runner cannot apply; rerunning is disabled.")).toBe("Este pacote usa um controle de semente que o executor local de modelo único não consegue aplicar; a nova execução está desativada.");
+    expect(translateText("pt-BR", "The imported benchmark and saved profile match local records, but this runtime does not provide the live model identity check required for Re-run. Re-running is disabled.")).toBe("O benchmark importado e o perfil salvo correspondem aos registros locais, mas este runtime não fornece a verificação ativa de identidade do modelo exigida para a reexecução. A reexecução está desativada.");
   });
 
   it("covers AST-audited PT-BR fallback literals", () => {
