@@ -37,12 +37,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out exact ref
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # actions/checkout v7
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
+      - name: Resolve checked-out commit
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # actions/setup-node v7
         with:
           node-version: 22
           cache: npm
@@ -72,7 +77,7 @@ jobs:
           npm run build
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # dtolnay/rust-toolchain stable
         with:
           components: rustfmt
 
@@ -124,16 +129,35 @@ jobs:
 
       - name: Verify Windows packages and run clean-install smoke
         if: runner.os == 'Windows'
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run verify:package -- --platform windows --smoke
+
+      - name: Upload Windows MSI smoke diagnostics
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        with:
+          name: prompt-arena-msi-diagnostics-${{ steps.commit.outputs.sha }}
+          path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify Linux packages and run package/app smoke
         if: runner.os == 'Linux'
         run: npm run verify:package -- --platform linux --smoke
 
+      - name: Add checked-out commit to verification evidence
+        shell: bash
+        env:
+          CHECKED_OUT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          printf 'Checked-out commit SHA: %s\n' "$CHECKED_OUT_SHA" >> package-verification.txt
+
       - name: Upload unsigned installers and checksums
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
         with:
-          name: prompt-arena-${{ matrix.platform }}-${{ github.sha }}
+          name: prompt-arena-${{ matrix.platform }}-${{ steps.commit.outputs.sha }}
           path: |
             package-artifacts/
             checksums-sha256.txt

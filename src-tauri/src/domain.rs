@@ -156,6 +156,15 @@ pub enum ModelAvailability {
     Removed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelContentHashStatus {
+    #[default]
+    NotAvailable,
+    VerifiedAtImport,
+    ImportIdentityNotRechecked,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRecord {
@@ -168,6 +177,8 @@ pub struct ModelRecord {
     pub availability: ModelAvailability,
     pub digest: Option<String>,
     pub content_hash: Option<String>,
+    #[serde(default)]
+    pub content_hash_status: ModelContentHashStatus,
     pub size_bytes: Option<u64>,
     pub family: Option<String>,
     pub parameter_size: Option<String>,
@@ -301,6 +312,8 @@ pub struct ModelRemovalEvidence {
 pub struct Run {
     pub run_id: String,
     pub benchmark_version_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub profile_revision_ids: Vec<String>,
     pub status: String,
     pub started_at: String,
@@ -315,6 +328,8 @@ pub struct Run {
 pub struct Attempt {
     pub attempt_id: String,
     pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub profile_revision_id: String,
     pub case_id: String,
     pub status: String,
@@ -346,6 +361,7 @@ pub enum ObjectiveVerifierKind {
     RequiredFields,
     Classification,
     SafePattern,
+    DockerContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -432,7 +448,29 @@ pub enum ExecutionBoundaryKind {
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionBoundaryStatus {
     Available,
+    Required,
     Unavailable,
+}
+
+/// An implementation-owned, versioned evaluator contract. The identifier can
+/// select only one of the fixed contracts in `docker_evaluator`; it never
+/// carries a command, test, image, or filesystem path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockerVerifierId {
+    MissingUserTextV1,
+    MissingResourceTextV1,
+    FixedFunctionPythonV1,
+}
+
+impl DockerVerifierId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingUserTextV1 => "missing_user_text_v1",
+            Self::MissingResourceTextV1 => "missing_resource_text_v1",
+            Self::FixedFunctionPythonV1 => "fixed_function_python_v1",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -841,8 +879,8 @@ fn validate_text(value: &str) -> Result<(), ValidationError> {
 mod tests {
     use super::{
         canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
-        validate_benchmark_document, ValidationError, BENCHMARK_SCHEMA, BENCHMARK_SCHEMA_VERSION,
-        MAX_BENCHMARK_DOCUMENT_BYTES,
+        validate_benchmark_document, Attempt, Run, ValidationError, BENCHMARK_SCHEMA,
+        BENCHMARK_SCHEMA_VERSION, MAX_BENCHMARK_DOCUMENT_BYTES,
     };
     use serde_json::{json, Value};
 
@@ -981,5 +1019,66 @@ mod tests {
             stable_profile_revision_id("profile", 3).unwrap(),
             "profile@3"
         );
+    }
+
+    #[test]
+    fn run_and_attempt_task_identity_remains_backward_compatible() {
+        let old_run: Run = serde_json::from_value(json!({
+            "runId": "run-1",
+            "benchmarkVersionId": "logic@1",
+            "profileRevisionIds": ["profile@1"],
+            "status": "completed",
+            "startedAt": "100",
+            "attemptIds": [],
+            "environment": {}
+        }))
+        .unwrap();
+        let old_attempt: Attempt = serde_json::from_value(json!({
+            "attemptId": "attempt-1",
+            "runId": "run-1",
+            "profileRevisionId": "profile@1",
+            "caseId": "case-1",
+            "status": "completed",
+            "effectiveConfig": {},
+            "result": null,
+            "artifacts": []
+        }))
+        .unwrap();
+        assert_eq!(old_run.task_id, None);
+        assert_eq!(old_attempt.task_id, None);
+        assert!(serde_json::to_value(&old_run)
+            .unwrap()
+            .get("taskId")
+            .is_none());
+        assert!(serde_json::to_value(&old_attempt)
+            .unwrap()
+            .get("taskId")
+            .is_none());
+
+        let current_run: Run = serde_json::from_value(json!({
+            "runId": "run-2",
+            "benchmarkVersionId": "logic@1",
+            "taskId": "task-1",
+            "profileRevisionIds": ["profile@1"],
+            "status": "completed",
+            "startedAt": "100",
+            "attemptIds": [],
+            "environment": {}
+        }))
+        .unwrap();
+        let current_attempt: Attempt = serde_json::from_value(json!({
+            "attemptId": "attempt-2",
+            "runId": "run-2",
+            "taskId": "task-1",
+            "profileRevisionId": "profile@1",
+            "caseId": "case-1",
+            "status": "completed",
+            "effectiveConfig": {},
+            "result": null,
+            "artifacts": []
+        }))
+        .unwrap();
+        assert_eq!(current_run.task_id.as_deref(), Some("task-1"));
+        assert_eq!(current_attempt.task_id.as_deref(), Some("task-1"));
     }
 }

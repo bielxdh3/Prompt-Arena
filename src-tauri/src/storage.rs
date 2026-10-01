@@ -16,8 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::domain::{
     canonical_json_value, sha256_hex, stable_profile_revision_id, stable_version_id,
     validate_artifact_ref, validate_benchmark_document, validate_benchmark_document_size, Attempt,
-    BlindEvaluationRecord, ImmutableResultReference, ModelOperation, ModelRecord,
-    ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+    BlindEvaluationRecord, ImmutableResultReference, ModelContentHashStatus, ModelOperation,
+    ModelRecord, ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
     MAX_BENCHMARK_DOCUMENT_BYTES,
 };
 
@@ -25,7 +25,7 @@ use crate::external_providers::{
     validate_external_generation_evidence, ExternalGenerationEvidencePayload,
 };
 use crate::orchestration::MAX_OBJECTIVE_EXPECTATION_BYTES;
-use crate::runtime::GenerationResponse;
+use crate::runtime::{GenerationResponse, MAX_CONTEXT_WINDOW_TOKENS, MAX_OUTPUT_TOKENS};
 
 pub use crate::domain::ArtifactRef;
 
@@ -260,11 +260,17 @@ pub struct ArenaExecutionEvidence {
 #[serde(rename_all = "camelCase")]
 pub struct ArenaSummaryPayload {
     pub arena_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blind: Option<bool>,
     pub benchmark_version_id: String,
     pub task_id: String,
     pub case_id: String,
     pub repetitions: u32,
     pub pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_name: Option<String>,
     pub materialization_seed: Option<u64>,
     #[serde(default)]
     pub arena_wall_time_ms: Option<f64>,
@@ -994,11 +1000,60 @@ impl StorageService {
         created_at: &str,
     ) -> Result<SaveOutcome, StorageError> {
         validate_profile_revision(revision)?;
+        let mut persisted_revision = revision.clone();
+        if let Some(model_content_hash) = revision
+            .extra
+            .get("modelContentHash")
+            .and_then(Value::as_str)
+        {
+            let model_id = revision
+                .extra
+                .get("modelId")
+                .and_then(Value::as_str)
+                .ok_or(StorageError::InvalidProfileRevision)?;
+            let record = self
+                .get_model_record(model_id)?
+                .ok_or(StorageError::InvalidProfileRevision)?;
+            let source_id = revision.extra.get("sourceId").and_then(Value::as_str);
+            let backend = revision.extra.get("backend").cloned().and_then(|value| {
+                serde_json::from_value::<crate::domain::ModelBackend>(value).ok()
+            });
+            let path = revision.extra.get("path").and_then(Value::as_str);
+            let endpoint = revision.extra.get("endpoint").and_then(Value::as_str);
+            let digest = revision.extra.get("modelDigest").and_then(Value::as_str);
+            let quantization = revision
+                .extra
+                .get("quantizationLevel")
+                .and_then(Value::as_str);
+            if !record.managed
+                || !matches!(record.backend, crate::domain::ModelBackend::LlamaCpp)
+                || revision.runtime != "llama_cpp"
+                || record.content_hash.as_deref() != Some(model_content_hash)
+                || record.name != revision.model
+                || source_id != Some(record.source_id.as_str())
+                || backend.as_ref() != Some(&record.backend)
+                || path != record.path.as_deref()
+                || path != record.managed_path.as_deref()
+                || endpoint != record.endpoint.as_deref()
+                || digest != record.digest.as_deref()
+                || quantization != record.quantization_level.as_deref()
+            {
+                return Err(StorageError::InvalidProfileRevision);
+            }
+            // Saving the profile cannot establish that the path or runtime still
+            // contains these bytes. Canonicalize from the immutable stored record
+            // and explicitly retain the import-time-only scope.
+            persisted_revision.extra.insert(
+                "modelContentHashStatus".to_owned(),
+                serde_json::json!("import_identity_not_rechecked"),
+            );
+        }
+        validate_profile_revision(&persisted_revision)?;
         save_immutable_json(
             &self.connection()?,
             JsonTable::ProfileRevisions,
-            &revision.profile_revision_id,
-            revision,
+            &persisted_revision.profile_revision_id,
+            &persisted_revision,
             created_at,
         )
     }
@@ -1120,16 +1175,7 @@ impl StorageService {
         rows.map(|row| {
             let (arena_id, content_hash, document_json, created_at) =
                 row.map_err(|_| StorageError::DatabaseFailure)?;
-            let payload: ArenaSummaryPayload =
-                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
-            if payload.arena_id != arena_id {
-                return Err(StorageError::DatabaseFailure);
-            }
-            Ok(ArenaSummaryRecord {
-                payload,
-                content_hash,
-                created_at,
-            })
+            parse_arena_summary_record(&arena_id, content_hash, &document_json, created_at)
         })
         .collect()
     }
@@ -1440,6 +1486,80 @@ impl StorageService {
         Ok((size, bytes))
     }
 
+    /// Hashes the current bytes of a managed model for explicit import or another
+    /// caller that deliberately requests a full-file identity check. Discovery
+    /// must use `read_managed_model_prefix` instead so it never scans a multi-GB
+    /// model just to refresh catalog metadata.
+    pub fn hash_managed_model(&self, relative_path: &str) -> Result<(u64, String), StorageError> {
+        let (size, _, content_hash) = self.read_managed_model_prefix_and_hash(relative_path, 0)?;
+        Ok((size, content_hash))
+    }
+
+    /// Reads a bounded header prefix and hashes the same streamed byte sequence.
+    /// This is intended for explicit managed-model import, where both GGUF
+    /// metadata and the import-time artifact identity are required.
+    pub fn read_managed_model_prefix_and_hash(
+        &self,
+        relative_path: &str,
+        max_prefix_bytes: usize,
+    ) -> Result<(u64, Vec<u8>, String), StorageError> {
+        validate_managed_model_path(relative_path)?;
+        let target =
+            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
+        let metadata = fs::symlink_metadata(&target).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StorageError::ArtifactNotFound
+            } else {
+                StorageError::from_io(error)
+            }
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(StorageError::InvalidRecordId);
+        }
+        if metadata.len() > MAX_MANAGED_MODEL_BYTES {
+            return Err(StorageError::MetadataTooLarge);
+        }
+
+        let mut file = fs::File::open(&target).map_err(StorageError::from_io)?;
+        let opened_metadata = file.metadata().map_err(StorageError::from_io)?;
+        if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+        let prefix_limit = max_prefix_bytes.min(MAX_MODEL_METADATA_BYTES);
+        let mut prefix = Vec::with_capacity(metadata.len().min(prefix_limit as u64) as usize);
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut size = 0_u64;
+        loop {
+            let read = file.read(&mut buffer).map_err(StorageError::from_io)?;
+            if read == 0 {
+                break;
+            }
+            size = size
+                .checked_add(read as u64)
+                .filter(|size| *size <= MAX_MANAGED_MODEL_BYTES)
+                .ok_or(StorageError::MetadataTooLarge)?;
+            hasher.update(&buffer[..read]);
+            if prefix.len() < prefix_limit {
+                let prefix_bytes = (prefix_limit - prefix.len()).min(read);
+                prefix.extend_from_slice(&buffer[..prefix_bytes]);
+            }
+        }
+        let final_metadata = file.metadata().map_err(StorageError::from_io)?;
+        let modified_during_read = opened_metadata
+            .modified()
+            .ok()
+            .zip(final_metadata.modified().ok())
+            .is_some_and(|(opened, finished)| opened != finished);
+        if size != metadata.len() || final_metadata.len() != metadata.len() || modified_during_read
+        {
+            return Err(StorageError::ArtifactHashMismatch);
+        }
+        let digest = hasher.finalize();
+        let content_hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        Ok((size, prefix, content_hash))
+    }
+
     pub fn remove_managed_model(
         &self,
         relative_path: &str,
@@ -1450,9 +1570,7 @@ impl StorageService {
             validate_sha256(expected_content_hash)?;
         }
 
-        let target =
-            safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
-        let (size, content_hash) = hash_managed_model_file(&target)?;
+        let (size, content_hash) = self.hash_managed_model(relative_path)?;
         if expected_content_hash
             .is_some_and(|expected| !expected.eq_ignore_ascii_case(&content_hash))
         {
@@ -1708,6 +1826,7 @@ impl StorageService {
                 return Err(StorageError::ImmutableConflict);
             }
         } else {
+            self.validate_roadmap_record_sources(request)?;
             connection
                 .execute(
                     "INSERT INTO roadmap_records (record_id, kind, content_hash, document_json, created_at)
@@ -1797,6 +1916,913 @@ impl StorageService {
             Ok(record)
         })
         .collect()
+    }
+
+    fn validate_roadmap_record_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        validate_roadmap_record(request)?;
+        match request.kind.as_str() {
+            "single_model_benchmark" => self.validate_single_model_benchmark_sources(request),
+            "single_model_suite" => self.validate_single_model_suite_sources(request),
+            "performance_lab" => self.validate_performance_record_sources(request),
+            "historical_regression" => self.validate_historical_regression_sources(request),
+            "model_ratings" => self.validate_model_ratings_sources(request),
+            "robustness_arena" => self.validate_robustness_sources(request),
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_single_model_benchmark_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("schemaVersion").and_then(Value::as_u64) != Some(2)
+            || payload.get("kind").and_then(Value::as_str) != Some("single_model_benchmark")
+        {
+            return Err(invalid());
+        }
+        let run_id = payload
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if request.record_id != format!("benchmark-{run_id}") {
+            return Err(invalid());
+        }
+        let benchmark_version_id = payload
+            .get("benchmarkVersionId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let task_id = payload
+            .get("taskId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let case_id = payload
+            .get("caseId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let benchmark_content_hash = payload
+            .get("benchmarkContentHash")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+
+        let version = self
+            .get_benchmark_version(benchmark_version_id)?
+            .ok_or_else(invalid)?;
+        let benchmark =
+            validate_benchmark_document(&version.document_json).map_err(|_| invalid())?;
+        if benchmark.version_id != benchmark_version_id
+            || benchmark.content_hash != version.summary.content_hash
+            || benchmark_content_hash != version.summary.content_hash
+            || !benchmark
+                .document
+                .benchmark_version
+                .tasks
+                .iter()
+                .any(|task| {
+                    task.task_id == task_id
+                        && task
+                            .cases
+                            .iter()
+                            .any(|benchmark_case| benchmark_case.case_id == case_id)
+                })
+        {
+            return Err(invalid());
+        }
+
+        let source_run: Run =
+            serde_json::from_value(payload.get("sourceRun").cloned().ok_or_else(invalid)?)
+                .map_err(|_| invalid())?;
+        if source_run.run_id != run_id || source_run.benchmark_version_id != benchmark_version_id {
+            return Err(invalid());
+        }
+        let stored_run = self.get_run(run_id)?.ok_or_else(invalid)?;
+        if source_run != stored_run
+            || stored_run.task_id.as_deref() != Some(task_id)
+            || !stored_run.attempt_ids.iter().any(|id| {
+                payload
+                    .get("attempt")
+                    .and_then(|value| value.get("attemptId"))
+                    .and_then(Value::as_str)
+                    == Some(id.as_str())
+            })
+        {
+            return Err(invalid());
+        }
+
+        let source_attempt: Attempt =
+            serde_json::from_value(payload.get("attempt").cloned().ok_or_else(invalid)?)
+                .map_err(|_| invalid())?;
+        if source_attempt.run_id != run_id
+            || source_attempt.task_id.as_deref() != Some(task_id)
+            || source_attempt.case_id != case_id
+            || source_attempt.profile_revision_id.is_empty()
+            || !stored_run
+                .profile_revision_ids
+                .iter()
+                .any(|id| id == &source_attempt.profile_revision_id)
+        {
+            return Err(invalid());
+        }
+        let stored_attempt = self
+            .list_attempts(run_id)?
+            .into_iter()
+            .find(|attempt| attempt.attempt_id == source_attempt.attempt_id)
+            .ok_or_else(invalid)?;
+        if source_attempt != stored_attempt {
+            return Err(invalid());
+        }
+        if payload.get("status").and_then(Value::as_str) != Some(stored_attempt.status.as_str()) {
+            return Err(invalid());
+        }
+
+        let source_profile: ProfileRevision = serde_json::from_value(
+            payload
+                .get("profileRevision")
+                .cloned()
+                .ok_or_else(invalid)?,
+        )
+        .map_err(|_| invalid())?;
+        if source_profile.profile_revision_id != source_attempt.profile_revision_id
+            || !self
+                .list_profile_revisions()?
+                .iter()
+                .any(|profile| profile == &source_profile)
+        {
+            return Err(invalid());
+        }
+
+        let expected_objective = source_attempt
+            .result
+            .as_ref()
+            .and_then(|result| result.score.as_ref())
+            .filter(|score| score.is_object())
+            .cloned()
+            .unwrap_or(Value::Null);
+        if payload.get("objective").unwrap_or(&Value::Null) != &expected_objective {
+            return Err(invalid());
+        }
+
+        let expected_performance = performance_evidence_from_attempt(&source_attempt);
+        if payload.get("performance") != Some(&expected_performance) {
+            return Err(invalid());
+        }
+        if !payload
+            .get("hardware")
+            .is_some_and(|hardware| hardware.is_null() || hardware.is_object())
+        {
+            return Err(invalid());
+        }
+        self.validate_reproduction_provenance(payload, run_id)?;
+        Ok(())
+    }
+
+    fn validate_reproduction_provenance(
+        &self,
+        payload: &Value,
+        run_id: &str,
+    ) -> Result<(), StorageError> {
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        let reproduced_from_run_id = payload
+            .get("reproducedFromRunId")
+            .map(|value| value.as_str().ok_or_else(invalid))
+            .transpose()?;
+        let source_run_reference = payload
+            .get("reproSourceRunReference")
+            .map(|value| value.as_str().ok_or_else(invalid))
+            .transpose()?;
+        let source_run_verified = payload
+            .get("reproSourceRunVerified")
+            .map(|value| value.as_bool().ok_or_else(invalid))
+            .transpose()?;
+
+        let Some(source_run_id) = reproduced_from_run_id else {
+            if source_run_verified == Some(true) {
+                return Err(invalid());
+            }
+            if source_run_verified == Some(false) {
+                if let Some(reference) = source_run_reference {
+                    let source_record_id = format!("benchmark-{reference}");
+                    if validate_record_id(&source_record_id).is_ok() {
+                        if let Some(source) = self
+                            .get_roadmap_record(&source_record_id)?
+                            .filter(|record| record.kind == "single_model_benchmark")
+                        {
+                            if reproduction_source_identity_matches(
+                                payload,
+                                &source.payload,
+                                reference,
+                            ) {
+                                return Err(invalid());
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        };
+        if source_run_id == run_id
+            || source_run_verified != Some(true)
+            || source_run_reference != Some(source_run_id)
+        {
+            return Err(invalid());
+        }
+
+        let source_record_id = format!("benchmark-{source_run_id}");
+        validate_record_id(&source_record_id).map_err(|_| invalid())?;
+        let source = self
+            .get_roadmap_record(&source_record_id)?
+            .filter(|record| record.kind == "single_model_benchmark")
+            .ok_or_else(invalid)?;
+        if !reproduction_source_identity_matches(payload, &source.payload, source_run_id) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_performance_record_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        let run_id = request
+            .payload
+            .get("runId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if request.record_id != format!("performance-{run_id}") {
+            return Err(invalid());
+        }
+        let source = self
+            .get_roadmap_record(&format!("benchmark-{run_id}"))?
+            .filter(|record| record.kind == "single_model_benchmark")
+            .ok_or_else(invalid)?;
+        let source_payload = source.payload;
+        let mut expected = source_payload
+            .get("performance")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(invalid)?;
+        expected.insert("runId".to_owned(), Value::String(run_id.to_owned()));
+        expected.insert(
+            "benchmarkVersionId".to_owned(),
+            source_payload
+                .get("benchmarkVersionId")
+                .cloned()
+                .ok_or_else(invalid)?,
+        );
+        expected.insert(
+            "profileRevisionId".to_owned(),
+            source_payload
+                .get("profileRevision")
+                .and_then(|profile| profile.get("profileRevisionId"))
+                .cloned()
+                .ok_or_else(invalid)?,
+        );
+        if request.payload != Value::Object(expected) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_derived_source_reference(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+        source_hash: &str,
+    ) -> Result<(), StorageError> {
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if source_hash.len() != 64 || !source_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        match source_kind {
+            "single_model_benchmark" => {
+                let record_id = format!("benchmark-{source_id}");
+                validate_record_id(&record_id).map_err(|_| invalid())?;
+                let source = self
+                    .get_roadmap_record(&record_id)?
+                    .filter(|record| record.kind == "single_model_benchmark")
+                    .ok_or_else(invalid)?;
+                if source.content_hash != source_hash
+                    || source.payload.get("runId").and_then(Value::as_str) != Some(source_id)
+                {
+                    return Err(invalid());
+                }
+            }
+            "arena_summary" => {
+                validate_record_id(source_id).map_err(|_| invalid())?;
+                let source = self.get_arena_summary(source_id)?.ok_or_else(invalid)?;
+                if source.content_hash != source_hash {
+                    return Err(invalid());
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+
+    fn validate_historical_regression_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("verificationStatus").and_then(Value::as_str) != Some("unverified")
+            || payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+        {
+            return Err(invalid());
+        }
+        let references = payload
+            .get("sourceReferences")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        match payload.get("kind").and_then(Value::as_str) {
+            Some("historical_regression") => {
+                if references.len() != 2
+                    || payload.get("metrics").and_then(Value::as_array).is_none()
+                {
+                    return Err(invalid());
+                }
+                let mut expected = Vec::with_capacity(2);
+                for (id_key, kind_key) in [
+                    ("baselineId", "baselineSourceKind"),
+                    ("candidateId", "candidateSourceKind"),
+                ] {
+                    let source_id = payload
+                        .get(id_key)
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid)?;
+                    let source_kind = payload
+                        .get(kind_key)
+                        .and_then(Value::as_str)
+                        .unwrap_or("single_model_benchmark");
+                    if !matches!(source_kind, "single_model_benchmark" | "arena_summary") {
+                        return Err(invalid());
+                    }
+                    expected.push((source_kind, source_id));
+                }
+                if expected[0] == expected[1] {
+                    return Err(invalid());
+                }
+                for (source_kind, source_id) in expected {
+                    let reference = references
+                        .iter()
+                        .find(|reference| {
+                            reference.get("sourceKind").and_then(Value::as_str) == Some(source_kind)
+                                && reference.get("sourceId").and_then(Value::as_str)
+                                    == Some(source_id)
+                        })
+                        .ok_or_else(invalid)?;
+                    let source_hash = reference
+                        .get("contentHash")
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid)?;
+                    self.validate_derived_source_reference(source_kind, source_id, source_hash)?;
+                }
+            }
+            Some("repeated_run_historical_regression") => {
+                let baseline = payload
+                    .get("baselineRunIds")
+                    .and_then(Value::as_array)
+                    .ok_or_else(invalid)?;
+                let candidate = payload
+                    .get("candidateRunIds")
+                    .and_then(Value::as_array)
+                    .ok_or_else(invalid)?;
+                if baseline.len() < 5
+                    || candidate.len() < 5
+                    || references.len() != baseline.len() + candidate.len()
+                    || payload.get("metrics").and_then(Value::as_array).is_none()
+                {
+                    return Err(invalid());
+                }
+                let expected_ids: Vec<&str> = baseline
+                    .iter()
+                    .chain(candidate)
+                    .map(|item| item.as_str().ok_or_else(invalid))
+                    .collect::<Result<_, _>>()?;
+                let unique_ids: std::collections::HashSet<_> =
+                    expected_ids.iter().copied().collect();
+                if unique_ids.len() != expected_ids.len() {
+                    return Err(invalid());
+                }
+                for source_id in expected_ids {
+                    let reference = references
+                        .iter()
+                        .find(|reference| {
+                            reference.get("sourceKind").and_then(Value::as_str)
+                                == Some("single_model_benchmark")
+                                && reference.get("sourceId").and_then(Value::as_str)
+                                    == Some(source_id)
+                        })
+                        .ok_or_else(invalid)?;
+                    let source_hash = reference
+                        .get("contentHash")
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid)?;
+                    self.validate_derived_source_reference(
+                        "single_model_benchmark",
+                        source_id,
+                        source_hash,
+                    )?;
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+
+    fn validate_model_ratings_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+            || payload.get("kind").and_then(Value::as_str) != Some("model_ratings")
+            || payload.get("verificationStatus").and_then(Value::as_str) != Some("unverified")
+        {
+            return Err(invalid());
+        }
+        let population = payload
+            .get("sourcePopulation")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        let ratings = payload
+            .get("ratings")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if population.is_empty() || population.len() > 4096 || ratings.len() > 1000 {
+            return Err(invalid());
+        }
+        let mut source_ids = std::collections::HashSet::new();
+        let mut competitor_ids = std::collections::HashSet::new();
+        for source in population {
+            let arena_id = source
+                .get("arenaId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let content_hash = source
+                .get("contentHash")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if !source_ids.insert(arena_id.to_owned()) {
+                return Err(invalid());
+            }
+            self.validate_derived_source_reference("arena_summary", arena_id, content_hash)?;
+            let arena = self.get_arena_summary(arena_id)?.ok_or_else(invalid)?;
+            for competitor in &arena.payload.competitors {
+                if let Some(competitor_id) = competitor.get("competitorId").and_then(Value::as_str)
+                {
+                    competitor_ids.insert(competitor_id.to_owned());
+                }
+            }
+        }
+        for rating in ratings {
+            let competitor_id = rating
+                .get("competitorId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if !competitor_ids.contains(competitor_id) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_robustness_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+            || payload.get("kind").and_then(Value::as_str) != Some("robustness_arena")
+            || payload.get("verificationStatus").and_then(Value::as_str) != Some("unverified")
+        {
+            return Err(invalid());
+        }
+        let source_task_version = payload
+            .get("sourceTaskVersion")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let prompt_variant_for = |variant: &Value| -> Result<Value, StorageError> {
+            let version = variant
+                .get("version")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let transformation_type = variant
+                .get("transformationType")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let seed = variant
+                .get("seed")
+                .and_then(Value::as_u64)
+                .filter(|seed| *seed <= u32::MAX as u64)
+                .ok_or_else(invalid)?;
+            let variant_task_version = variant
+                .get("sourceTaskVersion")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if version != "2"
+                || !matches!(
+                    transformation_type,
+                    "paraphrase"
+                        | "instruction_reorder"
+                        | "variable_rename"
+                        | "formatting_variation"
+                        | "concise_wording"
+                        | "verbose_wording"
+                        | "irrelevant_noise"
+                )
+                || variant_task_version != source_task_version
+            {
+                return Err(invalid());
+            }
+            Ok(serde_json::json!({
+                "version": version,
+                "transformationType": transformation_type,
+                "seed": seed,
+                "sourceTaskVersion": variant_task_version
+            }))
+        };
+        let validate_link = |run_id: &str,
+                             attempt_id: &str,
+                             content_hash: &str,
+                             expected_variant: Option<Value>|
+         -> Result<(), StorageError> {
+            self.validate_derived_source_reference("single_model_benchmark", run_id, content_hash)?;
+            let record = self
+                .get_roadmap_record(&format!("benchmark-{run_id}"))?
+                .ok_or_else(invalid)?;
+            let source_status = record.payload.get("status").and_then(Value::as_str);
+            let source_passed = record
+                .payload
+                .get("objective")
+                .and_then(|objective| objective.get("passed"))
+                .and_then(Value::as_bool);
+            if record
+                .payload
+                .get("attempt")
+                .and_then(|attempt| attempt.get("attemptId"))
+                .and_then(Value::as_str)
+                != Some(attempt_id)
+                || record.payload.get("taskId").and_then(Value::as_str)
+                    != payload.get("taskId").and_then(Value::as_str)
+                || record.payload.get("caseId").and_then(Value::as_str)
+                    != payload.get("caseId").and_then(Value::as_str)
+                || record
+                    .payload
+                    .get("benchmarkVersionId")
+                    .and_then(Value::as_str)
+                    != Some(source_task_version)
+                || record
+                    .payload
+                    .get("profileRevision")
+                    .and_then(|profile| profile.get("profileRevisionId"))
+                    .and_then(Value::as_str)
+                    != payload.get("profileRevisionId").and_then(Value::as_str)
+            {
+                return Err(invalid());
+            }
+            let stored_variant = record
+                .payload
+                .get("attempt")
+                .and_then(|attempt| attempt.get("effectiveConfig"))
+                .and_then(|effective_config| effective_config.get("promptVariant"));
+            if expected_variant.as_ref() != stored_variant {
+                return Err(invalid());
+            }
+            // Bind claims about linked attempts while retaining the explicit app-calculated/unverified label.
+            let is_base = payload.get("baseRunId").and_then(Value::as_str) == Some(run_id);
+            let claimed_status = if is_base {
+                payload.get("baseStatus").and_then(Value::as_str)
+            } else {
+                None
+            };
+            let claimed_passed = if is_base {
+                payload.get("basePassed").and_then(Value::as_bool)
+            } else {
+                None
+            };
+            if is_base {
+                if claimed_status != source_status || claimed_passed != source_passed {
+                    return Err(invalid());
+                }
+            } else {
+                let matching_variant = payload
+                    .get("variants")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .find(|variant| variant.get("runId").and_then(Value::as_str) == Some(run_id))
+                    .ok_or_else(invalid)?;
+                let variant_status = matching_variant
+                    .get("executionStatus")
+                    .and_then(Value::as_str);
+                let variant_passed = matching_variant.get("passed").and_then(Value::as_bool);
+                let save_failed = matching_variant.get("errorCode").and_then(Value::as_str)
+                    == Some("evidence_save_failed");
+                if variant_status != source_status
+                    || (save_failed && variant_passed.is_some())
+                    || (!save_failed && variant_passed != source_passed)
+                {
+                    return Err(invalid());
+                }
+            }
+            Ok(())
+        };
+        let base_run = payload.get("baseRunId").and_then(Value::as_str);
+        let base_attempt = payload.get("baseAttemptId").and_then(Value::as_str);
+        let base_hash = payload.get("baseSourceContentHash").and_then(Value::as_str);
+        let base_status = payload
+            .get("baseStatus")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let base_passed = payload.get("basePassed").filter(|value| !value.is_null());
+        if !matches!(
+            base_status,
+            "completed" | "failed" | "cancelled" | "unavailable"
+        ) || (base_status == "completed"
+            && (base_run.is_none() || base_attempt.is_none() || base_hash.is_none()))
+            || (base_status != "completed" && base_passed.is_some())
+            || (base_hash.is_none() && base_passed.is_some())
+        {
+            return Err(invalid());
+        }
+        if base_run.is_some() != base_attempt.is_some()
+            || (payload.get("baseEvidenceSaved").and_then(Value::as_bool) == Some(true)
+                && base_hash.is_none())
+            || (base_hash.is_some() && (base_run.is_none() || base_attempt.is_none()))
+        {
+            return Err(invalid());
+        }
+        if let (Some(run_id), Some(attempt_id), Some(content_hash)) =
+            (base_run, base_attempt, base_hash)
+        {
+            validate_link(run_id, attempt_id, content_hash, None)?;
+        }
+        let variants = payload
+            .get("variants")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if variants.len() > 7 {
+            return Err(invalid());
+        }
+        let mut linked_run_ids = std::collections::HashSet::new();
+        if let Some(run_id) = base_run {
+            linked_run_ids.insert(run_id);
+        }
+        for variant in variants {
+            let run_id = variant.get("runId").and_then(Value::as_str);
+            let attempt_id = variant.get("attemptId").and_then(Value::as_str);
+            let content_hash = variant.get("sourceContentHash").and_then(Value::as_str);
+            let save_failed =
+                variant.get("errorCode").and_then(Value::as_str) == Some("evidence_save_failed");
+            let execution_status = variant
+                .get("executionStatus")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let passed = variant.get("passed").filter(|value| !value.is_null());
+            if !matches!(
+                execution_status,
+                "completed" | "failed" | "cancelled" | "unavailable"
+            ) || (execution_status == "completed"
+                && (run_id.is_none() || attempt_id.is_none() || content_hash.is_none()))
+                || (execution_status != "completed" && passed.is_some())
+                || (run_id.is_none() && passed.is_some())
+                || (save_failed && passed.is_some())
+            {
+                return Err(invalid());
+            }
+            if run_id.is_some() != attempt_id.is_some()
+                || run_id.is_some_and(|run_id| !linked_run_ids.insert(run_id))
+                || (run_id.is_some() && content_hash.is_none() && !save_failed)
+                || (content_hash.is_some() && (run_id.is_none() || attempt_id.is_none()))
+            {
+                return Err(invalid());
+            }
+            if let (Some(run_id), Some(attempt_id), Some(content_hash)) =
+                (run_id, attempt_id, content_hash)
+            {
+                validate_link(
+                    run_id,
+                    attempt_id,
+                    content_hash,
+                    Some(prompt_variant_for(variant)?),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_single_model_suite_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        let suite_id = payload
+            .get("suiteId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let benchmark_version_id = payload
+            .get("benchmarkVersionId")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if request.record_id != suite_id
+            || payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+            || payload.get("kind").and_then(Value::as_str) != Some("single_model_suite")
+            || payload.get("startedAt").and_then(Value::as_str).is_none()
+            || payload.get("createdAt").and_then(Value::as_str).is_none()
+        {
+            return Err(invalid());
+        }
+        let version = self
+            .get_benchmark_version(benchmark_version_id)?
+            .ok_or_else(invalid)?;
+        let benchmark =
+            validate_benchmark_document(&version.document_json).map_err(|_| invalid())?;
+        if benchmark.version_id != benchmark_version_id
+            || benchmark.content_hash != version.summary.content_hash
+        {
+            return Err(invalid());
+        }
+        let source_profile: ProfileRevision = serde_json::from_value(
+            payload
+                .get("profileRevision")
+                .cloned()
+                .ok_or_else(invalid)?,
+        )
+        .map_err(|_| invalid())?;
+        if !self
+            .list_profile_revisions()?
+            .iter()
+            .any(|profile| profile == &source_profile)
+        {
+            return Err(invalid());
+        }
+
+        let expected_cases: Vec<(&str, &str)> = benchmark
+            .document
+            .benchmark_version
+            .tasks
+            .iter()
+            .flat_map(|task| {
+                task.cases
+                    .iter()
+                    .map(move |case| (task.task_id.as_str(), case.case_id.as_str()))
+            })
+            .collect();
+        let cases = payload
+            .get("cases")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if cases.len() != expected_cases.len() {
+            return Err(invalid());
+        }
+
+        let mut completed = 0usize;
+        let mut failed = 0usize;
+        let mut cancelled = 0usize;
+        let mut unavailable = 0usize;
+        let mut evidence_errors = 0usize;
+        for (case, (expected_task_id, expected_case_id)) in cases.iter().zip(expected_cases) {
+            let task_id = case
+                .get("taskId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let case_id = case
+                .get("caseId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if task_id != expected_task_id || case_id != expected_case_id {
+                return Err(invalid());
+            }
+            let status = case
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            match status {
+                "completed" => completed += 1,
+                "failed" => failed += 1,
+                "cancelled" => cancelled += 1,
+                "unavailable" => unavailable += 1,
+                _ => return Err(invalid()),
+            }
+            let error_code = case.get("errorCode").and_then(Value::as_str);
+            match error_code {
+                None => {}
+                Some("execution_failed") => {
+                    if status != "failed" {
+                        return Err(invalid());
+                    }
+                }
+                Some("evidence_save_failed") => evidence_errors += 1,
+                Some(_) => return Err(invalid()),
+            }
+
+            let run_id = case.get("runId").filter(|value| !value.is_null());
+            let attempt_id = case.get("attemptId").filter(|value| !value.is_null());
+            match (run_id, attempt_id) {
+                (None, None) => {
+                    let status_without_evidence_is_valid = matches!(
+                        (status, error_code),
+                        ("unavailable", None)
+                            | ("failed", Some("execution_failed"))
+                            | ("cancelled", None)
+                    );
+                    if !status_without_evidence_is_valid {
+                        return Err(invalid());
+                    }
+                    if case
+                        .get("objectivePassed")
+                        .filter(|value| !value.is_null())
+                        .is_some()
+                    {
+                        return Err(invalid());
+                    }
+                }
+                (Some(run_id), Some(attempt_id)) => {
+                    let run_id = run_id.as_str().ok_or_else(invalid)?;
+                    let attempt_id = attempt_id.as_str().ok_or_else(invalid)?;
+                    if status == "unavailable" || error_code == Some("execution_failed") {
+                        return Err(invalid());
+                    }
+                    let run = self.get_run(run_id)?.ok_or_else(invalid)?;
+                    if run.benchmark_version_id != benchmark_version_id
+                        || run.task_id.as_deref() != Some(task_id)
+                        || !run
+                            .profile_revision_ids
+                            .iter()
+                            .any(|id| id == &source_profile.profile_revision_id)
+                        || !run.attempt_ids.iter().any(|id| id == attempt_id)
+                    {
+                        return Err(invalid());
+                    }
+                    let attempt = self
+                        .list_attempts(run_id)?
+                        .into_iter()
+                        .find(|attempt| attempt.attempt_id == attempt_id)
+                        .ok_or_else(invalid)?;
+                    let status_matches = match status {
+                        "completed" => attempt.status == "completed",
+                        "failed" => attempt.status == "failed",
+                        "cancelled" => attempt.status == "cancelled",
+                        _ => false,
+                    };
+                    if !status_matches
+                        || attempt.task_id.as_deref() != Some(task_id)
+                        || attempt.case_id != case_id
+                        || attempt.profile_revision_id != source_profile.profile_revision_id
+                    {
+                        return Err(invalid());
+                    }
+                    let objective_passed = attempt
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.score.as_ref())
+                        .and_then(|score| score.get("passed"))
+                        .and_then(Value::as_bool);
+                    if case.get("objectivePassed").and_then(Value::as_bool) != objective_passed
+                        || (case
+                            .get("objectivePassed")
+                            .is_some_and(|value| !value.is_null())
+                            != objective_passed.is_some())
+                    {
+                        return Err(invalid());
+                    }
+                }
+                _ => return Err(invalid()),
+            }
+        }
+
+        let total = cases.len();
+        let has_incomplete_case = failed + cancelled + unavailable + evidence_errors > 0;
+        let expected_status = if completed == 0 && has_incomplete_case {
+            "failed"
+        } else if has_incomplete_case {
+            "partial"
+        } else {
+            "completed"
+        };
+        let expected_summary = serde_json::json!({
+            "total": total,
+            "completed": completed,
+            "failed": failed,
+            "cancelled": cancelled,
+            "unavailable": unavailable,
+            "evidenceErrors": evidence_errors,
+        });
+        if payload.get("summary") != Some(&expected_summary)
+            || payload.get("status").and_then(Value::as_str) != Some(expected_status)
+        {
+            return Err(invalid());
+        }
+        Ok(())
     }
 
     pub fn preview_storage_retention(
@@ -2230,20 +3256,31 @@ struct RetentionTableSql {
 }
 
 const RETENTION_DELETE_TABLES: &[RetentionTableSql] = &[
-    RetentionTableSql {
-        name: "attempts",
-        count_sql: "SELECT COUNT(*) FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id)",
-        delete_sql: "DELETE FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id)",
-    },
+    // Preview and cleanup follow dependency order: old results, then eligible attempts, then runs.
     RetentionTableSql {
         name: "result_records",
         count_sql: "SELECT COUNT(*) FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
         delete_sql: "DELETE FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
     },
     RetentionTableSql {
+        name: "attempts",
+        count_sql: "SELECT COUNT(*) FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER))",
+        delete_sql: "DELETE FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER))",
+    },
+    RetentionTableSql {
         name: "runs",
-        count_sql: "SELECT COUNT(*) FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)",
-        delete_sql: "DELETE FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)",
+        count_sql: concat!(
+            "SELECT COUNT(*) FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
+            "AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 AND NOT (CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)))) ",
+            "AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) ",
+            "AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+        ),
+        delete_sql: concat!(
+            "DELETE FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
+            "AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 AND NOT (CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)))) ",
+            "AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) ",
+            "AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+        ),
     },
     RetentionTableSql {
         name: "blind_evaluations",
@@ -2638,6 +3675,15 @@ fn validate_arena_summary(summary: &ArenaSummaryPayload) -> Result<(), StorageEr
     if let Some(pack_id) = &summary.pack_id {
         validate_record_id(pack_id)?;
     }
+    if let Some(category_id) = &summary.category_id {
+        validate_summary_identifier(category_id)?;
+    }
+    if let Some(category_name) = &summary.category_name {
+        validate_bounded_text(category_name, 256)?;
+    }
+    if summary.category_id.is_some() != summary.category_name.is_some() {
+        return Err(StorageError::InvalidRecordId);
+    }
     validate_bounded_json(&summary.summary, 0)?;
     for competitor in &summary.competitors {
         validate_bounded_json(competitor, 0)?;
@@ -2976,18 +4022,33 @@ fn query_arena_summary(
         .optional()
         .map_err(|_| StorageError::DatabaseFailure)?
         .map(|(content_hash, document_json, created_at)| {
-            let payload: ArenaSummaryPayload =
-                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
-            if payload.arena_id != arena_id {
-                return Err(StorageError::DatabaseFailure);
-            }
-            Ok(ArenaSummaryRecord {
-                payload,
-                content_hash,
-                created_at,
-            })
+            parse_arena_summary_record(arena_id, content_hash, &document_json, created_at)
         })
         .transpose()
+}
+
+fn parse_arena_summary_record(
+    arena_id: &str,
+    content_hash: String,
+    document_json: &str,
+    created_at: String,
+) -> Result<ArenaSummaryRecord, StorageError> {
+    let document: Value =
+        serde_json::from_str(document_json).map_err(|_| StorageError::DatabaseFailure)?;
+    let (_, computed_hash) = canonical_json_and_hash(&document)?;
+    if computed_hash != content_hash {
+        return Err(StorageError::DatabaseFailure);
+    }
+    let payload: ArenaSummaryPayload =
+        serde_json::from_value(document).map_err(|_| StorageError::DatabaseFailure)?;
+    if payload.arena_id != arena_id {
+        return Err(StorageError::DatabaseFailure);
+    }
+    Ok(ArenaSummaryRecord {
+        payload,
+        content_hash,
+        created_at,
+    })
 }
 
 fn validate_sha256(value: &str) -> Result<(), StorageError> {
@@ -3077,6 +4138,7 @@ fn validate_roadmap_kind(kind: &str) -> Result<(), StorageError> {
     if matches!(
         kind,
         "single_model_benchmark"
+            | "single_model_suite"
             | "performance_lab"
             | "historical_regression"
             | "model_ratings"
@@ -3095,8 +4157,219 @@ fn validate_roadmap_record(request: &RoadmapRecordRequest) -> Result<(), Storage
     if !request.payload.is_object() {
         return Err(StorageError::AdvancedArtifactInvalid);
     }
+    if matches!(
+        request.kind.as_str(),
+        "historical_regression" | "model_ratings" | "robustness_arena"
+    ) && request
+        .payload
+        .get("verificationStatus")
+        .is_some_and(|status| status.as_str() != Some("unverified"))
+    {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
     validate_bounded_json(&request.payload, 0)?;
     Ok(())
+}
+
+fn reproduction_source_identity_matches(
+    reproduced: &Value,
+    source: &Value,
+    source_run_id: &str,
+) -> bool {
+    source.get("schemaVersion").and_then(Value::as_u64) == Some(2)
+        && source.get("kind").and_then(Value::as_str) == Some("single_model_benchmark")
+        && source.get("runId").and_then(Value::as_str) == Some(source_run_id)
+        && source_run_id
+            != reproduced
+                .get("runId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        && [
+            "benchmarkVersionId",
+            "benchmarkContentHash",
+            "taskId",
+            "caseId",
+            "profileRevision",
+        ]
+        .iter()
+        .all(|field| reproduced.get(*field) == source.get(*field))
+}
+
+fn performance_metric(
+    value: Option<f64>,
+    unit: &str,
+    source: &str,
+    sampling_method: &str,
+    temperature: &str,
+    derived: bool,
+) -> Value {
+    let numeric_value = value.and_then(|value| {
+        if !value.is_finite() || value < 0.0 {
+            return None;
+        }
+        if value.fract() == 0.0 && value <= i64::MAX as f64 {
+            Some(serde_json::Number::from(value as i64))
+        } else {
+            serde_json::Number::from_f64(value)
+        }
+    });
+    let available = numeric_value.is_some();
+    serde_json::json!({
+        "value": numeric_value,
+        "unit": unit,
+        "source": source,
+        "scope": null,
+        "method": null,
+        "samplingMethod": sampling_method,
+        "samplingIntervalMs": null,
+        "sampleCount": null,
+        "intervalCount": null,
+        "samplesTruncated": null,
+        "state": if available { if derived { "estimated" } else { "observed" } } else { "unavailable" },
+        "confidence": if available { if derived { "medium" } else { "high" } } else { "unavailable" },
+        "temperature": temperature,
+    })
+}
+
+fn host_telemetry_performance_metric(
+    attempt: &Attempt,
+    key: &str,
+    unit: &str,
+    fallback_source: &str,
+    expected_sampling_method: &str,
+    minimum_samples: u64,
+    minimum_intervals: u64,
+    maximum_value: Option<f64>,
+    temperature: &str,
+) -> Value {
+    let telemetry = attempt
+        .extra
+        .get("hostHardwareTelemetry")
+        .filter(|value| value.get("scope").and_then(Value::as_str) == Some("host"));
+    let metric = telemetry.and_then(|value| value.get(key));
+    let sample_count = metric
+        .and_then(|value| value.get("sampleCount"))
+        .and_then(Value::as_u64);
+    let interval_count = metric
+        .and_then(|value| value.get("intervalCount"))
+        .and_then(Value::as_u64);
+    let raw_value = metric
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let method = metric
+        .and_then(|value| value.get("method"))
+        .and_then(Value::as_str)
+        .filter(|method| !method.is_empty());
+    let sampling_method = metric
+        .and_then(|value| value.get("samplingMethod"))
+        .and_then(Value::as_str)
+        .filter(|method| matches!(*method, "os_counter" | "os_sample"));
+    let value = raw_value.filter(|value| {
+        metric
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+            == Some("available")
+            && sample_count.is_some_and(|count| count >= minimum_samples)
+            && interval_count.is_some_and(|count| count >= minimum_intervals)
+            && method.is_some()
+            && sampling_method == Some(expected_sampling_method)
+            && maximum_value.map_or(true, |maximum| *value <= maximum)
+    });
+    let source = metric
+        .and_then(|value| value.get("source"))
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_source);
+    let sampling_method =
+        if telemetry.is_some() && sampling_method == Some(expected_sampling_method) {
+            expected_sampling_method
+        } else {
+            "unavailable"
+        };
+    let scope = telemetry.map(|_| "host");
+    let samples_truncated = telemetry
+        .and_then(|value| value.get("samplesTruncated"))
+        .and_then(Value::as_bool);
+    let sampling_interval_ms = metric
+        .and_then(|value| value.get("samplingIntervalMs"))
+        .and_then(Value::as_f64)
+        .filter(|interval| interval.is_finite() && *interval >= 0.0);
+    serde_json::json!({
+        "value": value,
+        "unit": unit,
+        "source": source,
+        "scope": scope,
+        "method": method,
+        "samplingMethod": sampling_method,
+        "samplingIntervalMs": sampling_interval_ms,
+        "sampleCount": sample_count,
+        "intervalCount": interval_count,
+        "samplesTruncated": samples_truncated,
+        "state": if value.is_some() { "observed" } else { "unavailable" },
+        "confidence": if value.is_some() { "medium" } else { "unavailable" },
+        "temperature": temperature,
+    })
+}
+
+fn performance_evidence_from_attempt(attempt: &Attempt) -> Value {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    let summary = attempt.extra.get("responseSummary");
+    let timing = summary.and_then(|value| value.get("timing"));
+    let usage = summary.and_then(|value| value.get("usage"));
+    let timing_ms = |key: &str| {
+        timing
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(|value| value / 1_000_000.0)
+    };
+    let token_count = |key: &str| {
+        usage
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_u64)
+            .filter(|value| *value <= MAX_SAFE_INTEGER)
+            .map(|value| value as f64)
+    };
+    let load_time_ms = timing_ms("loadDurationNs");
+    let generation_time_ms = timing_ms("evalDurationNs");
+    let wall_clock_ms = timing_ms("totalDurationNs");
+    let prompt_eval_time_ms = timing_ms("promptEvalDurationNs");
+    let prompt_tokens = token_count("promptTokens");
+    let completion_tokens = token_count("completionTokens");
+    let total_tokens = token_count("totalTokens");
+    let prompt_tokens_per_second = prompt_tokens
+        .zip(prompt_eval_time_ms.filter(|value| *value > 0.0))
+        .map(|(tokens, duration_ms)| tokens / (duration_ms / 1_000.0));
+    let generation_tokens_per_second = completion_tokens
+        .zip(generation_time_ms.filter(|value| *value > 0.0))
+        .map(|(tokens, duration_ms)| tokens / (duration_ms / 1_000.0));
+    let temperature = "unknown";
+    let unavailable = |unit: &str, source: &str| {
+        performance_metric(None, unit, source, "unavailable", temperature, false)
+    };
+    serde_json::json!({
+        "schemaVersion": 1,
+        "temperature": temperature,
+        "metrics": {
+            "ttftMs": performance_metric(timing_ms("ttftDurationNs"), "ms", "runtime.responseSummary.timing.ttftDurationNs", "runtime", temperature, false),
+            "promptTokens": performance_metric(prompt_tokens, "tokens", "runtime.responseSummary.usage.promptTokens", "runtime", temperature, false),
+            "completionTokens": performance_metric(completion_tokens, "tokens", "runtime.responseSummary.usage.completionTokens", "runtime", temperature, false),
+            "totalTokens": performance_metric(total_tokens, "tokens", "runtime.responseSummary.usage.totalTokens", "runtime", temperature, false),
+            "promptTokensPerSecond": performance_metric(prompt_tokens_per_second, "tokens/s", "derived(promptTokens/promptEvalDurationMs)", "derived", temperature, true),
+            "generationTokensPerSecond": performance_metric(generation_tokens_per_second, "tokens/s", "derived(completionTokens/generationTimeMs)", "derived", temperature, true),
+            "wallClockMs": performance_metric(wall_clock_ms, "ms", "runtime.responseSummary.timing.totalDurationNs", "runtime", temperature, false),
+            "loadTimeMs": performance_metric(load_time_ms, "ms", "runtime.responseSummary.timing.loadDurationNs", "runtime", temperature, false),
+            "generationTimeMs": performance_metric(generation_time_ms, "ms", "runtime.responseSummary.timing.evalDurationNs", "runtime", temperature, false),
+            "thinkingTimeMs": unavailable("ms", "runtime.reasoning.thinkingTime"),
+            "vramAverageBytes": unavailable("bytes", "os.gpu.vram.average"),
+            "vramPeakBytes": unavailable("bytes", "os.gpu.vram.peak"),
+            "ramAverageBytes": host_telemetry_performance_metric(attempt, "ramAverageBytes", "bytes", "os.memory.ram.average", "os_sample", 2, 1, None, temperature),
+            "ramPeakBytes": host_telemetry_performance_metric(attempt, "ramPeakBytes", "bytes", "os.memory.ram.peak", "os_sample", 2, 1, None, temperature),
+            "cpuUtilizationPercent": host_telemetry_performance_metric(attempt, "cpuUtilizationPercent", "percent", "os.cpu.utilization", "os_counter", 2, 1, Some(100.0), temperature),
+            "gpuUtilizationPercent": unavailable("percent", "os.gpu.utilization"),
+            "energyWh": unavailable("Wh", "os.power.energy"),
+        },
+    })
 }
 
 fn roadmap_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoadmapRecord> {
@@ -3166,6 +4439,47 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
             validate_model_text(value, MAX_MODEL_PATH_BYTES)?;
         }
     }
+    if let Some(model_digest) = revision.extra.get("modelDigest") {
+        if !model_digest.is_null() {
+            let Some(model_digest) = model_digest.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            validate_model_text(model_digest, MAX_PROFILE_MODEL_BYTES)
+                .map_err(|_| StorageError::InvalidProfileRevision)?;
+        }
+    }
+    if let Some(model_content_hash) = revision.extra.get("modelContentHash") {
+        if !model_content_hash.is_null() {
+            let Some(model_content_hash) = model_content_hash.as_str() else {
+                return Err(StorageError::InvalidProfileRevision);
+            };
+            validate_sha256(model_content_hash)
+                .map_err(|_| StorageError::InvalidProfileRevision)?;
+        }
+    }
+    if let Some(status) = revision.extra.get("modelContentHashStatus") {
+        match status.as_str() {
+            Some("not_available") => {
+                if revision
+                    .extra
+                    .get("modelContentHash")
+                    .is_some_and(|hash| !hash.is_null())
+                {
+                    return Err(StorageError::InvalidProfileRevision);
+                }
+            }
+            Some("verified_at_import" | "import_identity_not_rechecked") => {
+                if !revision
+                    .extra
+                    .get("modelContentHash")
+                    .is_some_and(|hash| hash.as_str().is_some())
+                {
+                    return Err(StorageError::InvalidProfileRevision);
+                }
+            }
+            _ => return Err(StorageError::InvalidProfileRevision),
+        }
+    }
     if let Some(backend) = revision.extra.get("backend").and_then(Value::as_str) {
         if backend != revision.runtime {
             return Err(StorageError::InvalidProfileRevision);
@@ -3193,6 +4507,27 @@ fn validate_profile_revision(revision: &ProfileRevision) -> Result<(), StorageEr
                 return Err(StorageError::InvalidProfileRevision);
             }
             validate_managed_model_path(path)?;
+        }
+    }
+    if let Some(max_tokens) = revision.parameters.get("maxTokens") {
+        if !max_tokens.is_null()
+            && !max_tokens
+                .as_u64()
+                .is_some_and(|value| value > 0 && value <= u64::from(MAX_OUTPUT_TOKENS))
+        {
+            return Err(StorageError::InvalidProfileRevision);
+        }
+    }
+    if let Some(context_window_tokens) = revision.parameters.get("contextWindowTokens") {
+        if !context_window_tokens.is_null()
+            && !context_window_tokens
+                .as_u64()
+                .is_some_and(|value| value > 0 && value <= u64::from(MAX_CONTEXT_WINDOW_TOKENS))
+        {
+            return Err(StorageError::InvalidProfileRevision);
+        }
+        if !context_window_tokens.is_null() && revision.runtime != "ollama" {
+            return Err(StorageError::InvalidProfileRevision);
         }
     }
     let request_bytes = serde_json::to_vec(revision).map_err(|_| StorageError::DatabaseFailure)?;
@@ -3234,6 +4569,15 @@ fn validate_model_record(record: &ModelRecord) -> Result<(), StorageError> {
     }
     if let Some(content_hash) = &record.content_hash {
         validate_sha256(content_hash)?;
+    }
+    match record.content_hash_status {
+        ModelContentHashStatus::NotAvailable if record.content_hash.is_none() => {}
+        ModelContentHashStatus::VerifiedAtImport
+        | ModelContentHashStatus::ImportIdentityNotRechecked
+            if record.content_hash.is_some()
+                && record.managed
+                && matches!(record.backend, crate::domain::ModelBackend::LlamaCpp) => {}
+        _ => return Err(StorageError::InvalidRecordId),
     }
     validate_model_metadata(&record.metadata)
 }
@@ -3334,41 +4678,6 @@ fn safe_existing_managed_model_path(
         }
     }
     Ok(current)
-}
-
-fn hash_managed_model_file(target: &Path) -> Result<(u64, String), StorageError> {
-    let metadata = fs::symlink_metadata(target).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            StorageError::ArtifactNotFound
-        } else {
-            StorageError::from_io(error)
-        }
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(StorageError::InvalidRecordId);
-    }
-    if metadata.len() > MAX_MANAGED_MODEL_BYTES {
-        return Err(StorageError::MetadataTooLarge);
-    }
-
-    let mut file = fs::File::open(target).map_err(StorageError::from_io)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut size = 0_u64;
-    loop {
-        let read = file.read(&mut buffer).map_err(StorageError::from_io)?;
-        if read == 0 {
-            break;
-        }
-        size = size
-            .checked_add(read as u64)
-            .filter(|size| *size <= MAX_MANAGED_MODEL_BYTES)
-            .ok_or(StorageError::MetadataTooLarge)?;
-        hasher.update(&buffer[..read]);
-    }
-    let digest = hasher.finalize();
-    let content_hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    Ok((size, content_hash))
 }
 
 fn validate_model_metadata(
@@ -3673,7 +4982,7 @@ mod tests {
 
     use crate::domain::{
         sha256_hex, validate_benchmark_document, Attempt, ImmutableResultReference,
-        ProfileRevision, Run,
+        ModelAvailability, ModelBackend, ModelContentHashStatus, ModelRecord, ProfileRevision, Run,
     };
     use crate::external_providers::{
         estimate_external_cost, CostDecision, ExternalGenerationEvidencePayload,
@@ -3688,8 +4997,9 @@ mod tests {
         TournamentMatchResult, TournamentResultPayload, TournamentStanding,
         ADVANCED_ARENA_MIGRATION, ARTIFACT_SCHEMA_VERSION, BENCHMARK_DRAFTS_MIGRATION,
         BLIND_EVALUATIONS_MIGRATION, EXTERNAL_GENERATION_EVIDENCE_MIGRATION, FOUNDATION_MIGRATION,
-        MAX_ARTIFACT_BYTES, MAX_DRAFT_DOCUMENT_BYTES, MAX_DRAFT_TITLE_BYTES,
-        MAX_PROFILE_MODEL_BYTES, MAX_PROFILE_REQUEST_BYTES, ROADMAP_RECORDS_MIGRATION,
+        MAX_ARTIFACT_BYTES, MAX_CONTEXT_WINDOW_TOKENS, MAX_DRAFT_DOCUMENT_BYTES,
+        MAX_DRAFT_TITLE_BYTES, MAX_METADATA_BYTES, MAX_OUTPUT_TOKENS, MAX_PROFILE_MODEL_BYTES,
+        MAX_PROFILE_REQUEST_BYTES, ROADMAP_RECORDS_MIGRATION,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3778,6 +5088,7 @@ mod tests {
         Run {
             run_id: "run-1".to_owned(),
             benchmark_version_id: "logic@1".to_owned(),
+            task_id: Some("task-1".to_owned()),
             profile_revision_ids: vec!["profile-1@1".to_owned()],
             status: "created".to_owned(),
             started_at: "100".to_owned(),
@@ -3791,6 +5102,7 @@ mod tests {
         Attempt {
             attempt_id: "attempt-1".to_owned(),
             run_id: "run-1".to_owned(),
+            task_id: Some("task-1".to_owned()),
             profile_revision_id: "profile-1@1".to_owned(),
             case_id: "case-1".to_owned(),
             status: "pending".to_owned(),
@@ -3799,6 +5111,207 @@ mod tests {
             artifacts: Vec::new(),
             extra: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn performance_projection_uses_only_host_scoped_hardware_samples() {
+        let mut source = attempt();
+        source.extra.insert(
+            "hostHardwareTelemetry".to_owned(),
+            json!({
+                "scope": "host",
+                "samplesTruncated": false,
+                "cpuUtilizationPercent": {
+                    "value": 42.5,
+                    "status": "available",
+                    "source": "host.linux.procfs./proc/stat:cpu",
+                    "samplingMethod": "os_counter",
+                    "method": "counter_delta_weighted_host_busy_percent",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramAverageBytes": {
+                    "value": 3_000,
+                    "status": "available",
+                    "source": "host.linux.procfs./proc/meminfo:MemTotal-MemAvailable",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_mean",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramPeakBytes": {
+                    "value": 4_000,
+                    "status": "available",
+                    "source": "host.linux.procfs./proc/meminfo:MemTotal-MemAvailable",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_peak",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                }
+            }),
+        );
+        let evidence = super::performance_evidence_from_attempt(&source);
+        assert_eq!(evidence["metrics"]["cpuUtilizationPercent"]["value"], 42.5);
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["samplingMethod"],
+            "os_counter"
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["scope"],
+            "host"
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["method"],
+            "counter_delta_weighted_host_busy_percent"
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["sampleCount"],
+            3
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["intervalCount"],
+            2
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["samplesTruncated"],
+            false
+        );
+        assert_eq!(
+            evidence["metrics"]["cpuUtilizationPercent"]["samplingIntervalMs"],
+            100.0
+        );
+        assert_eq!(
+            evidence["metrics"]["ramAverageBytes"]["value"].as_f64(),
+            Some(3_000.0)
+        );
+        assert_eq!(
+            evidence["metrics"]["ramPeakBytes"]["value"].as_f64(),
+            Some(4_000.0)
+        );
+        assert_eq!(
+            evidence["metrics"]["ramPeakBytes"]["source"],
+            "host.linux.procfs./proc/meminfo:MemTotal-MemAvailable"
+        );
+        assert_eq!(
+            evidence["metrics"]["ramAverageBytes"]["samplingMethod"],
+            "os_sample"
+        );
+        assert_eq!(evidence["metrics"]["ramAverageBytes"]["scope"], "host");
+
+        source
+            .extra
+            .get_mut("hostHardwareTelemetry")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("telemetry is an object")
+            .insert("scope".to_owned(), json!("process"));
+        let untrusted_scope = super::performance_evidence_from_attempt(&source);
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["state"],
+            "unavailable"
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["ramAverageBytes"]["state"],
+            "unavailable"
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["scope"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["method"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            untrusted_scope["metrics"]["cpuUtilizationPercent"]["samplesTruncated"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn capped_telemetry_fits_a_single_model_record_below_one_mib() {
+        let mut source_attempt = attempt();
+        let raw_samples = (0..8_192_u64)
+            .map(|index| {
+                json!([
+                    index * 1_000,
+                    u64::MAX.to_string(),
+                    u64::MAX.to_string(),
+                    u64::MAX
+                ])
+            })
+            .collect::<Vec<_>>();
+        source_attempt.extra.insert(
+            "hostHardwareTelemetry".to_owned(),
+            json!({
+                "scope": "host",
+                "platform": "windows",
+                "windowDurationMs": 8_191_000,
+                "targetSamplingIntervalMs": 1_000,
+                "rawSamples": raw_samples,
+                "samplesTruncated": false,
+                "cpuUtilizationPercent": {
+                    "value": 50.0,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GetSystemTimes",
+                    "samplingMethod": "os_counter",
+                    "method": "counter_delta_weighted_host_busy_percent",
+                    "samplingIntervalMs": 1_000.0,
+                    "sampleCount": 8_192,
+                    "intervalCount": 8_191
+                },
+                "ramAverageBytes": {
+                    "value": 4_096,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_mean",
+                    "samplingIntervalMs": 1_000.0,
+                    "sampleCount": 8_192,
+                    "intervalCount": 8_191
+                },
+                "ramPeakBytes": {
+                    "value": 8_192,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_peak",
+                    "samplingIntervalMs": 1_000.0,
+                    "sampleCount": 8_192,
+                    "intervalCount": 8_191
+                }
+            }),
+        );
+        let performance = super::performance_evidence_from_attempt(&source_attempt);
+        let request = RoadmapRecordRequest {
+            record_id: "benchmark-run-telemetry-bound".to_owned(),
+            kind: "single_model_benchmark".to_owned(),
+            payload: json!({
+                "schemaVersion": 2,
+                "kind": "single_model_benchmark",
+                "runId": "run-1",
+                "benchmarkVersionId": "logic@1",
+                "benchmarkContentHash": "a".repeat(64),
+                "taskId": "task-1",
+                "caseId": "case-1",
+                "profileRevision": profile_revision(),
+                "sourceRun": run(),
+                "attempt": source_attempt,
+                "status": "completed",
+                "objective": null,
+                "performance": performance,
+                "hardware": null,
+                "createdAt": "2026-09-30T00:00:00Z"
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("single-model record envelope");
+        assert!(
+            bytes.len() < MAX_METADATA_BYTES,
+            "8,192 telemetry tuples produced {} bytes, above the 1 MiB record ceiling",
+            bytes.len()
+        );
     }
 
     #[test]
@@ -3869,14 +5382,172 @@ mod tests {
     }
 
     #[test]
+    fn reproduction_source_identity_requires_exact_benchmark_case_and_profile() {
+        let source = json!({
+            "schemaVersion": 2,
+            "kind": "single_model_benchmark",
+            "runId": "source-run",
+            "benchmarkVersionId": "logic@1",
+            "benchmarkContentHash": "a".repeat(64),
+            "taskId": "task-a",
+            "caseId": "case-a",
+            "profileRevision": {
+                "profileId": "profile-a",
+                "profileRevisionId": "profile-a@1",
+                "model": "model-a",
+                "runtime": "ollama",
+                "parameters": { "temperature": 0.2 },
+                "extra": { "tag": "complete-profile-snapshot" }
+            }
+        });
+        let mut reproduced = source.clone();
+        reproduced["runId"] = json!("reproduced-run");
+        assert!(super::reproduction_source_identity_matches(
+            &reproduced,
+            &source,
+            "source-run"
+        ));
+
+        for (field, mismatched_value) in [
+            ("benchmarkVersionId", json!("logic@2")),
+            ("benchmarkContentHash", json!("b".repeat(64))),
+            ("taskId", json!("task-b")),
+            ("caseId", json!("case-b")),
+            (
+                "profileRevision",
+                json!({ "profileRevisionId": "profile-a@1" }),
+            ),
+        ] {
+            let mut mismatched = reproduced.clone();
+            mismatched[field] = mismatched_value;
+            assert!(
+                !super::reproduction_source_identity_matches(&mismatched, &source, "source-run"),
+                "reproduction must reject a different {field}"
+            );
+        }
+    }
+
+    #[test]
     fn roadmap_records_are_immutable_reloadable_and_kind_filtered() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
-        let request = RoadmapRecordRequest {
-            record_id: "single-run-1".to_owned(),
-            kind: "single_model_benchmark".to_owned(),
-            payload: json!({"runId": "run-1", "environment": {"apiKey": "redacted"}}),
+        let benchmark = validate_benchmark_document(&valid_document()).expect("valid benchmark");
+        let version = service
+            .save_benchmark_version(&benchmark, "100")
+            .expect("benchmark version saves");
+        let profile = profile_revision();
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("profile revision saves");
+        let source_run = Run {
+            run_id: "run-1".to_owned(),
+            benchmark_version_id: version.version_id.clone(),
+            task_id: Some("task".to_owned()),
+            profile_revision_ids: vec![profile.profile_revision_id.clone()],
+            status: "created".to_owned(),
+            started_at: "100".to_owned(),
+            attempt_ids: vec!["attempt-1".to_owned()],
+            environment: BTreeMap::new(),
+            extra: BTreeMap::new(),
         };
+        let mut source_attempt = Attempt {
+            attempt_id: "attempt-1".to_owned(),
+            run_id: source_run.run_id.clone(),
+            task_id: Some("task".to_owned()),
+            profile_revision_id: profile.profile_revision_id.clone(),
+            case_id: "case".to_owned(),
+            status: "completed".to_owned(),
+            effective_config: BTreeMap::new(),
+            result: None,
+            artifacts: Vec::new(),
+            extra: BTreeMap::new(),
+        };
+        source_attempt.extra.insert(
+            "responseSummary".to_owned(),
+            json!({
+                "usage": {"promptTokens": 5, "completionTokens": 3, "totalTokens": 8},
+                "timing": {"totalDurationNs": 2000000, "loadDurationNs": 1000000, "promptEvalDurationNs": 500000, "evalDurationNs": 500000, "ttftDurationNs": 100000}
+            }),
+        );
+        source_attempt.extra.insert(
+            "hostHardwareTelemetry".to_owned(),
+            json!({
+                "scope": "host",
+                "samplesTruncated": false,
+                "platform": "windows",
+                "windowDurationMs": 250.0,
+                "targetSamplingIntervalMs": 100,
+                "cpuUtilizationPercent": {
+                    "value": 42.5,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GetSystemTimes",
+                    "samplingMethod": "os_counter",
+                    "method": "counter_delta_weighted_host_busy_percent",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramAverageBytes": {
+                    "value": 3000,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_mean",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                },
+                "ramPeakBytes": {
+                    "value": 4000,
+                    "status": "available",
+                    "source": "host.windows.kernel32.GlobalMemoryStatusEx",
+                    "samplingMethod": "os_sample",
+                    "method": "sampled_host_physical_used_peak",
+                    "samplingIntervalMs": 100.0,
+                    "sampleCount": 3,
+                    "intervalCount": 2
+                }
+            }),
+        );
+        service
+            .save_run(&source_run, "100")
+            .expect("source run saves");
+        service
+            .save_attempt(&source_attempt, "100")
+            .expect("source attempt saves");
+        let request = RoadmapRecordRequest {
+            record_id: "benchmark-run-1".to_owned(),
+            kind: "single_model_benchmark".to_owned(),
+            payload: json!({
+                "schemaVersion": 2,
+                "kind": "single_model_benchmark",
+                "runId": source_run.run_id,
+                "benchmarkVersionId": version.version_id,
+                "benchmarkContentHash": version.content_hash,
+                "taskId": "task",
+                "caseId": "case",
+                "profileRevision": serde_json::to_value(&profile).unwrap(),
+                "sourceRun": serde_json::to_value(&source_run).unwrap(),
+                "attempt": serde_json::to_value(&source_attempt).unwrap(),
+                "status": "completed",
+                "objective": null,
+                "performance": super::performance_evidence_from_attempt(&source_attempt),
+                "hardware": null,
+                "createdAt": "2026-09-29T00:00:00Z"
+            }),
+        };
+        let mut forged_status = request.clone();
+        forged_status.payload["status"] = json!("failed");
+        assert_eq!(
+            service.save_roadmap_record(&forged_status, "100"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut forged_attempt = request.clone();
+        forged_attempt.payload["attempt"]["profileRevisionId"] = json!("unregistered-profile@1");
+        assert_eq!(
+            service.save_roadmap_record(&forged_attempt, "100"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
         let (first, outcome) = service
             .save_roadmap_record(&request, "100")
             .expect("record saves");
@@ -3888,27 +5559,497 @@ mod tests {
         assert_eq!(replay, first);
         assert_eq!(replay_outcome, SaveOutcome::AlreadyPresent);
         assert_eq!(
-            service.get_roadmap_record("single-run-1").unwrap(),
+            service.get_roadmap_record("benchmark-run-1").unwrap(),
             Some(first.clone())
         );
         assert_eq!(
             service
                 .list_roadmap_records(Some("single_model_benchmark"))
                 .unwrap(),
-            vec![first]
+            vec![first.clone()]
         );
+
+        let mut reproduced_run = source_run.clone();
+        reproduced_run.run_id = "run-2".to_owned();
+        reproduced_run.started_at = "101".to_owned();
+        reproduced_run.attempt_ids = vec!["attempt-2".to_owned()];
+        let mut reproduced_attempt = source_attempt.clone();
+        reproduced_attempt.attempt_id = "attempt-2".to_owned();
+        reproduced_attempt.run_id = reproduced_run.run_id.clone();
+        service
+            .save_run(&reproduced_run, "101")
+            .expect("reproduced run saves");
+        service
+            .save_attempt(&reproduced_attempt, "101")
+            .expect("reproduced attempt saves");
+
+        let mut reproduction = request.clone();
+        reproduction.record_id = "benchmark-run-2".to_owned();
+        reproduction.payload["runId"] = json!(reproduced_run.run_id);
+        reproduction.payload["sourceRun"] = serde_json::to_value(&reproduced_run).unwrap();
+        reproduction.payload["attempt"] = serde_json::to_value(&reproduced_attempt).unwrap();
+        reproduction.payload["performance"] =
+            super::performance_evidence_from_attempt(&reproduced_attempt);
+        reproduction.payload["createdAt"] = json!("2026-09-29T01:00:00Z");
+        reproduction.payload["reproducedFromRunId"] = json!("run-1");
+        reproduction.payload["reproSourceRunReference"] = json!("run-1");
+        reproduction.payload["reproSourceRunVerified"] = json!(true);
+
+        let mut unverified_claim = reproduction.clone();
+        unverified_claim.payload["reproSourceRunVerified"] = json!(false);
+        assert_eq!(
+            service.save_roadmap_record(&unverified_claim, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismarked_local_source = reproduction.clone();
+        mismarked_local_source
+            .payload
+            .as_object_mut()
+            .expect("payload object")
+            .remove("reproducedFromRunId");
+        mismarked_local_source.payload["reproSourceRunVerified"] = json!(false);
+        assert_eq!(
+            service.save_roadmap_record(&mismarked_local_source, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut missing_source = reproduction.clone();
+        missing_source.payload["reproducedFromRunId"] = json!("missing-run");
+        missing_source.payload["reproSourceRunReference"] = json!("missing-run");
+        assert_eq!(
+            service.save_roadmap_record(&missing_source, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut verified_without_source_id = reproduction.clone();
+        verified_without_source_id
+            .payload
+            .as_object_mut()
+            .expect("payload object")
+            .remove("reproducedFromRunId");
+        assert_eq!(
+            service.save_roadmap_record(&verified_without_source_id, "110"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let external_reference = json!({
+            "runId": "run-2",
+            "reproSourceRunReference": "external-run",
+            "reproSourceRunVerified": false
+        });
+        assert_eq!(
+            service.validate_reproduction_provenance(&external_reference, "run-2"),
+            Ok(())
+        );
+        let (saved_reproduction, _) = service
+            .save_roadmap_record(&reproduction, "110")
+            .expect("matching persisted source run verifies the reproduction");
+        let mut robustness_variant_run = reproduced_run.clone();
+        robustness_variant_run.run_id = "robustness-variant-run".to_owned();
+        robustness_variant_run.started_at = "111".to_owned();
+        robustness_variant_run.attempt_ids = vec!["robustness-variant-attempt".to_owned()];
+        let mut robustness_variant_attempt = reproduced_attempt.clone();
+        robustness_variant_attempt.attempt_id = "robustness-variant-attempt".to_owned();
+        robustness_variant_attempt.run_id = robustness_variant_run.run_id.clone();
+        let robustness_variant_result = ImmutableResultReference {
+            result_id: "robustness-variant-result".to_owned(),
+            content_hash: "robustness-variant-result-hash".to_owned(),
+            artifact: ArtifactRef::new(
+                "robustness-variant-result-artifact",
+                "runs/robustness-variant-run/result.json",
+            )
+            .unwrap(),
+            score: Some(json!({"passed": true})),
+            extra: Default::default(),
+        };
+        robustness_variant_attempt.result = Some(robustness_variant_result.clone());
+        robustness_variant_attempt.effective_config.insert(
+            "promptVariant".to_owned(),
+            json!({
+                "version": "2",
+                "transformationType": "paraphrase",
+                "seed": 1,
+                "sourceTaskVersion": version.version_id
+            }),
+        );
+        service
+            .save_run(&robustness_variant_run, "111")
+            .expect("robustness variant run saves");
+        service
+            .save_attempt(&robustness_variant_attempt, "111")
+            .expect("robustness variant attempt saves");
+        service
+            .save_result_reference(
+                &robustness_variant_result,
+                &robustness_variant_attempt.attempt_id,
+                "111",
+            )
+            .expect("robustness variant result saves");
+        let mut robustness_variant_source = request.clone();
+        robustness_variant_source.record_id = "benchmark-robustness-variant-run".to_owned();
+        robustness_variant_source.payload["runId"] = json!(robustness_variant_run.run_id);
+        robustness_variant_source.payload["sourceRun"] =
+            serde_json::to_value(&robustness_variant_run).unwrap();
+        robustness_variant_source.payload["attempt"] =
+            serde_json::to_value(&robustness_variant_attempt).unwrap();
+        robustness_variant_source.payload["performance"] =
+            super::performance_evidence_from_attempt(&robustness_variant_attempt);
+        robustness_variant_source.payload["objective"] = json!({"passed": true});
+        robustness_variant_source.payload["createdAt"] = json!("2026-09-29T01:10:00Z");
+        let (saved_variant_source, _) = service
+            .save_roadmap_record(&robustness_variant_source, "111")
+            .expect("prompt-variant source record saves");
+
         assert!(service
             .list_roadmap_records(Some("performance_lab"))
             .unwrap()
             .is_empty());
-        let changed = RoadmapRecordRequest {
-            payload: json!({"runId": "run-2"}),
-            ..request
+        let mut performance_payload = super::performance_evidence_from_attempt(&source_attempt)
+            .as_object()
+            .cloned()
+            .expect("performance payload is an object");
+        performance_payload.insert("runId".to_owned(), json!(source_run.run_id));
+        performance_payload.insert("benchmarkVersionId".to_owned(), json!(version.version_id));
+        performance_payload.insert(
+            "profileRevisionId".to_owned(),
+            json!(profile.profile_revision_id),
+        );
+        let performance = RoadmapRecordRequest {
+            record_id: "performance-run-1".to_owned(),
+            kind: "performance_lab".to_owned(),
+            payload: serde_json::Value::Object(performance_payload),
         };
+        let mut forged_performance = performance.clone();
+        forged_performance.payload["metrics"]["wallClockMs"]["value"] = json!(999.0);
+        assert_eq!(
+            service.save_roadmap_record(&forged_performance, "150"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        service
+            .save_roadmap_record(&performance, "175")
+            .expect("source-bound performance record saves");
+        let suite = RoadmapRecordRequest {
+            record_id: "suite-run-1".to_owned(),
+            kind: "single_model_suite".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "single_model_suite",
+                "suiteId": "suite-run-1",
+                "benchmarkVersionId": version.version_id,
+                "profileRevision": serde_json::to_value(&profile).unwrap(),
+                "status": "completed",
+                "summary": {"total": 1, "completed": 1, "failed": 0, "cancelled": 0, "unavailable": 0, "evidenceErrors": 0},
+                "cases": [{"taskId": "task", "caseId": "case", "status": "completed", "runId": "run-1", "attemptId": "attempt-1", "objectivePassed": null}],
+                "startedAt": "2026-09-29T00:00:00Z",
+                "createdAt": "2026-09-29T00:00:00Z"
+            }),
+        };
+        let mut forged_suite = suite.clone();
+        forged_suite.payload["summary"]["completed"] = json!(0);
+        assert_eq!(
+            service.save_roadmap_record(&forged_suite, "250"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_suite, suite_outcome) = service
+            .save_roadmap_record(&suite, "250")
+            .expect("suite record saves");
+        assert_eq!(suite_outcome, SaveOutcome::Saved);
+        assert_eq!(saved_suite.kind, "single_model_suite");
+        assert_eq!(
+            service
+                .list_roadmap_records(Some("single_model_suite"))
+                .unwrap(),
+            vec![saved_suite]
+        );
+        let queued_cancellation = RoadmapRecordRequest {
+            record_id: "suite-queued-cancellation".to_owned(),
+            kind: "single_model_suite".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "single_model_suite",
+                "suiteId": "suite-queued-cancellation",
+                "benchmarkVersionId": version.version_id,
+                "profileRevision": serde_json::to_value(&profile).unwrap(),
+                "status": "failed",
+                "summary": {"total": 1, "completed": 0, "failed": 0, "cancelled": 1, "unavailable": 0, "evidenceErrors": 0},
+                "cases": [{"taskId": "task", "caseId": "case", "status": "cancelled", "runId": null, "attemptId": null, "objectivePassed": null}],
+                "startedAt": "2026-09-29T00:00:00Z",
+                "createdAt": "2026-09-29T00:01:00Z"
+            }),
+        };
+        service
+            .save_roadmap_record(&queued_cancellation, "251")
+            .expect("a queued cancellation is retained in the suite summary");
+        let mut forged_cancel_error = queued_cancellation.clone();
+        forged_cancel_error.record_id = "suite-forged-cancel-error".to_owned();
+        forged_cancel_error.payload["suiteId"] = json!("suite-forged-cancel-error");
+        forged_cancel_error.payload["cases"][0]["errorCode"] = json!("execution_failed");
+        assert_eq!(
+            service.save_roadmap_record(&forged_cancel_error, "252"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+
+        let historical = RoadmapRecordRequest {
+            record_id: "regression-local-sources".to_owned(),
+            kind: "historical_regression".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "historical_regression",
+                "baselineId": "run-1",
+                "candidateId": "run-2",
+                "baselineSourceKind": "single_model_benchmark",
+                "candidateSourceKind": "single_model_benchmark",
+                "verificationStatus": "unverified",
+                "sourceReferences": [
+                    {"sourceKind": "single_model_benchmark", "sourceId": "run-1", "contentHash": first.content_hash},
+                    {"sourceKind": "single_model_benchmark", "sourceId": "run-2", "contentHash": saved_reproduction.content_hash}
+                ],
+                "compatibility": {"compatible": true, "changedDimensions": [], "warnings": []},
+                "metrics": [],
+                "createdAt": "2026-09-29T02:00:00Z"
+            }),
+        };
+        let mut missing_derived_source = historical.clone();
+        missing_derived_source.payload["sourceReferences"][0]["sourceId"] = json!("missing-run");
+        assert_eq!(
+            service.save_roadmap_record(&missing_derived_source, "260"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismatched_derived_hash = historical.clone();
+        mismatched_derived_hash.payload["sourceReferences"][0]["contentHash"] =
+            json!("f".repeat(64));
+        assert_eq!(
+            service.save_roadmap_record(&mismatched_derived_hash, "260"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut falsely_verified = historical.clone();
+        falsely_verified.payload["verificationStatus"] = json!("verified");
+        assert_eq!(
+            service.save_roadmap_record(&falsely_verified, "260"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_historical, _) = service
+            .save_roadmap_record(&historical, "260")
+            .expect("local source links save explicitly unverified");
+
+        let source_arena = ArenaSummaryPayload {
+            arena_id: "ratings-arena".to_owned(),
+            blind: None,
+            benchmark_version_id: version.version_id.clone(),
+            task_id: "task".to_owned(),
+            case_id: "case".to_owned(),
+            repetitions: 1,
+            pack_id: None,
+            category_id: None,
+            category_name: None,
+            materialization_seed: None,
+            arena_wall_time_ms: None,
+            summary: json!({"objectivePassRate": 1.0}),
+            competitors: vec![json!({"competitorId": profile.profile_revision_id})],
+            evidence: Vec::new(),
+        };
+        let (saved_arena, _) = service
+            .save_arena_summary(&source_arena, "261")
+            .expect("rating source saves");
+        let ratings = RoadmapRecordRequest {
+            record_id: "ratings-local-sources".to_owned(),
+            kind: "model_ratings".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "model_ratings",
+                "ruleVersion": "elo-v1",
+                "verificationStatus": "unverified",
+                "sourcePopulation": [{"arenaId": "ratings-arena", "contentHash": saved_arena.content_hash}],
+                "ratings": [{"competitorId": profile.profile_revision_id, "category": null, "rating": 1000.0, "sampleCount": 1, "uncertainty": 400.0, "wins": 1, "losses": 0, "ties": 0}],
+                "createdAt": "2026-09-29T02:00:00Z"
+            }),
+        };
+        let mut missing_rating_sources = ratings.clone();
+        missing_rating_sources.payload["sourcePopulation"] = json!([]);
+        assert_eq!(
+            service.save_roadmap_record(&missing_rating_sources, "262"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismatched_rating_hash = ratings.clone();
+        mismatched_rating_hash.payload["sourcePopulation"][0]["contentHash"] =
+            json!("e".repeat(64));
+        assert_eq!(
+            service.save_roadmap_record(&mismatched_rating_hash, "262"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut fabricated_rating = ratings.clone();
+        fabricated_rating.payload["ratings"][0]["competitorId"] = json!("not-in-source");
+        assert_eq!(
+            service.save_roadmap_record(&fabricated_rating, "262"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_ratings, _) = service
+            .save_roadmap_record(&ratings, "262")
+            .expect("hash-linked ratings save explicitly unverified");
+
+        let robustness = RoadmapRecordRequest {
+            record_id: "robustness-local-sources".to_owned(),
+            kind: "robustness_arena".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "robustness_arena",
+                "verificationStatus": "unverified",
+                "sourceTaskVersion": version.version_id,
+                "taskId": "task",
+                "caseId": "case",
+                "profileRevisionId": profile.profile_revision_id,
+                "basePassed": null,
+                "baseRunId": "run-1",
+                "baseAttemptId": "attempt-1",
+                "baseSourceContentHash": first.content_hash,
+                "baseEvidenceSaved": true,
+                "baseStatus": "completed",
+                "variants": [],
+                "robustnessScore": null,
+                "variance": null,
+                "failureClusters": [],
+                "createdAt": "2026-09-29T02:00:00Z"
+            }),
+        };
+        let mut missing_robustness_hash = robustness.clone();
+        missing_robustness_hash
+            .payload
+            .as_object_mut()
+            .unwrap()
+            .remove("baseSourceContentHash");
+        assert_eq!(
+            service.save_roadmap_record(&missing_robustness_hash, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismatched_robustness_attempt = robustness.clone();
+        mismatched_robustness_attempt.payload["baseAttemptId"] = json!("attempt-2");
+        assert_eq!(
+            service.save_roadmap_record(&mismatched_robustness_attempt, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let completed_variant = json!({
+            "version": "2",
+            "transformationType": "paraphrase",
+            "seed": 1,
+            "sourceTaskVersion": version.version_id,
+            "executionStatus": "completed",
+            "passed": true,
+            "runId": robustness_variant_run.run_id,
+            "attemptId": robustness_variant_attempt.attempt_id,
+            "sourceContentHash": saved_variant_source.content_hash
+        });
+        let mut unlinked_completed_variant = robustness.clone();
+        unlinked_completed_variant.record_id = "robustness-unlinked-completed".to_owned();
+        unlinked_completed_variant.payload["variants"] = json!([{
+            "version": "2",
+            "transformationType": "paraphrase",
+            "seed": 1,
+            "sourceTaskVersion": version.version_id,
+            "executionStatus": "completed",
+            "passed": true
+        }]);
+        assert_eq!(
+            service.save_roadmap_record(&unlinked_completed_variant, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut wrong_condition_variant = robustness.clone();
+        wrong_condition_variant.record_id = "robustness-wrong-condition".to_owned();
+        wrong_condition_variant.payload["variants"] = json!([{
+            "version": "2",
+            "transformationType": "paraphrase",
+            "seed": 1,
+            "sourceTaskVersion": version.version_id,
+            "executionStatus": "completed",
+            "passed": null,
+            "runId": "run-2",
+            "attemptId": "attempt-2",
+            "sourceContentHash": saved_reproduction.content_hash
+        }]);
+        assert_eq!(
+            service.save_roadmap_record(&wrong_condition_variant, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut valid_variant_result = robustness.clone();
+        valid_variant_result.record_id = "robustness-valid-variant".to_owned();
+        valid_variant_result.payload["variants"] = json!([completed_variant]);
+        service
+            .save_roadmap_record(&valid_variant_result, "263")
+            .expect("variant result links to the matching immutable prompt configuration");
+        let mut partially_saved_variant = valid_variant_result.clone();
+        partially_saved_variant.record_id = "robustness-partial-save-variant".to_owned();
+        partially_saved_variant.payload["variants"][0]["passed"] = json!(null);
+        partially_saved_variant.payload["variants"][0]["errorCode"] = json!("evidence_save_failed");
+        service
+            .save_roadmap_record(&partially_saved_variant, "263")
+            .expect("a failed secondary evidence save retains and validates the source link without exposing its pass claim");
+        let mut misbound_partial_variant = partially_saved_variant.clone();
+        misbound_partial_variant.record_id = "robustness-misbound-partial-save".to_owned();
+        misbound_partial_variant.payload["variants"][0]["transformationType"] =
+            json!("concise_wording");
+        assert_eq!(
+            service.save_roadmap_record(&misbound_partial_variant, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_robustness, _) = service
+            .save_roadmap_record(&robustness, "263")
+            .expect("source-bound unverified robustness saves");
+
+        let connection = Connection::open(service.layout().database_path())
+            .expect("database opens for derived tamper fixture");
+        let mut tampered_historical = saved_historical.payload.clone();
+        tampered_historical["metrics"] =
+            json!([{"metric": "quality", "baseline": 0.0, "candidate": 1.0}]);
+        connection
+            .execute(
+                "UPDATE roadmap_records SET document_json = ?1 WHERE record_id = ?2",
+                rusqlite::params![
+                    serde_json::to_string(&tampered_historical).unwrap(),
+                    saved_historical.record_id
+                ],
+            )
+            .expect("tamper fixture updates derived document");
+        assert_eq!(
+            service.get_roadmap_record(&saved_historical.record_id),
+            Err(StorageError::DatabaseFailure)
+        );
+        assert_eq!(
+            service
+                .get_roadmap_record(&saved_ratings.record_id)
+                .unwrap()
+                .unwrap()
+                .payload["verificationStatus"],
+            "unverified"
+        );
+        assert_eq!(
+            service
+                .get_roadmap_record(&saved_robustness.record_id)
+                .unwrap()
+                .unwrap()
+                .payload["verificationStatus"],
+            "unverified"
+        );
+
+        let mut changed = request.clone();
+        changed.payload["createdAt"] = json!("2026-09-29T00:00:01Z");
         assert_eq!(
             service.save_roadmap_record(&changed, "300"),
             Err(StorageError::ImmutableConflict)
         );
+
+        let preview = service
+            .preview_storage_retention_at(30, "200")
+            .expect("retention previews both old run and attempt cascades");
+        assert_eq!(preview.eligible_records, 7);
+        service
+            .cleanup_storage_retention(&StorageRetentionRequest {
+                older_than_days: 30,
+                cutoff_at: "200".to_owned(),
+                expected_records: 7,
+                confirmation: "DELETE 7 LOCAL RECORDS".to_owned(),
+            })
+            .expect("retention removes the source attempt and run");
+        let (replay_after_retention, replay_after_retention_outcome) = service
+            .save_roadmap_record(&request, "500")
+            .expect("immutable snapshot replay succeeds after source retention");
+        assert_eq!(replay_after_retention, first);
+        assert_eq!(replay_after_retention_outcome, SaveOutcome::AlreadyPresent);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3973,7 +6114,7 @@ mod tests {
             .execute("INSERT INTO runs (record_id, content_hash, document_json, created_at) VALUES ('old-run', 'run-hash', '{}', '100'), ('new-run', 'new-run-hash', '{}', '300')", [])
             .expect("run fixtures insert");
         connection
-            .execute("INSERT INTO attempts (record_id, content_hash, document_json, created_at) VALUES ('old-attempt', 'attempt-hash', '{}', '100'), ('linked-attempt', 'linked-attempt-hash', '{}', '100')", [])
+            .execute("INSERT INTO attempts (record_id, content_hash, document_json, created_at) VALUES ('old-attempt', 'attempt-hash', '{}', '100'), ('linked-attempt', 'linked-attempt-hash', '{\"runId\":\"old-run\",\"status\":\"completed\"}', '100')", [])
             .expect("attempt fixtures insert");
         connection
             .execute("INSERT INTO result_records (result_id, attempt_id, content_hash, document_json, created_at) VALUES ('old-result', 'linked-attempt', 'result-hash', '{}', '100')", [])
@@ -3991,8 +6132,8 @@ mod tests {
         let preview = service
             .preview_storage_retention_at(30, "200")
             .expect("retention previews");
-        assert_eq!(preview.eligible_records, 4);
-        assert_eq!(preview.confirmation, "DELETE 4 LOCAL RECORDS");
+        assert_eq!(preview.eligible_records, 5);
+        assert_eq!(preview.confirmation, "DELETE 5 LOCAL RECORDS");
         assert!(preview
             .protected_tables
             .iter()
@@ -4001,8 +6142,8 @@ mod tests {
             service.cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 4,
-                confirmation: "DELETE 3 LOCAL RECORDS".to_owned(),
+                expected_records: 5,
+                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
             }),
             Err(StorageError::RetentionConfirmationRequired)
         );
@@ -4017,11 +6158,25 @@ mod tests {
             .cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 4,
-                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
+                expected_records: 5,
+                confirmation: "DELETE 5 LOCAL RECORDS".to_owned(),
             })
             .expect("retention cleans eligible history");
-        assert_eq!(result.deleted_records, 4);
+        assert_eq!(result.deleted_records, 5);
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM attempts", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM result_records", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
         assert_eq!(
             connection
                 .query_row(
@@ -4050,7 +6205,7 @@ mod tests {
                     |row| row.get::<_, u32>(0)
                 )
                 .unwrap(),
-            1
+            0
         );
         assert_eq!(
             connection
@@ -4081,11 +6236,14 @@ mod tests {
         let service = StorageService::open(&root).expect("storage opens");
         let summary = ArenaSummaryPayload {
             arena_id: "arena-1".to_owned(),
+            blind: None,
             benchmark_version_id: "logic@1".to_owned(),
             task_id: "task".to_owned(),
             case_id: "case".to_owned(),
             repetitions: 1,
             pack_id: None,
+            category_id: Some("reasoning".to_owned()),
+            category_name: Some("Reasoning".to_owned()),
             materialization_seed: Some(42),
             arena_wall_time_ms: Some(12.5),
             summary: json!({"total": 1, "uncertainty": 0.1, "tieMargin": 0.2}),
@@ -4127,6 +6285,40 @@ mod tests {
         );
         assert_eq!(service.get_arena_summary("arena-1").unwrap(), Some(first));
         assert_eq!(service.list_arena_summaries().unwrap().len(), 1);
+        let mut incomplete_category = summary.clone();
+        incomplete_category.arena_id = "arena-2".to_owned();
+        incomplete_category.category_name = None;
+        assert_eq!(
+            service.save_arena_summary(&incomplete_category, "400"),
+            Err(StorageError::InvalidRecordId)
+        );
+        let mut legacy_summary = summary.clone();
+        legacy_summary.category_id = None;
+        legacy_summary.category_name = None;
+        let legacy_json = serde_json::to_value(legacy_summary).expect("legacy summary serializes");
+        assert!(!legacy_json.as_object().unwrap().contains_key("categoryId"));
+        assert!(!legacy_json
+            .as_object()
+            .unwrap()
+            .contains_key("categoryName"));
+        let tampered = Connection::open(service.layout().database_path())
+            .expect("database opens for immutable summary tampering fixture");
+        let mut changed_document = serde_json::to_value(&summary).expect("summary serializes");
+        changed_document["summary"]["tieMargin"] = json!(99.0);
+        tampered
+            .execute(
+                "UPDATE arena_summaries SET document_json = ?1 WHERE record_id = ?2",
+                rusqlite::params![serde_json::to_string(&changed_document).unwrap(), "arena-1"],
+            )
+            .expect("tamper fixture changes the payload without its stored hash");
+        assert_eq!(
+            service.get_arena_summary("arena-1"),
+            Err(StorageError::DatabaseFailure)
+        );
+        assert_eq!(
+            service.list_arena_summaries(),
+            Err(StorageError::DatabaseFailure)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4140,11 +6332,14 @@ mod tests {
             .expect("benchmark version saves");
         let mut source_summary = ArenaSummaryPayload {
             arena_id: "advanced-arena-1".to_owned(),
+            blind: None,
             benchmark_version_id: benchmark_summary.version_id.clone(),
             task_id: "task".to_owned(),
             case_id: "case".to_owned(),
             repetitions: 1,
             pack_id: None,
+            category_id: None,
+            category_name: None,
             materialization_seed: None,
             arena_wall_time_ms: Some(20.0),
             summary: json!({"objectivePassRate": 1.0}),
@@ -4860,6 +7055,243 @@ mod tests {
     }
 
     #[test]
+    fn profile_model_artifact_identity_is_bounded_and_hash_checked() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let model_id = "managed-model";
+        let source_id = "llama-source";
+        let managed_path = "models/tiny.gguf";
+        let model_hash = "a".repeat(64);
+        service
+            .save_model_record(
+                &ModelRecord {
+                    model_id: model_id.to_owned(),
+                    source_id: source_id.to_owned(),
+                    backend: ModelBackend::LlamaCpp,
+                    name: "local-model".to_owned(),
+                    endpoint: None,
+                    path: Some(managed_path.to_owned()),
+                    availability: ModelAvailability::Available,
+                    digest: None,
+                    content_hash: Some(model_hash.clone()),
+                    content_hash_status: ModelContentHashStatus::VerifiedAtImport,
+                    size_bytes: Some(8),
+                    family: None,
+                    parameter_size: None,
+                    quantization_level: None,
+                    context_length: None,
+                    modified_at: None,
+                    managed: true,
+                    managed_path: Some(managed_path.to_owned()),
+                    metadata: BTreeMap::new(),
+                },
+                "50",
+            )
+            .expect("managed model import record saves");
+        let mut profile = profile_revision();
+        profile.runtime = "llama_cpp".to_owned();
+        profile
+            .extra
+            .insert("modelContentHash".to_owned(), json!(model_hash));
+        profile.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("verified_at_import"),
+        );
+        profile.extra.insert("modelId".to_owned(), json!(model_id));
+        profile
+            .extra
+            .insert("sourceId".to_owned(), json!(source_id));
+        profile
+            .extra
+            .insert("backend".to_owned(), json!(ModelBackend::LlamaCpp));
+        profile.extra.insert("path".to_owned(), json!(managed_path));
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("valid local artifact identity saves");
+        assert_eq!(
+            service.list_profile_revisions().unwrap()[0]
+                .extra
+                .get("modelContentHashStatus"),
+            Some(&json!("import_identity_not_rechecked"))
+        );
+
+        let mut invalid_digest = profile_revision();
+        invalid_digest.profile_id = "invalid-digest".to_owned();
+        invalid_digest.profile_revision_id = "invalid-digest@1".to_owned();
+        invalid_digest.extra.insert(
+            "modelDigest".to_owned(),
+            json!("x".repeat(MAX_PROFILE_MODEL_BYTES + 1)),
+        );
+        assert_eq!(
+            service.save_profile_revision(&invalid_digest, "200"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut invalid_hash = profile_revision();
+        invalid_hash.profile_id = "invalid-content-hash".to_owned();
+        invalid_hash.profile_revision_id = "invalid-content-hash@1".to_owned();
+        invalid_hash
+            .extra
+            .insert("modelContentHash".to_owned(), json!("not-a-sha256"));
+        assert_eq!(
+            service.save_profile_revision(&invalid_hash, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut unbound_hash = profile_revision();
+        unbound_hash.profile_id = "unbound-content-hash".to_owned();
+        unbound_hash.profile_revision_id = "unbound-content-hash@1".to_owned();
+        unbound_hash.runtime = "llama_cpp".to_owned();
+        unbound_hash
+            .extra
+            .insert("modelContentHash".to_owned(), json!("b".repeat(64)));
+        unbound_hash.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("verified_at_import"),
+        );
+        assert_eq!(
+            service.save_profile_revision(&unbound_hash, "350"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut missing_hash = profile_revision();
+        missing_hash.profile_id = "missing-content-hash".to_owned();
+        missing_hash.profile_revision_id = "missing-content-hash@1".to_owned();
+        missing_hash.extra.insert(
+            "modelContentHashStatus".to_owned(),
+            json!("verified_at_import"),
+        );
+        assert_eq!(
+            service.save_profile_revision(&missing_hash, "400"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_max_tokens_are_bounded_and_persisted_when_set() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let mut profile = profile_revision();
+        profile
+            .parameters
+            .insert("maxTokens".to_owned(), json!(4096));
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("bounded output budget saves");
+        assert_eq!(
+            service.list_profile_revisions().expect("profiles list")[0]
+                .parameters
+                .get("maxTokens"),
+            Some(&json!(4096))
+        );
+
+        for (index, value) in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(MAX_OUTPUT_TOKENS + 1),
+            json!(u64::from(u32::MAX) + 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut invalid = profile_revision();
+            invalid.profile_id = format!("invalid-output-{index}");
+            invalid.profile_revision_id = format!("{}@1", invalid.profile_id);
+            invalid.parameters.insert("maxTokens".to_owned(), value);
+            assert_eq!(
+                service.save_profile_revision(&invalid, "200"),
+                Err(StorageError::InvalidProfileRevision)
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profile_context_window_override_is_bounded_ollama_only_and_versioned() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let mut profile = profile_revision();
+        profile.runtime = "ollama".to_owned();
+        profile
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(8192));
+        service
+            .save_profile_revision(&profile, "100")
+            .expect("bounded Ollama context size saves");
+        let persisted = service.list_profile_revisions().expect("profiles list");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].profile_revision_id, "profile-1@1");
+        assert_eq!(
+            persisted[0].parameters.get("contextWindowTokens"),
+            Some(&json!(8192))
+        );
+        let mut changed_revision = profile.clone();
+        changed_revision
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(16384));
+        assert_eq!(
+            service.save_profile_revision(&changed_revision, "150"),
+            Err(StorageError::ImmutableConflict)
+        );
+        assert_eq!(
+            service.list_profile_revisions().expect("profiles list")[0]
+                .parameters
+                .get("contextWindowTokens"),
+            Some(&json!(8192))
+        );
+
+        for (index, value) in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(MAX_CONTEXT_WINDOW_TOKENS + 1),
+            json!(u64::from(u32::MAX) + 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut invalid = profile_revision();
+            invalid.profile_id = format!("invalid-context-{index}");
+            invalid.profile_revision_id = format!("{}@1", invalid.profile_id);
+            invalid
+                .parameters
+                .insert("contextWindowTokens".to_owned(), value);
+            assert_eq!(
+                service.save_profile_revision(&invalid, "200"),
+                Err(StorageError::InvalidProfileRevision)
+            );
+        }
+
+        let mut unsupported = profile_revision();
+        unsupported.runtime = "lm_studio".to_owned();
+        unsupported
+            .parameters
+            .insert("contextWindowTokens".to_owned(), json!(8192));
+        assert_eq!(
+            service.save_profile_revision(&unsupported, "300"),
+            Err(StorageError::InvalidProfileRevision)
+        );
+
+        let mut legacy = profile_revision();
+        legacy.profile_id = "legacy-context".to_owned();
+        legacy.profile_revision_id = "legacy-context@1".to_owned();
+        service
+            .save_profile_revision(&legacy, "400")
+            .expect("profile without context preference remains valid");
+        assert!(!service
+            .list_profile_revisions()
+            .expect("profiles list")
+            .iter()
+            .find(|item| item.profile_revision_id == legacy.profile_revision_id)
+            .unwrap()
+            .parameters
+            .contains_key("contextWindowTokens"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn managed_model_removal_is_hash_checked_and_root_bounded() {
         let root = temporary_root();
         let service = StorageService::open(&root).expect("storage opens");
@@ -4868,6 +7300,13 @@ mod tests {
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         let payload = b"managed model bytes";
         fs::write(&target, payload).unwrap();
+
+        let (read_size, prefix, read_hash) = service
+            .read_managed_model_prefix_and_hash(relative_path, 3)
+            .expect("explicit hash reader streams the whole model and bounds its prefix");
+        assert_eq!(read_size, payload.len() as u64);
+        assert_eq!(prefix, b"man");
+        assert_eq!(read_hash, sha256_hex(payload));
 
         let outside = root.join("outside.gguf");
         fs::write(&outside, payload).unwrap();

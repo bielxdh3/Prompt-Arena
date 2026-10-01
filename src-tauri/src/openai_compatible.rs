@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
@@ -10,8 +11,9 @@ use crate::{
     },
     runtime::{
         CancellationToken, Capability, ChatMessage, GenerationChunk, GenerationParameter,
-        GenerationRequest, GenerationResponse, MessageRole, ModelInfo, RuntimeCapabilities,
-        RuntimeError, RuntimeHealth, RuntimeProvider, ToolCall, ToolPolicy, UsageMetrics,
+        GenerationRequest, GenerationResponse, MessageRole, ModelInfo, ReasoningEffort,
+        RuntimeCapabilities, RuntimeError, RuntimeHealth, RuntimeProvider, TimingMetrics, ToolCall,
+        ToolPolicy, UsageMetrics,
     },
 };
 
@@ -95,6 +97,9 @@ impl OpenAiCompatibleProvider {
         if let Some(value) = request.seed {
             payload.insert("seed".to_owned(), json!(value));
         }
+        if request.parameters.reasoning_effort == Some(ReasoningEffort::None) {
+            payload.insert("reasoning_effort".to_owned(), json!("none"));
+        }
         if !request.tools.is_empty() {
             payload.insert(
                 "tools".to_owned(),
@@ -133,6 +138,18 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
     }
 
     fn capabilities(&self) -> RuntimeCapabilities {
+        let mut parameters = BTreeSet::from([
+            GenerationParameter::Temperature,
+            GenerationParameter::TopP,
+            GenerationParameter::MaxTokens,
+            GenerationParameter::StopSequences,
+            GenerationParameter::Seed,
+            GenerationParameter::Tools,
+            GenerationParameter::ToolPolicy,
+        ]);
+        if self.runtime == OpenAiCompatibleRuntime::LmStudio {
+            parameters.insert(GenerationParameter::ReasoningEffort);
+        }
         RuntimeCapabilities {
             capabilities: BTreeSet::from([
                 Capability::Chat,
@@ -143,15 +160,7 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
                 Capability::UsageMetrics,
                 Capability::ToolCalling,
             ]),
-            parameters: BTreeSet::from([
-                GenerationParameter::Temperature,
-                GenerationParameter::TopP,
-                GenerationParameter::MaxTokens,
-                GenerationParameter::StopSequences,
-                GenerationParameter::Seed,
-                GenerationParameter::Tools,
-                GenerationParameter::ToolPolicy,
-            ]),
+            parameters,
         }
     }
 
@@ -224,6 +233,7 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
         on_chunk: &mut dyn FnMut(GenerationChunk) -> Result<(), RuntimeError>,
     ) -> Result<GenerationResponse, RuntimeError> {
         let payload = self.request_payload(request, true)?;
+        let request_started_at = Instant::now();
         let response =
             self.transport
                 .request("POST", "/v1/chat/completions", Some(&payload), cancellation)?;
@@ -243,6 +253,7 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
         let mut usage = None;
         let mut model = request.model.clone();
         let mut saw_done = false;
+        let mut ttft_duration_ns = None;
 
         loop {
             let line = read_line_with_cancel(&mut body, cancellation, read_deadline)?;
@@ -257,6 +268,8 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
                         &mut finish_reason,
                         &mut usage,
                         &mut model,
+                        request_started_at,
+                        &mut ttft_duration_ns,
                         on_chunk,
                     )?;
                 }
@@ -281,6 +294,8 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
                     &mut finish_reason,
                     &mut usage,
                     &mut model,
+                    request_started_at,
+                    &mut ttft_duration_ns,
                     on_chunk,
                 )? {
                     saw_done = true;
@@ -311,7 +326,13 @@ impl RuntimeProvider for OpenAiCompatibleProvider {
             tool_calls: finalize_tool_calls(tool_calls)?,
             finish_reason,
             usage,
-            timing: None,
+            timing: ttft_duration_ns.map(|ttft_duration_ns| TimingMetrics {
+                total_duration_ns: None,
+                load_duration_ns: None,
+                prompt_eval_duration_ns: None,
+                eval_duration_ns: None,
+                ttft_duration_ns: Some(ttft_duration_ns),
+            }),
             metadata: BTreeMap::new(),
         })
     }
@@ -587,6 +608,8 @@ fn apply_stream_event(
     finish_reason: &mut Option<String>,
     usage: &mut Option<UsageMetrics>,
     model: &mut String,
+    request_started_at: Instant,
+    ttft_duration_ns: &mut Option<u64>,
     on_chunk: &mut dyn FnMut(GenerationChunk) -> Result<(), RuntimeError>,
 ) -> Result<bool, RuntimeError> {
     match event {
@@ -606,6 +629,14 @@ fn apply_stream_event(
             usage: event_usage,
             tool_calls: event_tool_calls,
         } => {
+            if ttft_duration_ns.is_none() && !text.is_empty() {
+                *ttft_duration_ns = Some(
+                    request_started_at
+                        .elapsed()
+                        .as_nanos()
+                        .min(u64::MAX as u128) as u64,
+                );
+            }
             if let Some(event_model) = event_model {
                 *model = event_model;
             }
@@ -773,6 +804,8 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::runtime::GenerationParameters;
+
     use super::*;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -795,11 +828,11 @@ mod tests {
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .unwrap();
                     read_request(&mut stream);
-                    let _ = stream.write_all(response.as_bytes());
-                    let _ = stream.flush();
                     if let Some(delay) = delay {
                         thread::sleep(delay);
                     }
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
                 }
             });
             Self {
@@ -901,14 +934,90 @@ mod tests {
     }
 
     #[test]
-    fn chat_stream_maps_sse_text_finish_reason_usage_and_done() {
+    fn reasoning_none_maps_to_lm_studio_and_is_rejected_by_llama_cpp() {
+        let config = OllamaConfig {
+            endpoint: "http://127.0.0.1:1234".to_owned(),
+            connect_timeout_ms: 1_000,
+            read_timeout_ms: 20,
+            read_deadline_ms: 2_000,
+        };
+        let lm_studio =
+            OpenAiCompatibleProvider::new(OpenAiCompatibleRuntime::LmStudio, config.clone())
+                .unwrap();
+        let llama_cpp =
+            OpenAiCompatibleProvider::new(OpenAiCompatibleRuntime::LlamaCpp, config).unwrap();
+        let reasoning_request = GenerationRequest {
+            parameters: GenerationParameters {
+                reasoning_effort: Some(ReasoningEffort::None),
+                ..GenerationParameters::default()
+            },
+            ..request()
+        };
+
+        let lm_payload = lm_studio
+            .request_payload(&reasoning_request, false)
+            .unwrap();
+        assert_eq!(lm_payload["reasoning_effort"], "none");
+        assert_eq!(
+            llama_cpp.request_payload(&reasoning_request, false),
+            Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ReasoningEffort,
+            })
+        );
+        assert!(lm_studio
+            .request_payload(
+                &GenerationRequest {
+                    parameters: GenerationParameters::default(),
+                    ..request()
+                },
+                false
+            )
+            .unwrap()
+            .get("reasoning_effort")
+            .is_none());
+    }
+
+    #[test]
+    fn context_window_override_is_rejected_before_request_for_unsupported_runtimes() {
+        let config = OllamaConfig {
+            endpoint: "http://127.0.0.1:1".to_owned(),
+            connect_timeout_ms: 1_000,
+            read_timeout_ms: 20,
+            read_deadline_ms: 2_000,
+        };
+        let context_request = GenerationRequest {
+            parameters: GenerationParameters {
+                context_window_tokens: Some(8192),
+                ..GenerationParameters::default()
+            },
+            ..request()
+        };
+        for runtime in [
+            OpenAiCompatibleRuntime::LmStudio,
+            OpenAiCompatibleRuntime::LlamaCpp,
+        ] {
+            let provider = OpenAiCompatibleProvider::new(runtime, config.clone()).unwrap();
+            assert_eq!(
+                provider.generate(&context_request, &CancellationToken::new()),
+                Err(RuntimeError::UnsupportedParameter {
+                    parameter: GenerationParameter::ContextWindowTokens,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn chat_stream_ttft_waits_for_first_nonempty_text() {
         let body = concat!(
             "data: {\"model\":\"local-model\",\"choices\":[{\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n",
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6}}\n\n",
             "data: [DONE]\n\n"
         );
-        let server = MockServer::start(vec![(response(200, "text/event-stream", body), None)]);
+        let server = MockServer::start(vec![(
+            response(200, "text/event-stream", body),
+            Some(Duration::from_millis(80)),
+        )]);
         let mut chunks = Vec::new();
         let result = server
             .provider()
@@ -927,7 +1036,30 @@ mod tests {
                 total_tokens: Some(6)
             })
         );
+        let ttft_duration_ns = result
+            .timing
+            .as_ref()
+            .and_then(|timing| timing.ttft_duration_ns)
+            .expect("first non-empty content has TTFT");
+        assert!(ttft_duration_ns >= 40_000_000);
         assert!(chunks.last().unwrap().done);
+    }
+
+    #[test]
+    fn chat_stream_without_text_keeps_ttft_unavailable() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let server = MockServer::start(vec![(response(200, "text/event-stream", body), None)]);
+        let result = server
+            .provider()
+            .stream(&request(), &CancellationToken::new(), &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(
+            result.timing.and_then(|timing| timing.ttft_duration_ns),
+            None
+        );
     }
 
     #[test]

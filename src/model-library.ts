@@ -1,4 +1,4 @@
-import { translate, formatLocaleNumber } from "./i18n";
+import { formatMessage, formatLocaleNumber, translate } from "./i18n";
 import type {
   HardwareSnapshot,
   ModelBackend,
@@ -16,6 +16,8 @@ import type {
 export const PROFILE_RUNTIME = "ollama" as const;
 export const MAX_PROFILE_ID_BYTES = 128;
 export const MAX_PROFILE_MODEL_BYTES = 256;
+export const MAX_PROFILE_OUTPUT_TOKENS = 32_768;
+export const MAX_PROFILE_CONTEXT_WINDOW_TOKENS = 32_768;
 export const MAX_MODEL_PATH_BYTES = 512;
 export const MAX_MODEL_QUERY_BYTES = 256;
 export const MIN_RECOMMENDATION_PERCENT = 10;
@@ -47,12 +49,18 @@ export type ProfileFormState = {
   profileId: string;
   revision: string;
   model: string;
+  reasoningEffort: "default" | "none";
+  maxTokens: string;
+  contextWindowTokens: string;
 };
 
 export const EMPTY_PROFILE_FORM: ProfileFormState = {
   profileId: "",
   revision: "1",
   model: "",
+  reasoningEffort: "default",
+  maxTokens: "",
+  contextWindowTokens: "",
 };
 
 function byteLength(value: string): number {
@@ -92,6 +100,19 @@ function validateRevision(value: string): number {
   return revision;
 }
 
+function validateProfileTokenCount(value: string, label: string, maximum: number): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const tokenCount = Number(trimmed);
+  if (!Number.isSafeInteger(tokenCount) || tokenCount < 1 || tokenCount > maximum) {
+    const message = label === "Maximum output tokens"
+      ? "Maximum output tokens must be a whole number between 1 and {maximum}."
+      : "Context window size must be a whole number between 1 and {maximum} tokens.";
+    throw new Error(formatMessage(translate(message), { maximum }));
+  }
+  return tokenCount;
+}
+
 export function stableProfileRevisionId(profileId: string, revision: number): string {
   const identifier = validateIdentifier(profileId);
   if (!Number.isInteger(revision) || revision < 1 || revision > 4_294_967_295) {
@@ -104,23 +125,48 @@ function profileRevisionBase(form: ProfileFormState): ProfileRevision {
   const profileId = validateIdentifier(form.profileId);
   const revision = validateRevision(form.revision);
   const model = validateModel(form.model);
+  const maxTokens = validateProfileTokenCount(form.maxTokens, "Maximum output tokens", MAX_PROFILE_OUTPUT_TOKENS);
+  const contextWindowTokens = validateProfileTokenCount(
+    form.contextWindowTokens,
+    "Context window size",
+    MAX_PROFILE_CONTEXT_WINDOW_TOKENS,
+  );
+  const parameters: ProfileRevision["parameters"] = {};
+  if (form.reasoningEffort === "none") parameters.reasoningEffort = "none";
+  if (maxTokens !== null) parameters.maxTokens = maxTokens;
+  if (contextWindowTokens !== null) parameters.contextWindowTokens = contextWindowTokens;
   return {
     profileId,
     profileRevisionId: stableProfileRevisionId(profileId, revision),
     revision,
     model,
     runtime: PROFILE_RUNTIME,
-    parameters: {},
+    parameters,
     systemPrompt: null,
   };
 }
 
 export function profileRevisionFromForm(form: ProfileFormState, model?: ModelRecord): ProfileRevision {
   const base = profileRevisionBase(form);
+  if (base.parameters.contextWindowTokens !== undefined && model && model.backend !== "ollama") {
+    throw new Error("Context window overrides are supported only by Ollama.");
+  }
   if (!model) return base;
 
   const endpoint = model.endpoint ? validateLoopbackEndpoint(model.endpoint) : null;
   const path = model.path ? validateManagedGgufPath(model.path) : null;
+  if (model.digest !== null && (byteLength(model.digest) > MAX_PROFILE_MODEL_BYTES || [...model.digest].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 0x20 || code === 0x7f;
+  }))) {
+    throw new Error("Model digest must be bounded and contain no control characters.");
+  }
+  if (model.contentHash !== null && !/^[a-f0-9]{64}$/iu.test(model.contentHash)) {
+    throw new Error("Model content hash must be a SHA-256 digest.");
+  }
+  if ((model.contentHash === null) !== (model.contentHashStatus === "not_available")) {
+    throw new Error("Model content hash status must match its available import identity.");
+  }
   if (model.backend !== "llama_cpp" && path !== null) {
     throw new Error("Only llama.cpp profiles can carry a managed GGUF path.");
   }
@@ -128,6 +174,9 @@ export function profileRevisionFromForm(form: ProfileFormState, model?: ModelRec
     modelId: validateIdentifier(model.modelId),
     sourceId: validateIdentifier(model.sourceId),
     backend: model.backend,
+    modelDigest: model.digest,
+    modelContentHash: model.contentHash,
+    modelContentHashStatus: model.contentHashStatus,
     endpoint,
     path,
     quantizationLevel: model.quantizationLevel,

@@ -10,6 +10,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// App-level limits prevent unbounded local inference requests; they do not
+/// guarantee that a model or the available hardware can satisfy the request.
+pub const MAX_OUTPUT_TOKENS: u32 = 32_768;
+pub const MAX_CONTEXT_WINDOW_TOKENS: u32 = 32_768;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
@@ -35,9 +40,12 @@ pub struct GenerationParameters {
     pub top_p: Option<f32>,
     pub top_k: Option<u32>,
     pub max_tokens: Option<u32>,
+    pub context_window_tokens: Option<u32>,
     pub repeat_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
     pub frequency_penalty: Option<f32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for GenerationParameters {
@@ -47,11 +55,19 @@ impl Default for GenerationParameters {
             top_p: None,
             top_k: None,
             max_tokens: None,
+            context_window_tokens: None,
             repeat_penalty: None,
             presence_penalty: None,
             frequency_penalty: None,
+            reasoning_effort: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -161,6 +177,7 @@ pub enum GenerationParameter {
     TopP,
     TopK,
     MaxTokens,
+    ContextWindowTokens,
     RepeatPenalty,
     PresencePenalty,
     FrequencyPenalty,
@@ -170,6 +187,7 @@ pub enum GenerationParameter {
     ToolPolicy,
     ResponseFormat,
     Metadata,
+    ReasoningEffort,
 }
 
 impl fmt::Display for GenerationParameter {
@@ -178,7 +196,9 @@ impl fmt::Display for GenerationParameter {
             Self::Temperature => "temperature",
             Self::TopP => "top_p",
             Self::TopK => "top_k",
+            Self::ReasoningEffort => "reasoning_effort",
             Self::MaxTokens => "max_tokens",
+            Self::ContextWindowTokens => "context_window_tokens",
             Self::RepeatPenalty => "repeat_penalty",
             Self::PresencePenalty => "presence_penalty",
             Self::FrequencyPenalty => "frequency_penalty",
@@ -247,6 +267,13 @@ impl RuntimeCapabilities {
                 parameter: GenerationParameter::MaxTokens,
             });
         }
+        if parameters.context_window_tokens.is_some()
+            && !self.supports_parameter(GenerationParameter::ContextWindowTokens)
+        {
+            return Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ContextWindowTokens,
+            });
+        }
         if parameters.repeat_penalty.is_some()
             && !self.supports_parameter(GenerationParameter::RepeatPenalty)
         {
@@ -266,6 +293,13 @@ impl RuntimeCapabilities {
         {
             return Err(RuntimeError::UnsupportedParameter {
                 parameter: GenerationParameter::FrequencyPenalty,
+            });
+        }
+        if parameters.reasoning_effort.is_some()
+            && !self.supports_parameter(GenerationParameter::ReasoningEffort)
+        {
+            return Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ReasoningEffort,
             });
         }
         if !request.stop_sequences.is_empty()
@@ -381,6 +415,8 @@ pub struct TimingMetrics {
     pub load_duration_ns: Option<u64>,
     pub prompt_eval_duration_ns: Option<u64>,
     pub eval_duration_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_duration_ns: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -532,9 +568,27 @@ impl GenerationRequest {
             self.parameters.frequency_penalty,
             GenerationParameter::FrequencyPenalty,
         )?;
-        if self.parameters.top_k == Some(0) || self.parameters.max_tokens == Some(0) {
+        if self.parameters.top_k == Some(0)
+            || self.parameters.max_tokens == Some(0)
+            || self.parameters.context_window_tokens == Some(0)
+        {
             return Err(RuntimeError::InvalidConfiguration {
-                message: "top_k and max_tokens must be greater than zero".to_owned(),
+                message: "top_k, max_tokens, and context_window_tokens must be greater than zero"
+                    .to_owned(),
+            });
+        }
+        if self
+            .parameters
+            .max_tokens
+            .is_some_and(|value| value > MAX_OUTPUT_TOKENS)
+            || self
+                .parameters
+                .context_window_tokens
+                .is_some_and(|value| value > MAX_CONTEXT_WINDOW_TOKENS)
+        {
+            return Err(RuntimeError::InvalidConfiguration {
+                message: "max_tokens and context_window_tokens exceed the local inference limits"
+                    .to_owned(),
             });
         }
         if let ResponseFormat::JsonSchema(schema) = &self.response_format {
@@ -639,8 +693,9 @@ pub trait RuntimeProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        Capability, GenerationParameter, GenerationRequest, RuntimeCapabilities, RuntimeError,
-        ToolPolicy,
+        Capability, GenerationParameter, GenerationParameters, GenerationRequest, ReasoningEffort,
+        RuntimeCapabilities, RuntimeError, TimingMetrics, ToolPolicy, MAX_CONTEXT_WINDOW_TOKENS,
+        MAX_OUTPUT_TOKENS,
     };
     use std::collections::BTreeSet;
 
@@ -661,6 +716,31 @@ mod tests {
             request.validate_shape(),
             Err(RuntimeError::InvalidConfiguration { .. })
         ));
+    }
+
+    #[test]
+    fn request_shape_rejects_output_and_context_limits_above_local_caps() {
+        for parameters in [
+            GenerationParameters {
+                max_tokens: Some(MAX_OUTPUT_TOKENS + 1),
+                ..GenerationParameters::default()
+            },
+            GenerationParameters {
+                context_window_tokens: Some(MAX_CONTEXT_WINDOW_TOKENS + 1),
+                ..GenerationParameters::default()
+            },
+        ] {
+            let request = GenerationRequest {
+                model: "model".to_owned(),
+                prompt: Some("prompt".to_owned()),
+                parameters,
+                ..GenerationRequest::default()
+            };
+            assert!(matches!(
+                request.validate_shape(),
+                Err(RuntimeError::InvalidConfiguration { .. })
+            ));
+        }
     }
 
     #[test]
@@ -688,6 +768,107 @@ mod tests {
             Err(RuntimeError::UnsupportedParameter {
                 parameter: GenerationParameter::PresencePenalty
             })
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_rejects_explicit_reasoning_effort_without_support() {
+        let capabilities = RuntimeCapabilities {
+            capabilities: BTreeSet::from([Capability::Chat]),
+            parameters: BTreeSet::new(),
+        };
+        let request = GenerationRequest {
+            model: "model".to_owned(),
+            messages: vec![super::ChatMessage {
+                role: super::MessageRole::User,
+                content: "Say hello".to_owned(),
+                name: None,
+                tool_call_id: None,
+            }],
+            parameters: GenerationParameters {
+                reasoning_effort: Some(ReasoningEffort::None),
+                ..GenerationParameters::default()
+            },
+            ..GenerationRequest::default()
+        };
+        assert_eq!(
+            capabilities.validate_request(&request),
+            Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ReasoningEffort,
+            })
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_rejects_context_window_without_support() {
+        let capabilities = RuntimeCapabilities {
+            capabilities: BTreeSet::from([Capability::Chat]),
+            parameters: BTreeSet::new(),
+        };
+        let request = GenerationRequest {
+            model: "model".to_owned(),
+            messages: vec![super::ChatMessage {
+                role: super::MessageRole::User,
+                content: "Say hello".to_owned(),
+                name: None,
+                tool_call_id: None,
+            }],
+            parameters: GenerationParameters {
+                context_window_tokens: Some(8192),
+                ..GenerationParameters::default()
+            },
+            ..GenerationRequest::default()
+        };
+        assert_eq!(
+            capabilities.validate_request(&request),
+            Err(RuntimeError::UnsupportedParameter {
+                parameter: GenerationParameter::ContextWindowTokens,
+            })
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_uses_the_typed_camel_case_wire_contract() {
+        let mut wire = serde_json::to_value(GenerationParameters::default()).unwrap();
+        wire["reasoningEffort"] = serde_json::json!("none");
+
+        let explicit: GenerationParameters = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(explicit.reasoning_effort, Some(ReasoningEffort::None));
+        assert_eq!(
+            serde_json::to_value(&explicit).unwrap()["reasoningEffort"],
+            "none"
+        );
+
+        wire.as_object_mut().unwrap().remove("reasoningEffort");
+        wire.as_object_mut().unwrap().remove("contextWindowTokens");
+        let default: GenerationParameters = serde_json::from_value(wire).unwrap();
+        assert_eq!(default.reasoning_effort, None);
+        assert_eq!(default.context_window_tokens, None);
+    }
+
+    #[test]
+    fn timing_metrics_accept_legacy_records_and_omit_unavailable_ttft() {
+        let legacy = serde_json::json!({
+            "totalDurationNs": 10,
+            "loadDurationNs": 2,
+            "promptEvalDurationNs": 3,
+            "evalDurationNs": 4
+        });
+        let parsed: TimingMetrics = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.ttft_duration_ns, None);
+        let serialized = serde_json::to_value(parsed).unwrap();
+        assert!(serialized.get("ttftDurationNs").is_none());
+
+        let with_ttft = TimingMetrics {
+            total_duration_ns: None,
+            load_duration_ns: None,
+            prompt_eval_duration_ns: None,
+            eval_duration_ns: None,
+            ttft_duration_ns: Some(5),
+        };
+        assert_eq!(
+            serde_json::to_value(with_ttft).unwrap()["ttftDurationNs"],
+            5
         );
     }
 

@@ -7,6 +7,7 @@ import {
   formatCredentialSource,
   formatIdentityConfidence,
   formatStorageStatus,
+  providerActionsAvailable,
   validateByokBudget,
   validateByokConfiguration,
   validateByokGeneration,
@@ -105,6 +106,10 @@ describe("BYOK UI helpers", () => {
     expect(formatByokDecision("confirmation_required")).toBe("Confirmation required");
     expect(formatIdentityConfidence("provider_reported")).toBe("Provider reported");
     expect(formatStorageStatus("available")).toBe("Available");
+    expect(providerActionsAvailable("available")).toBe(true);
+    expect(providerActionsAvailable("unsupported")).toBe(false);
+    expect(providerActionsAvailable("error")).toBe(false);
+    expect(providerActionsAvailable(undefined)).toBe(false);
     expect(formatCredentialSource("os_secure_storage")).toBe("OS secure storage");
     expect(byokErrorMessage({ code: "provider_confirmation_required", message: "untrusted text" })).toBe(
       "Explicit cost confirmation is required.",

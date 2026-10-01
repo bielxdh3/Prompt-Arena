@@ -97,7 +97,11 @@ export function buildWindowsMsi() {
   const version = readPackageVersion(REPOSITORY_ROOT);
   prepareGeneratedMsiOutput();
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const tauriStatus = run(npmCommand, ["run", "tauri:build", "--", "--bundles", "msi"], { shell: true });
+  // The MSI embeds Microsoft's Evergreen installer so clean installs do not
+  // depend on an unbounded WebView2 bootstrapper download.
+  const tauriStatus = run(npmCommand, [
+    "run", "tauri:build", "--", "--bundles", "msi", "--config", "src-tauri/tauri.msi.conf.json",
+  ], { shell: true });
   const candidates = tauriMsiCandidates().filter((candidate) => fs.statSync(candidate).size > 0);
   if (tauriStatus === 0 && candidates.length === 1) return candidates[0];
   return buildPatchedMsi(version);

@@ -5,6 +5,7 @@ import {
   arenaExportMarkdown,
   buildBlindArenaCards,
   executeArena,
+  hasCancelledDockerVerification,
   rankArenaCompetitors,
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
@@ -12,6 +13,7 @@ import {
   arenaMonitorDisplay,
   arenaTelemetryLabel,
   createArenaTelemetry,
+  buildArenaSummaryPayload,
   visibleArenaTelemetryError,
   visibleArenaTelemetryMetrics,
   type ArenaProgress,
@@ -56,7 +58,7 @@ const profile = (id: string): ProfileRevision => ({
   systemPrompt: "System",
 });
 
-function execution(runId: string, profileId: string, status: "completed" | "failed"): PersistedExecution {
+function execution(runId: string, profileId: string, status: "completed" | "failed" | "cancelled"): PersistedExecution {
   return {
     run: { runId, benchmarkVersionId: "bench@1", profileRevisionIds: [profileId], status, startedAt: "2026-01-01T00:00:00Z", attemptIds: [`${runId}-attempt`], environment: {} },
     attempt: {
@@ -76,6 +78,29 @@ function execution(runId: string, profileId: string, status: "completed" | "fail
 }
 
 describe("arena runner", () => {
+  it("keeps generated evidence completed while exposing cancelled Docker verification", () => {
+    const completed = execution("run", "one@1", "completed");
+    completed.attempt.dockerEvaluation = { status: "cancelled" };
+    expect(hasCancelledDockerVerification(completed)).toBe(true);
+    expect(hasCancelledDockerVerification(execution("run", "one@1", "completed"))).toBe(false);
+    expect(hasCancelledDockerVerification(null)).toBe(false);
+  });
+
+  it("stores a task category only when the task and category tree agree", () => {
+    const categorizedDocument = JSON.parse(version.documentJson) as Record<string, any>;
+    categorizedDocument.pack.categories = [{ categoryId: "reasoning", name: "Reasoning", children: [] }];
+    categorizedDocument.benchmarkVersion.tasks[0].categoryId = "reasoning";
+    const categorizedVersion = { ...version, documentJson: JSON.stringify(categorizedDocument) };
+    const request = { arenaId: "arena", version: categorizedVersion, taskId: "task", caseId: "case", profiles: [profile("one")], repetitions: 1 };
+
+    expect(buildArenaSummaryPayload({ ...request, blind: true }, [])).toMatchObject({ blind: true, categoryId: "reasoning", categoryName: "Reasoning" });
+    expect(buildArenaSummaryPayload(request, [])).toHaveProperty("blind", false);
+
+    categorizedDocument.benchmarkVersion.tasks[0].categoryId = "unlisted";
+    expect(buildArenaSummaryPayload({ ...request, version: { ...categorizedVersion, documentJson: JSON.stringify(categorizedDocument) } }, []))
+      .not.toHaveProperty("categoryId");
+  });
+
   it("executes repetitions sequentially and isolates a failed competitor", async () => {
     const calls: string[] = [];
     const results = await executeArena({ arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 3 }, async (plan) => {
@@ -104,6 +129,30 @@ describe("arena runner", () => {
     expect(results[1].cancelled).toBe(true);
   });
 
+  it("records active-run cancellation and skips later work without changing completed evidence", async () => {
+    let keepRunning = true;
+    const progress: ArenaProgress[] = [];
+    const results = await executeArena(
+      { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two"), profile("three")], repetitions: 1 },
+      async (plan) => {
+        if (plan.profileRevision.profileId === "two") {
+          keepRunning = false;
+          return execution(plan.runId, plan.profileRevision.profileRevisionId, "cancelled");
+        }
+        return execution(plan.runId, plan.profileRevision.profileRevisionId, "completed");
+      },
+      (event) => progress.push(event),
+      () => keepRunning,
+    );
+
+    expect(results.map((item) => item.execution?.attempt.status ?? (item.cancelled ? "cancelled" : "failed")))
+      .toEqual(["completed", "cancelled", "cancelled"]);
+    expect(results[0].execution?.attempt.result?.score).toEqual({ passed: true });
+    expect(progress.find((event) => event.status === "generating")?.runId).toBe("arena-1-1");
+    expect(progress.map((event) => event.status)).toContain("cancelled");
+    expect(summarizeArenaExecutions(results)).toMatchObject({ total: 3, completed: 1, cancelled: 2, successRate: 1 / 3 });
+  });
+
   it("isolates a competitor whose plan cannot be built", async () => {
     const results = await executeArena({
       arenaId: "arena",
@@ -127,10 +176,12 @@ describe("arena runner", () => {
       { competitorId: "two@1", competitorLabel: "two", repetition: 1, runId: "arena-2-1", plan: {} as never, execution: execution("arena-2-1", "two@1", "completed"), error: null, cancelled: false },
     ];
     const responses = new Map([["arena-1-1:arena-1-1-attempt", "one response"], ["arena-2-1:arena-2-1-attempt", "two response"]]);
-    const cards = buildBlindArenaCards(results, responses);
+    const cards = buildBlindArenaCards(results, responses, "random-a");
     expect(cards.map((card) => card.label)).toEqual(["Response A", "Response B"]);
-    const reversed = buildBlindArenaCards([...results].reverse(), responses);
+    const reversed = buildBlindArenaCards([...results].reverse(), responses, "random-a");
     expect(reversed.map((card) => [card.token, card.executionKey])).toEqual(cards.map((card) => [card.token, card.executionKey]));
+    const nextPresentation = buildBlindArenaCards(results, responses, "random-b");
+    expect(nextPresentation.map((card) => card.token)).not.toEqual(cards.map((card) => card.token));
     expect(cards[0]).not.toHaveProperty("competitorLabel");
     expect(arenaExportJson(request, results)).not.toContain("runs/");
     expect(arenaExportJson(request, results)).not.toContain("must-not-export");
@@ -180,11 +231,11 @@ describe("arena runner", () => {
     const telemetry = createArenaTelemetry(request, 10);
     const firstBlindLabel = arenaTelemetryLabel(telemetry.samples[0], true);
     const secondBlindLabel = arenaTelemetryLabel(telemetry.samples[1], true);
-    expect(firstBlindLabel).toMatch(/^Competitor [A-Z]+$/);
-    expect(secondBlindLabel).toMatch(/^Competitor [A-Z]+$/);
+    expect(firstBlindLabel).toBe("Competitor");
+    expect(secondBlindLabel).toBe("Competitor");
     expect(arenaTelemetryLabel({ ...telemetry.samples[0], competitorOrdinal: 999 }, true)).toBe(firstBlindLabel);
     expect(arenaTelemetryLabel({ ...telemetry.samples[1], competitorOrdinal: 0 }, true)).toBe(secondBlindLabel);
-    expect(firstBlindLabel).not.toBe(secondBlindLabel);
+    expect(firstBlindLabel).toBe(secondBlindLabel);
     expect(visibleArenaTelemetryMetrics({ loadDurationMs: 1, ttftMs: 2, generationDurationMs: 3, promptTokens: 4, completionTokens: 5, totalTokens: 9, tokensPerSecond: 6, authoritative: true }, true)).toEqual({ loadDurationMs: null, ttftMs: null, generationDurationMs: null, promptTokens: null, completionTokens: null, totalTokens: null, tokensPerSecond: null, authoritative: false });
   });
 

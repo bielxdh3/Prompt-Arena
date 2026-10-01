@@ -153,6 +153,7 @@ export type StorageRetentionResult = {
 export type RunRecord = {
   runId: string;
   benchmarkVersionId: string;
+  taskId?: string;
   profileRevisionIds: string[];
   status: string;
   startedAt: string;
@@ -172,6 +173,7 @@ export type TimingMetrics = {
   loadDurationNs: number | null;
   promptEvalDurationNs: number | null;
   evalDurationNs: number | null;
+  ttftDurationNs?: number | null;
 };
 
 export type ResponseSummary = {
@@ -181,6 +183,36 @@ export type ResponseSummary = {
   toolCallCount: number;
   usage: UsageMetrics | null;
   timing: TimingMetrics | null;
+};
+
+export type HostTelemetryMetricEvidence = {
+  value: number | null;
+  status: "available" | "unavailable";
+  source: string;
+  samplingMethod: "os_counter" | "os_sample";
+  method: string;
+  samplingIntervalMs: number | null;
+  sampleCount: number;
+  intervalCount: number;
+};
+
+export type HostTelemetrySample = [
+  elapsedMs: number,
+  totalCpuCounter: string | null,
+  idleCpuCounter: string | null,
+  ramUsedBytes: number | null,
+];
+
+export type HostHardwareTelemetry = {
+  scope: "host";
+  platform: HardwarePlatform;
+  windowDurationMs: number;
+  targetSamplingIntervalMs: number;
+  rawSamples: HostTelemetrySample[];
+  samplesTruncated: boolean;
+  cpuUtilizationPercent: HostTelemetryMetricEvidence;
+  ramAverageBytes: HostTelemetryMetricEvidence;
+  ramPeakBytes: HostTelemetryMetricEvidence;
 };
 
 export type ArtifactRef = {
@@ -201,7 +233,7 @@ export type ImmutableResultReference = {
 
 export type ObjectiveVerificationEvidence = {
   passed: boolean;
-  verifierKind: "exact_text" | "numeric_tolerance" | "json_schema" | "required_fields" | "classification" | "safe_pattern";
+  verifierKind: "exact_text" | "numeric_tolerance" | "json_schema" | "required_fields" | "classification" | "safe_pattern" | "docker_contract";
   expectedNormalizedByteCount: number;
   actualNormalizedByteCount: number;
   expectedSha256: string;
@@ -274,7 +306,7 @@ export type OfficialPackExecution = {
   capability: "text_generation";
   status: "available" | "unavailable";
   requiresSandbox: boolean;
-  sandboxStatus: "not_required" | "unavailable";
+  sandboxStatus: "not_required" | "required" | "unavailable";
   executionBoundary: "text_generation" | "docker_required";
   evaluationMode: "objective" | "human_rubric" | "mixed";
   requirement: string;
@@ -331,11 +363,15 @@ export type ArenaExecutionEvidence = {
 
 export type ArenaSummaryPayload = {
   arenaId: string;
+  /** `undefined` is a legacy record whose pre-reveal identity visibility cannot be inferred safely. */
+  blind?: boolean;
   benchmarkVersionId: string;
   taskId: string;
   caseId: string;
   repetitions: number;
   packId: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
   materializationSeed: number | null;
   arenaWallTimeMs?: number | null;
   summary: Record<string, unknown>;
@@ -467,6 +503,7 @@ export type SavedTournamentResult = { record: TournamentResultRecord; saveOutcom
 
 export type RoadmapFeatureKind =
   | "single_model_benchmark"
+  | "single_model_suite"
   | "performance_lab"
   | "historical_regression"
   | "model_ratings"
@@ -527,14 +564,23 @@ export type ChatMessage = {
   toolCallId: string | null;
 };
 
+export type ReasoningEffort = "none";
+
+export type ProfileParameters = Record<string, unknown> & {
+  reasoningEffort?: ReasoningEffort | null;
+  contextWindowTokens?: number | null;
+};
+
 export type GenerationParameters = {
   temperature: number | null;
   topP: number | null;
   topK: number | null;
   maxTokens: number | null;
+  contextWindowTokens: number | null;
   repeatPenalty: number | null;
   presencePenalty: number | null;
   frequencyPenalty: number | null;
+  reasoningEffort: ReasoningEffort | null;
 };
 
 export type GenerationRequest = {
@@ -561,25 +607,44 @@ export type OllamaConfig = {
 export type RunPlan = {
   runId: string;
   benchmarkVersionId: string;
+  taskId: string;
   caseId: string;
   profileRevision: ProfileRevision;
   generation: GenerationRequest;
   runtimeConfig: OllamaConfig;
   objectiveExpectation: string | null;
   verifierPolicy: ObjectiveVerifierPolicy | null;
+  promptVariant?: PromptVariant;
   executionBoundary: ExecutionBoundary;
   metadata: Record<string, unknown>;
 };
 
+export type PromptTransformationType =
+  | "paraphrase"
+  | "instruction_reorder"
+  | "variable_rename"
+  | "formatting_variation"
+  | "concise_wording"
+  | "verbose_wording"
+  | "irrelevant_noise";
+
+export type PromptVariant = {
+  version: "2";
+  transformationType: PromptTransformationType;
+  seed: number;
+  sourceTaskVersion: string;
+};
+
 export type ExecutionBoundary = {
   kind: "text_generation" | "docker_required";
-  status: "available" | "unavailable";
+  status: "available" | "required" | "unavailable";
   reason: string | null;
 };
 
 export type AttemptRecord = {
   attemptId: string;
   runId: string;
+  taskId?: string;
   profileRevisionId: string;
   caseId: string;
   status: string;
@@ -587,6 +652,7 @@ export type AttemptRecord = {
   result: ImmutableResultReference | null;
   artifacts: ArtifactRef[];
   responseSummary?: ResponseSummary;
+  hostHardwareTelemetry?: HostHardwareTelemetry;
   [key: string]: unknown;
 };
 
@@ -619,7 +685,7 @@ export type ProfileRevision = {
   revision: number;
   model: string;
   runtime: string;
-  parameters: Record<string, unknown>;
+  parameters: ProfileParameters;
   systemPrompt: string | null;
   [key: string]: unknown;
 };
@@ -644,6 +710,7 @@ export type ModelInfo = {
 export type ModelBackend = "ollama" | "lm_studio" | "llama_cpp";
 export type ModelSourceStatus = "available" | "unavailable" | "error";
 export type ModelAvailability = "available" | "unavailable" | "removed";
+export type ModelContentHashStatus = "not_available" | "verified_at_import" | "import_identity_not_rechecked";
 
 export type ModelRecord = {
   modelId: string;
@@ -655,6 +722,7 @@ export type ModelRecord = {
   availability: ModelAvailability;
   digest: string | null;
   contentHash: string | null;
+  contentHashStatus: ModelContentHashStatus;
   sizeBytes: number | null;
   family: string | null;
   parameterSize: string | null;
@@ -664,6 +732,18 @@ export type ModelRecord = {
   managed: boolean;
   managedPath: string | null;
   metadata: Record<string, unknown>;
+};
+
+export type LiveProfileModelIdentity = {
+  modelId: string;
+  sourceId: string;
+  backend: ModelBackend;
+  model: string;
+  runtime: string;
+  digest: string | null;
+  contentHash: string | null;
+  quantizationLevel: string | null;
+  runtimeVersion: string | null;
 };
 
 export type ModelSourceConfig = {
@@ -1127,6 +1207,14 @@ export async function validateBenchmarkDocument(documentJson: string): Promise<B
   );
 }
 
+export async function saveBenchmarkVersion(documentJson: string): Promise<SavedBenchmarkVersion> {
+  return invokeDesktop<SavedBenchmarkVersion>(
+    "save_benchmark_version",
+    "The imported benchmark snapshot could not be saved locally.",
+    { document: documentJson },
+  );
+}
+
 export async function publishBenchmarkDraft(draftId: string): Promise<SavedBenchmarkVersion> {
   return invokeDesktop<SavedBenchmarkVersion>(
     "publish_benchmark_draft",
@@ -1157,6 +1245,17 @@ export async function readModelCatalog(request: ModelDiscoveryRequest): Promise<
     "discover_local_models",
     "The local model catalog could not be reached.",
     { request },
+  );
+}
+
+export async function readLiveProfileModelIdentity(
+  profileRevisionId: string,
+  requireLoadedModelDigest = false,
+): Promise<LiveProfileModelIdentity> {
+  return invokeDesktop<LiveProfileModelIdentity>(
+    "read_live_profile_model_identity",
+    "The current model identity could not be verified from its local runtime.",
+    { profileRevisionId, requireLoadedModelDigest },
   );
 }
 
@@ -1232,5 +1331,13 @@ export async function executeRunOnce(plan: RunPlan): Promise<PersistedExecution>
     "execute_run_once",
     "The one-shot run could not be executed.",
     { plan },
+  );
+}
+
+export async function cancelRunOnce(runId: string): Promise<boolean> {
+  return invokeDesktop<boolean>(
+    "cancel_run_once",
+    "The active one-shot run could not be cancelled.",
+    { runId },
   );
 }

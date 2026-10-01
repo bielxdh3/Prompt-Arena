@@ -11,7 +11,7 @@ use serde_json::{json, Map, Value};
 
 use crate::runtime::{
     CancellationToken, Capability, ChatMessage, GenerationChunk, GenerationParameter,
-    GenerationRequest, GenerationResponse, MessageRole, ModelInfo, ResponseFormat,
+    GenerationRequest, GenerationResponse, MessageRole, ModelInfo, ReasoningEffort, ResponseFormat,
     RuntimeCapabilities, RuntimeError, RuntimeHealth, RuntimeProvider, TimingMetrics, ToolCall,
     ToolPolicy, UsageMetrics,
 };
@@ -295,6 +295,32 @@ impl OllamaProvider {
         Ok(())
     }
 
+    pub(crate) fn list_running_models(&self) -> Result<Vec<ModelInfo>, RuntimeError> {
+        let cancellation = CancellationToken::new();
+        let value = self.json_request("GET", "/api/ps", None, &cancellation)?;
+        let models = value
+            .get("models")
+            .and_then(Value::as_array)
+            .ok_or_else(|| RuntimeError::Protocol {
+                message: "runtime running-model list did not contain a models array".to_owned(),
+            })?;
+        if models.len() > MAX_LOCAL_MODEL_COUNT {
+            return Err(RuntimeError::Protocol {
+                message: "runtime running-model list exceeded the local item limit".to_owned(),
+            });
+        }
+        let mut models = models
+            .iter()
+            .map(parse_model_info)
+            .collect::<Result<Vec<_>, _>>()?;
+        models.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then(left.digest.cmp(&right.digest))
+        });
+        Ok(models)
+    }
+
     fn generation_payload(
         &self,
         request: &GenerationRequest,
@@ -310,6 +336,9 @@ impl OllamaProvider {
         let mut payload = Map::new();
         payload.insert("model".to_owned(), Value::String(request.model.clone()));
         payload.insert("stream".to_owned(), Value::Bool(stream));
+        if request.parameters.reasoning_effort == Some(ReasoningEffort::None) {
+            payload.insert("think".to_owned(), Value::Bool(false));
+        }
         if let Some(format) = response_format_value(&request.response_format) {
             payload.insert("format".to_owned(), format);
         }
@@ -376,12 +405,14 @@ impl RuntimeProvider for OllamaProvider {
                 GenerationParameter::TopP,
                 GenerationParameter::TopK,
                 GenerationParameter::MaxTokens,
+                GenerationParameter::ContextWindowTokens,
                 GenerationParameter::RepeatPenalty,
                 GenerationParameter::StopSequences,
                 GenerationParameter::Seed,
                 GenerationParameter::Tools,
                 GenerationParameter::ToolPolicy,
                 GenerationParameter::ResponseFormat,
+                GenerationParameter::ReasoningEffort,
             ]),
         }
     }
@@ -494,6 +525,7 @@ impl RuntimeProvider for OllamaProvider {
             });
         }
         let (path, payload) = self.generation_payload(request, true)?;
+        let request_started_at = Instant::now();
         let response = self.request("POST", path, Some(&payload), cancellation)?;
         let status = response.status;
         if !(200..300).contains(&status) {
@@ -508,6 +540,7 @@ impl RuntimeProvider for OllamaProvider {
         let mut accumulated_text = String::new();
         let mut accumulated_tools = Vec::new();
         let mut final_response = None;
+        let mut ttft_duration_ns = None;
         loop {
             if cancellation.is_cancelled() {
                 return Err(RuntimeError::Cancelled);
@@ -530,6 +563,14 @@ impl RuntimeProvider for OllamaProvider {
                     message: format!("runtime returned malformed NDJSON: {error}"),
                 })?;
             let parsed = parse_generation(&value, &request.model)?;
+            if ttft_duration_ns.is_none() && !parsed.text.is_empty() {
+                ttft_duration_ns = Some(
+                    request_started_at
+                        .elapsed()
+                        .as_nanos()
+                        .min(u64::MAX as u128) as u64,
+                );
+            }
             accumulated_text.push_str(&parsed.text);
             accumulated_tools.extend(parsed.tool_calls.clone());
             on_chunk(GenerationChunk {
@@ -554,6 +595,16 @@ impl RuntimeProvider for OllamaProvider {
             .into_response();
         response.text = accumulated_text;
         response.tool_calls = accumulated_tools;
+        if let Some(ttft_duration_ns) = ttft_duration_ns {
+            let timing = response.timing.get_or_insert(TimingMetrics {
+                total_duration_ns: None,
+                load_duration_ns: None,
+                prompt_eval_duration_ns: None,
+                eval_duration_ns: None,
+                ttft_duration_ns: None,
+            });
+            timing.ttft_duration_ns = Some(ttft_duration_ns);
+        }
         Ok(response)
     }
 }
@@ -680,6 +731,9 @@ fn ollama_options(request: &GenerationRequest) -> Result<Map<String, Value>, Run
     }
     if let Some(value) = parameters.max_tokens {
         options.insert("num_predict".to_owned(), json!(value));
+    }
+    if let Some(value) = parameters.context_window_tokens {
+        options.insert("num_ctx".to_owned(), json!(value));
     }
     if let Some(value) = parameters.repeat_penalty {
         options.insert("repeat_penalty".to_owned(), json!(value));
@@ -821,6 +875,7 @@ fn parse_timing(object: &Map<String, Value>) -> Option<TimingMetrics> {
         load_duration_ns: object.get("load_duration").and_then(Value::as_u64),
         prompt_eval_duration_ns: object.get("prompt_eval_duration").and_then(Value::as_u64),
         eval_duration_ns: object.get("eval_duration").and_then(Value::as_u64),
+        ttft_duration_ns: None,
     };
     if timing.total_duration_ns.is_none()
         && timing.load_duration_ns.is_none()
@@ -1362,7 +1417,7 @@ mod tests {
 
     use crate::runtime::{
         CancellationToken, ChatMessage, GenerationParameters, GenerationRequest, MessageRole,
-        ResponseFormat, RuntimeError, RuntimeProvider, ToolDefinition, ToolPolicy,
+        ReasoningEffort, ResponseFormat, RuntimeError, RuntimeProvider, ToolDefinition, ToolPolicy,
     };
 
     use super::{
@@ -1617,6 +1672,22 @@ mod tests {
     }
 
     #[test]
+    fn running_model_listing_returns_loaded_model_digest() {
+        let server = MockServer::start(vec![MockReply::Json(
+            200,
+            json!({"models": [{"name": "llama3.2:latest", "digest": "sha256:loaded", "size": 42, "details": {"quantization_level": "Q4_K_M"}}]}),
+        )]);
+        let models = server
+            .provider()
+            .list_running_models()
+            .expect("running model list");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "llama3.2:latest");
+        assert_eq!(models[0].digest.as_deref(), Some("sha256:loaded"));
+        assert!(server.requests()[0].starts_with("GET /api/ps HTTP/1.1"));
+    }
+
+    #[test]
     fn model_metadata_optional_fields_and_future_fields_remain_compatible() {
         let model = super::parse_model_info(&json!({
             "model": "compat:latest",
@@ -1705,6 +1776,7 @@ mod tests {
                 top_p: Some(0.9),
                 top_k: Some(20),
                 max_tokens: Some(32),
+                context_window_tokens: Some(8192),
                 repeat_penalty: Some(1.1),
                 ..GenerationParameters::default()
             },
@@ -1724,7 +1796,9 @@ mod tests {
             .unwrap();
         assert_eq!(response.text, "hello");
         assert_eq!(response.usage.unwrap().total_tokens, Some(6));
-        assert_eq!(response.timing.unwrap().total_duration_ns, Some(10));
+        let timing = response.timing.unwrap();
+        assert_eq!(timing.total_duration_ns, Some(10));
+        assert_eq!(timing.ttft_duration_ns, None);
         assert_eq!(response.finish_reason.as_deref(), Some("stop"));
         let request_text = &server.requests()[0];
         let body = request_text.split("\r\n\r\n").nth(1).unwrap();
@@ -1733,8 +1807,45 @@ mod tests {
         assert_eq!(body["format"], "json");
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["options"]["num_predict"], 32);
+        assert_eq!(body["options"]["num_ctx"], 8192);
         assert_eq!(body["options"]["seed"], 7);
         assert_eq!(body["tools"][0]["function"]["name"], "lookup");
+    }
+
+    #[test]
+    fn reasoning_none_maps_to_think_false_and_default_omits_think() {
+        let server = MockServer::start(vec![
+            MockReply::Json(
+                200,
+                json!({"model": "llama3.2:latest", "message": {"role": "assistant", "content": "OK"}, "done": true}),
+            ),
+            MockReply::Json(
+                200,
+                json!({"model": "llama3.2:latest", "message": {"role": "assistant", "content": "default"}, "done": true}),
+            ),
+        ]);
+        let provider = server.provider();
+        let request = GenerationRequest {
+            parameters: GenerationParameters {
+                reasoning_effort: Some(ReasoningEffort::None),
+                ..GenerationParameters::default()
+            },
+            ..chat_request()
+        };
+        provider
+            .generate(&request, &CancellationToken::new())
+            .unwrap();
+        provider
+            .generate(&chat_request(), &CancellationToken::new())
+            .unwrap();
+
+        let requests = server.requests();
+        let explicit_body: Value =
+            serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let default_body: Value =
+            serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(explicit_body["think"], false);
+        assert!(default_body.get("think").is_none());
     }
 
     #[test]
@@ -1760,14 +1871,14 @@ mod tests {
     }
 
     #[test]
-    fn streaming_emits_ndjson_and_final_metrics() {
+    fn streaming_ttft_waits_for_first_nonempty_text() {
         let server = MockServer::start(vec![MockReply::Chunked(
             200,
             vec![
-                json!({"model": "model", "message": {"role": "assistant", "content": "hel"}, "done": false}).to_string(),
-                json!({"model": "model", "message": {"role": "assistant", "content": "lo"}, "done": true, "done_reason": "stop", "eval_count": 2, "total_duration": 9}).to_string(),
+                json!({"model": "model", "message": {"role": "assistant", "content": ""}, "done": false}).to_string(),
+                json!({"model": "model", "message": {"role": "assistant", "content": "hello"}, "done": true, "done_reason": "stop", "eval_count": 2, "total_duration": 9}).to_string(),
             ],
-            None,
+            Some(Duration::from_millis(80)),
         )]);
         let provider = server.provider();
         let mut chunks = Vec::new();
@@ -1780,7 +1891,30 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(response.text, "hello");
         assert_eq!(response.usage.unwrap().completion_tokens, Some(2));
+        let ttft_duration_ns = response
+            .timing
+            .as_ref()
+            .and_then(|timing| timing.ttft_duration_ns)
+            .expect("first non-empty content has TTFT");
+        assert!(ttft_duration_ns >= 40_000_000);
         assert!(chunks[1].done);
+    }
+
+    #[test]
+    fn streaming_without_text_keeps_ttft_unavailable() {
+        let server = MockServer::start(vec![MockReply::Chunked(
+            200,
+            vec![json!({"model": "model", "message": {"role": "assistant", "content": ""}, "done": true}).to_string()],
+            None,
+        )]);
+        let response = server
+            .provider()
+            .stream(&chat_request(), &CancellationToken::new(), &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(
+            response.timing.and_then(|timing| timing.ttft_duration_ns),
+            None
+        );
     }
 
     #[test]

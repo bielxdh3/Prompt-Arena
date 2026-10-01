@@ -3,18 +3,23 @@ import { sanitizeRecord, type RoadmapRecordRequest } from "./roadmap-records";
 import type { PerformanceEvidence } from "./performance-lab";
 
 export type SingleModelBenchmarkPayload = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   kind: "single_model_benchmark";
   runId: string;
   benchmarkVersionId: string;
+  benchmarkContentHash: string;
   taskId: string;
   caseId: string;
   profileRevision: Record<string, unknown>;
   sourceRun: Record<string, unknown>;
   attempt: Record<string, unknown>;
+  status?: string;
   objective: Record<string, unknown> | null;
   performance: PerformanceEvidence;
   hardware: HardwareSnapshot | null;
+  reproducedFromRunId?: string;
+  reproSourceRunReference?: string;
+  reproSourceRunVerified?: boolean;
   createdAt: string;
 };
 
@@ -24,26 +29,38 @@ export function buildSingleModelBenchmarkPayload(input: {
   profile: ProfileRevision;
   execution: PersistedExecution | null;
   performance: PerformanceEvidence;
+  benchmarkContentHash: string;
   benchmarkVersionId: string;
   taskId: string;
   caseId: string;
   hardware?: HardwareSnapshot | null;
+  reproducedFromRunId?: string;
+  reproSourceRunReference?: string;
+  reproSourceRunVerified?: boolean;
   createdAt?: string;
 }): SingleModelBenchmarkPayload {
+  if (!/^[a-f0-9]{64}$/iu.test(input.benchmarkContentHash)) {
+    throw new Error("Benchmark content hash must be a SHA-256 digest.");
+  }
   const objective = input.attempt.result?.score;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "single_model_benchmark",
     runId: input.run.runId,
     benchmarkVersionId: input.benchmarkVersionId,
+    benchmarkContentHash: input.benchmarkContentHash.toLowerCase(),
     taskId: input.taskId,
     caseId: input.caseId,
     profileRevision: sanitizeRecord(input.profile as unknown as Record<string, unknown>),
     sourceRun: sanitizeRecord(input.run as unknown as Record<string, unknown>),
     attempt: sanitizeRecord(input.attempt as unknown as Record<string, unknown>),
+    status: input.attempt.status,
     objective: objective && typeof objective === "object" && !Array.isArray(objective) ? sanitizeRecord(objective as Record<string, unknown>) : null,
     performance: input.performance,
     hardware: input.hardware ?? null,
+    ...(input.reproducedFromRunId ? { reproducedFromRunId: input.reproducedFromRunId } : {}),
+    ...(input.reproSourceRunReference ? { reproSourceRunReference: input.reproSourceRunReference } : {}),
+    ...(typeof input.reproSourceRunVerified === "boolean" ? { reproSourceRunVerified: input.reproSourceRunVerified } : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
   };
 }

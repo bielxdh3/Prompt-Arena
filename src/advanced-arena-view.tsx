@@ -7,6 +7,7 @@ import {
   readBenchmarkVersion,
   readCalibrationResults,
   readArenaSummaries,
+  readBlindEvaluation,
   saveCalibrationBenchmark,
   saveCalibrationResult,
   saveTournamentResult,
@@ -51,6 +52,7 @@ import {
   translate,
 } from "./i18n";
 import { AccessibleListbox, type AccessibleListboxOption } from "./accessible-listbox";
+import { arenaSummaryIdentityRevealed } from "./arena-summary-visibility";
 
 type SummaryState =
   | { status: "loading" }
@@ -146,8 +148,22 @@ export function AdvancedArenaView() {
         readCalibrationResults(),
         readTournamentResults(),
       ]);
-      setSummaryState({ status: "ready", summaries });
-      setArtifactHistory({ status: "ready", calibrationResults, tournamentResults });
+      const visibility = await Promise.all(summaries.map(async (summary) => {
+        try {
+          return await arenaSummaryIdentityRevealed(summary, readBlindEvaluation);
+        } catch {
+          return false;
+        }
+      }));
+      const visibleSummaries = summaries.filter((_, index) => visibility[index]);
+      const hasVisibleSource = (sourceArenaId: string, sourceContentHash: string) => visibleSummaries.some((summary) =>
+        summary.arenaId === sourceArenaId && summary.contentHash === sourceContentHash);
+      setSummaryState({ status: "ready", summaries: visibleSummaries });
+      setArtifactHistory({
+        status: "ready",
+        calibrationResults: calibrationResults.filter((record) => hasVisibleSource(record.sourceArenaId, record.sourceContentHash)),
+        tournamentResults: tournamentResults.filter((record) => hasVisibleSource(record.sourceArenaId, record.sourceContentHash)),
+      });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The saved Advanced Arena artifacts are unavailable.";
       setSummaryState({

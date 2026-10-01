@@ -2,11 +2,13 @@ import { formatMessage } from "./i18n";
 import { TechnicalDetails } from "./technical-details";
 import { HumanError, FormFeedback } from "./human-error";
 import { containsMachineIdentity, displayName, isMachineIdentity, numberedName, profileDisplayName, runtimeDisplayName } from "./display-names";
+import { arenaSummaryIdentityRevealed } from "./arena-summary-visibility";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
   executeRunOnce,
+  cancelRunOnce,
   isDesktopEnvironment,
   lockBlindEvaluation,
   materializeOfficialPack,
@@ -89,6 +91,7 @@ import {
   formatCredentialSource,
   formatIdentityConfidence,
   formatStorageStatus,
+  providerActionsAvailable,
   providerLabel,
   validateByokBudget,
   validateByokConfiguration,
@@ -103,6 +106,7 @@ import {
   blindReviewHidesAttemptEvidence,
   blindEvaluationScoreLabel,
   blindEvaluationStatusLabel,
+  dockerEvaluationStatusLabel,
   formatByteCount,
   formatCount,
   formatDurationNs,
@@ -139,6 +143,7 @@ import {
   applyArenaProgress,
   createArenaTelemetry,
   executeArena,
+  hasCancelledDockerVerification,
   groupArenaExecutions,
   rankArenaCompetitors,
   refreshArenaTelemetry,
@@ -207,6 +212,8 @@ import {
   EMPTY_PROFILE_FORM,
   hardwarePreviewCopy,
   isActiveModelOperation,
+  MAX_PROFILE_OUTPUT_TOKENS,
+  MAX_PROFILE_CONTEXT_WINDOW_TOKENS,
   modelBackendLabel,
   modelDuplicateEvidenceLabel,
   modelDuplicateGroupLabel,
@@ -283,6 +290,13 @@ function AppShell() {
   const [appearance, setAppearance] = useState<AppearancePreferences>(() => loadAppearancePreferences());
   const [connection, setConnection] = useState<ConnectionState>({ status: "loading" });
   const mainRef = useRef<HTMLElement>(null);
+  const previousActiveView = useRef(activeView);
+
+  useEffect(() => {
+    if (previousActiveView.current === activeView) return;
+    previousActiveView.current = activeView;
+    mainRef.current?.focus();
+  }, [activeView]);
 
   useEffect(() => {
     const root = mainRef.current;
@@ -419,7 +433,7 @@ function AppShell() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{translate("Prompt Arena")} / {translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</p>
-            <h1>{translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</h1>
+            <h1 id="page-title">{translate(NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview")}</h1>
           </div>
           <div className="topbar-meta" aria-live="polite">
             <ConnectionBadge connection={connection} />
@@ -439,7 +453,7 @@ function AppShell() {
           </div>
         )}
 
-        <main className="main-content" id="main-content" ref={mainRef}>
+        <main className="main-content" id="main-content" aria-labelledby="page-title" tabIndex={-1} ref={mainRef}>
           <div key={activeView} className="page-transition">
             {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
             {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
@@ -1156,7 +1170,7 @@ function BenchmarksView() {
                   <span>
                     <strong>{pack.packName}</strong>
                     <small><TechnicalDetails label={translate("Benchmark version")} value={`${pack.versionId} · ${pack.contentHash}`} /></small>
-                    <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? translate("Docker required · blocked") : translate("text generation")}</small>
+                    <small>{pack.execution.evaluationMode} · {pack.execution.executionBoundary === "docker_required" ? translate("Docker required · local engine and pinned image checked at run") : translate("text generation")}</small>
                   </span>
                   <span aria-hidden="true">→</span>
                 </button>
@@ -1188,11 +1202,18 @@ function BenchmarksView() {
                   {officialPackDetail.document.summary.description && <p className="field-help">{officialPackDetail.document.summary.description}</p>}
                   <p className="field-help">{officialPackDetail.document.summary.execution.requirement}</p>
                   {officialPackDetail.document.summary.execution.notes && <p className="field-help">{officialPackDetail.document.summary.execution.notes}</p>}
+                  {officialPackExecutionState(officialPackDetail.document.summary.execution) === "docker_required" && (
+                    <StateMessage
+                      icon="◇"
+                      title={translate("Docker-backed text verification required")}
+                      description={translate("A fixed verifier checks this response inside the pinned local Docker image. The Docker daemon and image are checked when the run starts; host execution is never used.")}
+                    />
+                  )}
                   {officialPackExecutionState(officialPackDetail.document.summary.execution) === "docker_blocked" && (
                     <StateMessage
                       icon="!"
-                      title={translate("Docker execution blocked")}
-                      description="This pack requires Docker, which is unavailable in this build. Host execution is never used."
+                      title={translate("Docker evaluator unavailable")}
+                      description={translate("This build cannot run the required Docker text verifier. Host execution is never used.")}
                       error
                     />
                   )}
@@ -1285,7 +1306,7 @@ function isStructuredBenchmarkDocument(value: unknown): value is Parameters<type
     && document.benchmarkVersion !== null;
 }
 
-function FormInput({
+export function FormInput({
   id,
   label,
   value,
@@ -1294,6 +1315,7 @@ function FormInput({
   min,
   max,
   step,
+  descriptionId,
   required = false,
   error,
 }: {
@@ -1305,9 +1327,13 @@ function FormInput({
   min?: string;
   max?: string;
   step?: string;
+  descriptionId?: string;
   required?: boolean;
   error?: string;
 }) {
+  const describedBy = [error ? `${id}-error` : null, descriptionId]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
   return (
     <label className={`form-control ${error ? "has-error" : ""}`} htmlFor={id}>
       <span className="field-label">
@@ -1323,7 +1349,7 @@ function FormInput({
         value={value}
         required={required}
         aria-invalid={error ? true : undefined}
-        aria-describedby={error ? `${id}-error` : undefined}
+        aria-describedby={describedBy || undefined}
         onChange={(event) => onChange(event.currentTarget.value)}
       />
     </label>
@@ -1390,7 +1416,7 @@ type HardwareState =
   | { status: "error"; message: string }
   | { status: "preview" };
 
-function ModelsView() {
+export function ModelsView() {
   const desktop = isDesktopEnvironment();
   const [profileState, setProfileState] = useState<ProfileState>({ status: "loading" });
   const [modelState, setModelState] = useState<ModelsState>(() => (
@@ -1670,7 +1696,7 @@ function ModelsView() {
 
   async function handleRegister() {
     if (!desktop) {
-      setFeedback({ kind: "info", message: profilePreviewCopy() });
+      setFeedback({ kind: "info", message: translate(profilePreviewCopy()) });
       return;
     }
     setBusy(true);
@@ -1700,7 +1726,7 @@ function ModelsView() {
       <section className="panel page-intro">
         <p className="eyebrow">{translate("Model library")}</p>
         <h2>{translate("Profiles and local models")}</h2>
-        <p>{translate("Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp models through explicit loopback endpoints. Import only app-managed relative GGUF paths, track persisted local operations, and keep removal evidence alongside a read-only hardware baseline. No credentials, telemetry, or cloud provider.")}</p>
+        <p>{translate("Register immutable local profile revisions and discover Ollama, LM Studio, and llama.cpp through explicit loopback endpoints. Import only app-managed relative GGUF paths and keep operation and removal evidence locally. Model inventory is not sent to a cloud provider. The hardware baseline is read-only; local generation can record host CPU/RAM with attempt evidence.")}</p>
       </section>
 
       <div className="models-layout">
@@ -1970,7 +1996,7 @@ function ModelsView() {
             <FormInput id="profile-revision" label="Revision" type="number" min="1" value={form.revision} onChange={(value) => updateField("revision", value)} />
             <AccessibleListbox
               id="profile-discovered-model"
-              label="Discovered local model (optional)"
+              label={translate("Discovered local model (optional)")}
               value={selectedProfileModelId}
               placeholder={translate("Manual Ollama model")}
               options={modelState.status === "ready" ? modelState.catalog.models.map((model) => ({ value: model.modelId, label: model.name, detail: `${modelBackendLabel(model.backend)} · ${modelRecordQuantizationLabel(model)}` })) : []}
@@ -1981,16 +2007,53 @@ function ModelsView() {
               }}
             />
             <FormInput id="profile-model" label={selectedProfileModel ? "Selected model name" : "Manual Ollama model name"} value={form.model} onChange={(value) => { setSelectedProfileModelId(""); updateField("model", value); }} />
-            <p className="field-help">
+            <label className="form-control" htmlFor="profile-reasoning-effort">
+              <span className="field-label">{translate("Reasoning effort")}</span>
+              <select
+                id="profile-reasoning-effort"
+                className="font-select"
+                value={form.reasoningEffort}
+                onChange={(event) => updateField("reasoningEffort", event.currentTarget.value as ProfileFormState["reasoningEffort"])}
+              >
+                <option value="default">{translate("Runtime default")}</option>
+                <option value="none">{translate("Off / none")}</option>
+              </select>
+            </label>
+            <p className="field-help">{translate("Runtime default preserves current behavior. Off / none is sent only to runtimes that advertise support; unsupported choices are rejected before generation.")}</p>
+            <FormInput
+              id="profile-max-tokens"
+              label={translate("Maximum output tokens")}
+              type="number"
+              min="1"
+              max={String(MAX_PROFILE_OUTPUT_TOKENS)}
+              step="1"
+              descriptionId="profile-max-tokens-help"
+              value={form.maxTokens}
+              onChange={(value) => updateField("maxTokens", value)}
+            />
+            <p id="profile-max-tokens-help" className="field-help">{translate("Optional. Leave blank to preserve the runtime default. A set value caps generated output; change the revision to save a different budget. The local maximum is 32,768 tokens and does not guarantee model or hardware capacity.")}</p>
+            <FormInput
+              id="profile-context-window-tokens"
+              label={translate("Context window size (tokens)")}
+              type="number"
+              min="1"
+              max={String(MAX_PROFILE_CONTEXT_WINDOW_TOKENS)}
+              step="1"
+              descriptionId="profile-context-window-tokens-help"
+              value={form.contextWindowTokens}
+              onChange={(value) => updateField("contextWindowTokens", value)}
+            />
+            <p id="profile-context-window-tokens-help" className="field-help">{translate("Optional. Leave blank to preserve the runtime default. Ollama supports this override; other runtimes reject it. The local maximum is 32,768 tokens; the model or hardware may support less.")}</p>
+            <div className="field-help">
               {selectedProfileModel ? (
                 <>
                   {translate("Runtime")}: {modelBackendLabel(selectedProfileModel.backend)} · {translate("source")} <TechnicalDetails label={translate("Source")} value={selectedProfileModel.sourceId} /> · {translate("immutable model identity is preserved.")}
                 </>
               ) : translate("Manual profiles use the local Ollama runtime. Select a discovered model to preserve its runtime, source, endpoint/path, and quantization identity.")}
               {" "} {translate("Derived immutable ID:")} <TechnicalDetails label={translate("Profile revision")} value={profileRevisionIdPreview(form)} />
-            </p>
+            </div>
             <button className="primary-button" type="button" onClick={() => void handleRegister()} disabled={busy || !isDesktopEnvironment()}>{translate("Register immutable revision")}</button>
-            {!isDesktopEnvironment() && <p className="field-help">{profilePreviewCopy()}</p>}
+            {!isDesktopEnvironment() && <p className="field-help">{translate(profilePreviewCopy())}</p>}
           </div>
 
           <div className="profile-records">
@@ -2001,7 +2064,7 @@ function ModelsView() {
               </div>
               <button className="text-button" type="button" onClick={() => void refreshProfiles()} disabled={!isDesktopEnvironment() || busy}>{translate("Refresh")}</button>
             </div>
-            {profileState.status === "preview" && <StateMessage icon="◇" title={translate("Browser preview")} description={profilePreviewCopy()} />}
+            {profileState.status === "preview" && <StateMessage icon="◇" title={translate("Browser preview")} description={translate(profilePreviewCopy())} />}
             {profileState.status === "loading" && <StateMessage icon="…" title={translate("Loading profiles")} description="Reading immutable profile revisions from SQLite." />}
             {profileState.status === "error" && <StateMessage icon="!" title={translate("Profiles unavailable")} description={profileState.message} error />}
             {profileState.status === "ready" && profileState.profiles.length === 0 && <EmptyState title={translate("No registered profiles")} description={profileEmptyCopy()} />}
@@ -2581,6 +2644,8 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   const [summaryPersistence, setSummaryPersistence] = useState<ArenaSummaryPersistenceState>({ status: "idle" });
   const [responseState, setResponseState] = useState<ArenaResponseState>({ status: "idle" });
   const cancelRequestedRef = useRef(false);
+  const activeRunIdRef = useRef<string | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
   const recordsRequestRef = useRef(0);
 
   async function refreshRecords() {
@@ -2740,6 +2805,25 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     }
   }
 
+  async function requestCancel() {
+    if (cancelRequestedRef.current) return;
+    cancelRequestedRef.current = true;
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      setCancelNotice(translate("Queued samples will be skipped; no run is active yet."));
+      return;
+    }
+    setCancelNotice(translate("Cancellation requested. The model service may continue inference."));
+    try {
+      const accepted = await cancelRunOnce(runId);
+      if (!accepted) {
+        setCancelNotice(translate("The active request had already finished; queued samples will be skipped."));
+      }
+    } catch {
+      setCancelNotice(translate("The active request could not be stopped; queued samples will be skipped."));
+    }
+  }
+
   async function handleExecute() {
     if (!isDesktopEnvironment()) {
       setSession({ status: "error", message: arenaPreviewCopy() });
@@ -2760,6 +2844,8 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
       blind: blindExecution,
     };
     cancelRequestedRef.current = false;
+    activeRunIdRef.current = null;
+    setCancelNotice(null);
     setResponseState({ status: "idle" });
     const initialTelemetry = createArenaTelemetry(request, request.startedAtMs);
     setSession({
@@ -2793,6 +2879,11 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
     });
     try {
       const results = await executeArena(request, executeRunOnce, (progress) => {
+        if (progress.status === "generating" || progress.status === "verifying") {
+          activeRunIdRef.current = progress.runId ?? null;
+        } else if (progress.status === "completed" || progress.status === "failed" || progress.status === "cancelled") {
+          if (activeRunIdRef.current === progress.runId) activeRunIdRef.current = null;
+        }
         setSession((current) => current.status === "busy"
           ? { ...current, progress, telemetry: applyArenaProgress(current.telemetry, progress) }
           : current);
@@ -2890,15 +2981,15 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
                 <div className="arena-preview-facts"><BoundaryRow label="Benchmark" value={preview.benchmarkVersionId} /><BoundaryRow label="Task / case" value={`${preview.taskId} / ${preview.caseId}`} /><BoundaryRow label="Competitors" value={String(selectedProfiles.length)} /><BoundaryRow label="Samples" value={String(selectedProfiles.length * repetitions)} /></div>
                 <div className="arena-prompt-block"><p className="eyebrow">{translate("Prompt sent to every competitor")}</p><pre className="arena-prompt">{preview.prompt}</pre></div>
                 <div className="arena-boundary"><BoundaryRow label="Runtime" value="Ollama · sequential fair mode" /><BoundaryRow label="Endpoint" value={preview.endpoint} /><BoundaryRow label="Failure policy" value="Isolate competitor" /><BoundaryRow label="Worker" value="App-owned one-shot" />{preview.executionBoundary && <BoundaryRow label="Execution boundary" value={`${preview.executionBoundary.kind} · ${preview.executionBoundary.status}`} />}</div>
-                {dockerExecutionBlocked && <StateMessage icon="!" title={translate("Docker execution blocked")} description="This case requires Docker, which is unavailable in this build. Host execution is never used." error />}
+                {preview?.executionBoundary?.kind === "docker_required" && !dockerExecutionBlocked && <StateMessage icon="◇" title={translate("Docker-backed text verification required")} description={translate("The local Docker daemon and pinned image are checked for each run. The fixed verifier receives bounded response text only; host execution is never used.")} />}
+                {dockerExecutionBlocked && <StateMessage icon="!" title={translate("Docker evaluator unavailable")} description={translate("This case requires a Docker verifier that is unavailable for this execution policy. Host execution is never used.")} error />}
                 <div className="arena-actions">
                   <button className="primary-button" type="button" onClick={() => void handleExecute()} disabled={busy || selectedProfiles.length < 2 || dockerExecutionBlocked}> {translate("Run Arena")} <span aria-hidden="true">→</span></button>
-                  {busy && <button className="secondary-button" type="button" onClick={() => { cancelRequestedRef.current = true; }}>{translate("Cancel queued work")}</button>}
                   <button className="text-button" type="button" onClick={onOpenRuns}> {translate("View history")} <span aria-hidden="true">→</span></button>
                 </div>
               </>
             )}
-            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} onCancel={() => { cancelRequestedRef.current = true; }} />}
+            {busy && <ArenaExecutionMonitor telemetry={session.telemetry} blind={session.request.blind === true} saving={summaryPersistence.status === "saving"} cancelNotice={cancelNotice} onCancel={() => void requestCancel()} />}
             {session.status === "error" && <div className="arena-execution-status"><StateMessage icon="!" title={translate("Arena could not start")} description={session.message} error /></div>}
           </section>
         </div>
@@ -2913,11 +3004,13 @@ function ArenaExecutionMonitor({
   telemetry,
   blind,
   saving,
+  cancelNotice,
   onCancel,
 }: {
   telemetry: ArenaTelemetry;
   blind: boolean;
   saving: boolean;
+  cancelNotice: string | null;
   onCancel: () => void;
 }) {
   const active = telemetry.samples.find((sample) => sample.sampleIndex === telemetry.activeSampleIndex)
@@ -2926,7 +3019,8 @@ function ArenaExecutionMonitor({
   const activeDisplay = arenaMonitorDisplay(telemetry, active?.sampleIndex ?? null, blind);
   const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
   return (
-    <div className="arena-execution-monitor" role="status" aria-live="polite">
+    <div className="arena-execution-monitor">
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatMessage("{completed} / {total} samples", { completed: telemetry.completed, total: telemetry.total })}</p>
       <div className="section-heading compact-heading">
         <div><p className="eyebrow">{translate("Live execution monitor")}</p><h4>{translate(saving ? "Saving measured evidence" : "Arena is running")}</h4></div>
         <span className="run-status run-status-neutral">{telemetry.completed}/{telemetry.total}</span>
@@ -2937,7 +3031,7 @@ function ArenaExecutionMonitor({
         <BoundaryRow label="Arena wall time" value={blind ? "Hidden during blind execution" : formatArenaMs(telemetry.wallElapsedMs)} />
         <BoundaryRow label="ETA" value={blind ? "Hidden during blind execution" : telemetry.etaMs === null ? "Unavailable · needs 2 measured samples" : `~${formatArenaMs(telemetry.etaMs)}`} />
       </div>
-      {active && (
+      {!blind && active && (
         <div className="arena-live-current">
           <p className="eyebrow">{translate("Current sample")}</p>
           <strong>{blind ? "" : `${arenaTelemetryLabel(active, false)} · `} {translate("Sample")} {activeDisplay.currentSampleNumber ?? active.sampleIndex + 1}/{activeDisplay.totalSamples}{activeDisplay.repetitionNumber !== null && activeDisplay.repetitionsPerCompetitor !== null && activeDisplay.repetitionsPerCompetitor > 1 ? ` · ${translate("Repetition")} ${formatLocaleNumber(activeDisplay.repetitionNumber)}/${formatLocaleNumber(activeDisplay.repetitionsPerCompetitor)}` : ""}</strong>
@@ -2945,7 +3039,7 @@ function ArenaExecutionMonitor({
           {!blind && <span>{formatArenaMetrics(active.metrics)}</span>}
         </div>
       )}
-      <div className="arena-live-table" role="table" aria-label={translate("Arena competitor execution status")}>
+      {!blind && <div className="arena-live-table" role="table" aria-label={translate("Arena competitor execution status")}>
         <div className="arena-live-header" role="row"><span role="columnheader">{blind ? translate("Competitor") : translate("Model")}</span><span role="columnheader">{translate("Status")}</span><span role="columnheader">{translate("Competitor progress")}</span><span role="columnheader">{translate("Arena wall time")}</span><span role="columnheader">{translate("Metrics")}</span></div>
         {competitors.map((samples) => {
           const first = samples[0];
@@ -2959,14 +3053,16 @@ function ArenaExecutionMonitor({
             <span role="cell"> {translate("Completed")} {samples.filter((sample) => sample.status === "completed").length}/{samples.length} {translate("samples")}</span>
             <span role="cell">{blind ? translate("Timing hidden") : `Competitor total ${formatArenaMs(rowDisplay.competitorElapsedMs)} · Arena total ${formatArenaMs(rowDisplay.arenaElapsedMs)}`}</span>
             <span role="cell">{blind ? translate("Metrics hidden") : formatArenaMetrics(metrics)}</span>
-            {latestError && <em role="cell">{latestError}</em>}
+            {latestError && <em role="cell">{translate(latestError)}</em>}
           </div>;
         })}
-      </div>
-      {lastError && <p className="field-help" role="alert"> {translate("Failure recorded:")} {lastError}</p>}
+      </div>}
+      {blind && <p className="field-help">{translate("Individual competitor progress, order, and metrics are hidden until results are revealed.")}</p>}
+      {lastError && <p className="field-help" role="alert"> {translate("Failure recorded:")} {translate(lastError)}</p>}
       {telemetry.state === "cancelled" && <p className="field-help" role="status">{translate("Cancellation recorded. Queued samples were skipped; completed evidence was retained.")}</p>}
       {telemetry.state === "failed" && <p className="field-help" role="alert">{translate("One or more samples failed. Other sequential competitors continued where possible.")}</p>}
-      <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total}>{translate("Cancel queued work")}</button></div>
+      {cancelNotice && <p className="field-help" role="status">{cancelNotice}</p>}
+      <div className="arena-actions"><button className="secondary-button" type="button" onClick={onCancel} disabled={telemetry.completed >= telemetry.total || cancelNotice !== null}>{translate("Cancel Arena")}</button></div>
       <p className="field-help">{translate("Sample time is measured from Arena dispatch to terminal result. Generation metrics use authoritative runtime values; unsupported values show unavailable. Local execution remains sequential.")}</p>
     </div>
   );
@@ -2999,6 +3095,14 @@ function ArenaResultsSurface({
   onOpenRuns: () => void;
 }) {
   const [blind, setBlind] = useState(request.blind === true);
+  const [blindOrderSeed] = useState(() => {
+    if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+      throw new Error("Secure randomness is unavailable for blind presentation.");
+    }
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  });
   const [revealed, setRevealed] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>({});
   const [lockState, setLockState] = useState<"idle" | "busy" | "locked" | "error">("idle");
@@ -3008,12 +3112,11 @@ function ArenaResultsSurface({
   const responseMap = responseState.status === "ready"
     ? new Map(Object.entries(responseState.responses).map(([key, value]) => [key, value.text]))
     : new Map<string, string>();
-  const cards = buildBlindArenaCards(results, responseMap);
+  const cards = buildBlindArenaCards(results, responseMap, blindOrderSeed);
   const grouped = groupArenaExecutions(results);
   const competitorSummaries = summarizeArenaCompetitors(results);
-  const blindExecutionLocked = request.blind === true && !revealed;
   const showBlindEvaluation = !revealed && (blind || request.blind === true);
-  const showMeasuredResults = !blindExecutionLocked;
+  const showMeasuredResults = !showBlindEvaluation;
   const ranking = lockState === "locked"
     ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.executionKey] ?? 3] as const)))
     : [];
@@ -3053,8 +3156,9 @@ function ArenaResultsSurface({
   }
 
   return (
-    <section className="panel arena-results-panel" aria-live="polite">
+    <section className="panel arena-results-panel">
       <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Arena results")}</p><h3>{showMeasuredResults ? formatMessage("{completed}/{total} samples completed", { completed: summary.completed, total: summary.total }) : translate("Blind results locked until reveal")}</h3></div><span className={`run-status ${summaryPersistence.status === "saved" ? "arena-status-success" : "run-status-neutral"}`}>{summaryPersistence.status === "saved" ? translate("Saved") : translate("Summary unavailable")}</span></div>
+      {results.some((item) => hasCancelledDockerVerification(item.execution)) && <p className="field-help" role="status">{translate("Generation completed and its response was saved; Docker verification was cancelled and produced no score.")}</p>}
       {showMeasuredResults && <div className="metric-grid arena-metric-grid"><MetricCard label="Successful" value={String(summary.completed)} detail={formatMessage("{failed} failed · {cancelled} cancelled", { failed: summary.failed, cancelled: summary.cancelled })} /><MetricCard label="Success rate" value={`${Math.round(summary.successRate * 100)}%`} detail="Completed samples / total" /><MetricCard label="Average duration" value={summary.averageDurationMs === null ? "—" : `${summary.averageDurationMs.toFixed(0)} ms`} detail={summary.medianDurationMs === null ? "No timing samples" : `${translate("Median")} ${formatLocaleNumber(summary.medianDurationMs, undefined, { maximumFractionDigits: 0 })} ms`} /><MetricCard label="Timing spread" value={summary.minimumDurationMs === null ? "—" : `${summary.minimumDurationMs.toFixed(0)}–${summary.maximumDurationMs?.toFixed(0) ?? "—"} ms`} detail={summary.standardDeviationDurationMs === null ? "No timing samples" : `σ ${summary.standardDeviationDurationMs.toFixed(0)} ms`} /><MetricCard label="Objective" value={summary.objectiveChecked === 0 ? "Human review" : `${summary.objectivePassed}/${summary.objectiveChecked}`} detail="Deterministic evidence only" /></div>}
       {summaryPersistence.status === "error" && <StateMessage icon="!" title={translate("Aggregate summary unavailable")} description={`${summaryPersistence.message} Per-sample run evidence remains available.`} error />}
       {showMeasuredResults && summaryPersistence.status === "saved" && (
@@ -3340,17 +3444,16 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
               <span className="field-help" role="status">{filteredRuns.length} {translate("of")} {state.runs.length} {translate("runs shown")}</span>
             </div>
             {filteredRuns.length === 0 ? (
-              <EmptyState title={translate("No matching runs")} description="No persisted run matches this local filter. Clear the filter to see all records." />
+              <EmptyState title={translate("No matching runs")} description={translate("No persisted run matches this local filter. Clear the filter to see all records.")} />
             ) : (
               <div className="runs-layout">
-                <div className="runs-list" aria-label={translate("Run records")}>
+                <section className="runs-list" aria-label={translate("Run records")}>
                   {filteredRuns.map((run) => (
                 <button
                   className={`run-row ${selectedRunId === run.runId ? "is-selected" : ""}`}
                   key={run.runId}
                   type="button"
                   aria-pressed={selectedRunId === run.runId}
-                  aria-label={`${numberedName("Run", run.runId, state.runs.map((item) => item.runId))}, ${attemptStatusLabel(run.status)}`}
                   onClick={() => {
                     setBlindEvaluationStatus("loading");
                     setSelectedRunId(run.runId);
@@ -3368,7 +3471,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                   </span>
                 </button>
               ))}
-            </div>
+            </section>
             <section
               className="attempts-panel"
               aria-live="polite"
@@ -3417,7 +3520,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
 type ArenaSummaryDetailState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; record: ArenaSummaryRecord }
+  | { status: "ready"; record: ArenaSummaryRecord; identityRevealed: boolean }
   | { status: "error"; message: string };
 
 function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryRecord[]; versions: BenchmarkVersionSummary[] }) {
@@ -3449,7 +3552,9 @@ function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryR
         setDetail({ status: "error", message: "The selected Arena summary no longer exists locally." });
         return;
       }
-      setDetail({ status: "ready", record });
+      const identityRevealed = await arenaSummaryIdentityRevealed(record, readBlindEvaluation);
+      if (requestId !== summaryRequestRef.current) return;
+      setDetail({ status: "ready", record, identityRevealed });
     } catch (error: unknown) {
       if (requestId !== summaryRequestRef.current) return;
       setDetail({
@@ -3495,7 +3600,7 @@ function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryR
             {detail.status === "loading" && <StateMessage icon="…" title={translate("Loading Arena summary")} description="Reading the selected immutable aggregate record." />}
             {detail.status === "error" && <StateMessage icon="!" title={translate("Arena summary unavailable")} description={detail.message} error />}
             {detail.status === "ready" && (
-              <ArenaSummaryHistoryDetail record={detail.record} />
+              <ArenaSummaryHistoryDetail record={detail.record} identityRevealed={detail.identityRevealed} />
             )}
           </div>
         </div>
@@ -3557,7 +3662,7 @@ function ArenaSummaryExportActions({ record }: { record: ArenaSummaryRecord }) {
   );
 }
 
-function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
+function ArenaSummaryHistoryDetail({ record, identityRevealed }: { record: ArenaSummaryRecord; identityRevealed: boolean }) {
   const summary = record.summary;
   return (
     <div className="arena-summary-history-detail">
@@ -3566,17 +3671,19 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
         <TechnicalDetails label={translate("Task / case")} value={`${record.taskId} / ${record.caseId}`} />
         <BoundaryRow label="Saved" value={formatDisplayTimestamp(record.createdAt)} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
-        <BoundaryRow label="Samples" value={String(record.evidence.length)} />
-        <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
-        <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
-        <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
-        <BoundaryRow label="Tie margin" value={summaryMetricText(summary, "tieMargin")} />
-        <BoundaryRow label="Objective uncertainty" value={summaryMetricText(summary, "objectiveUncertainty")} />
-        <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
+        {identityRevealed ? <>
+          <BoundaryRow label="Samples" value={String(record.evidence.length)} />
+          <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
+          <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
+          <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
+          <BoundaryRow label="Tie margin" value={summaryMetricText(summary, "tieMargin")} />
+          <BoundaryRow label="Objective uncertainty" value={summaryMetricText(summary, "objectiveUncertainty")} />
+          <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
+        </> : <p className="field-help" role="status">{translate("Blind results locked until reveal")}</p>}
       </div>
       <div className="results-section">
         <p className="eyebrow">{translate("Competitor summaries")}</p>
-        {record.competitors.length === 0 ? (
+        {!identityRevealed ? <p className="field-help">{translate("Blind results locked until reveal")}</p> : record.competitors.length === 0 ? (
           <p className="field-help">{translate("No competitor summary rows were persisted in this record.")}</p>
         ) : (
           <ul className="arena-sample-list">
@@ -3593,10 +3700,10 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       </div>
       <div className="results-section">
         <p className="eyebrow">{translate("Per-sample evidence")}</p>
-        {record.evidence.length === 0 ? (
+        {!identityRevealed ? <p className="field-help">{translate("Blind results locked until reveal")}</p> : record.evidence.length === 0 ? (
           <p className="field-help">{translate("No per-sample evidence was persisted in this record.")}</p>
         ) : (
-          <div className="evidence-table-wrap">
+          <div className="evidence-table-wrap" role="region" aria-label={translate("Scrollable comparison table")} tabIndex={0}>
             <table className="evidence-table">
               <caption className="sr-only">{translate("Persisted Arena sample evidence")}</caption>
               <thead>
@@ -3629,7 +3736,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
           </div>
         )}
       </div>
-      <ArenaSummaryExportActions record={record} />
+      {identityRevealed && <ArenaSummaryExportActions record={record} />}
     </div>
   );
 }
@@ -3699,7 +3806,7 @@ type BlindEvaluationState =
   | { status: "idle" }
   | { status: "preparing" }
   | { status: "empty"; preparation: BlindEvaluationPreparation }
-  | { status: "prepared"; preparation: BlindEvaluationPreparation; scores: Record<string, number | null>; rankingTokens: string[] | null }
+  | { status: "prepared"; preparation: BlindEvaluationPreparation; scores: Record<string, number | null>; rankingTokens: string[] | null; lockError?: string | null }
   | { status: "locked"; record: BlindEvaluationRecord }
   | { status: "error"; message: string };
 
@@ -3714,7 +3821,11 @@ function BlindEvaluationPanel({
 }) {
   const [state, setState] = useState<BlindEvaluationState>({ status: "loading" });
   const [validationMessage, setValidationMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const lockInFlightRef = useRef(false);
+  const stateRef = useRef(state);
   const updateState = (next: BlindEvaluationState) => {
+    stateRef.current = next;
     onStatusChange(next.status);
     setState(next);
   };
@@ -3771,57 +3882,74 @@ function BlindEvaluationPanel({
   };
 
   const setScore = (token: string, value: string) => {
-    if (state.status !== "prepared") return;
+    if (lockInFlightRef.current || state.status !== "prepared") return;
     setValidationMessage("");
     updateState({
       ...state,
       scores: { ...state.scores, [token]: value ? Number(value) : null },
+      lockError: null,
     });
   };
 
   const setRankingToken = (index: number, token: string) => {
-    if (state.status !== "prepared" || !state.rankingTokens) return;
+    if (lockInFlightRef.current || state.status !== "prepared" || !state.rankingTokens) return;
     const rankingTokens = [...state.rankingTokens];
     rankingTokens[index] = token;
-    updateState({ ...state, rankingTokens });
+    updateState({ ...state, rankingTokens, lockError: null });
   };
 
   const lock = async () => {
-    if (state.status !== "prepared") return;
-    const responses = state.preparation.responses;
-    if (responses.some((response) => state.scores[response.token] === null || state.scores[response.token] === undefined)) {
+    if (lockInFlightRef.current) return;
+    const preparedState = stateRef.current;
+    if (preparedState.status !== "prepared") return;
+    const responses = preparedState.preparation.responses;
+    if (responses.some((response) => preparedState.scores[response.token] === null || preparedState.scores[response.token] === undefined)) {
       setValidationMessage("Score every anonymous response from 1 to 5 before locking.");
       return;
     }
-    if (state.rankingTokens && new Set(state.rankingTokens).size !== responses.length) {
+    if (preparedState.rankingTokens && new Set(preparedState.rankingTokens).size !== responses.length) {
       setValidationMessage("Complete the ranking without duplicate responses, or remove ranking.");
       return;
     }
-    if (!window.confirm("Lock this blind evaluation? It becomes immutable and cannot be changed.")) return;
     const scores: BlindEvaluationScore[] = responses.map((response) => ({
       token: response.token,
-      overallScore: state.scores[response.token] as number,
+      overallScore: preparedState.scores[response.token] as number,
       criterionScores: {},
     }));
     const request: BlindEvaluationLockRequest = {
-      evaluationId: state.preparation.evaluationId,
+      evaluationId: preparedState.preparation.evaluationId,
       runId,
       scores,
-      ranking: state.rankingTokens ? state.rankingTokens.map((token) => [token]) : null,
+      ranking: preparedState.rankingTokens ? preparedState.rankingTokens.map((token) => [token]) : null,
     };
+    lockInFlightRef.current = true;
+    setIsSaving(true);
     try {
+      const existing = await readBlindEvaluation(runId);
+      if (existing) {
+        updateState({ status: "locked", record: existing });
+        return;
+      }
+      if (!window.confirm("Lock this blind evaluation? It becomes immutable and cannot be changed.")) return;
       const record = await lockBlindEvaluation(request);
       updateState({ status: "locked", record });
     } catch (error: unknown) {
-      updateState({
-        status: "error",
-        message: error instanceof Error ? error.message : "The blind evaluation could not be locked.",
-      });
+      const existing = await readBlindEvaluation(runId).catch(() => null);
+      if (existing) updateState({ status: "locked", record: existing });
+      else {
+        const currentState = stateRef.current;
+        if (currentState.status === "prepared") {
+          updateState({ ...currentState, lockError: error instanceof Error ? error.message : "The blind evaluation could not be locked." });
+        }
+      }
+    } finally {
+      lockInFlightRef.current = false;
+      setIsSaving(false);
     }
   };
 
   return (
-    <section className="evaluation-panel results-section" aria-live="polite" aria-label={translate("Blind human evaluation")}>
+    <section className="evaluation-panel results-section" aria-label={translate("Blind human evaluation")}>
       <div className="section-heading compact-heading">
         <div>
           <p className="eyebrow">{translate("Human evaluation")}</p>
@@ -3866,6 +3994,7 @@ function BlindEvaluationPanel({
                   value={String(state.scores[response.token] ?? "")}
                   placeholder={translate("Choose 1–5")}
                   className="blind-score-control"
+                  disabled={isSaving}
                   options={[1, 2, 3, 4, 5].map((score) => ({ value: String(score), label: `${score}/5` }))}
                   onChange={(value) => setScore(response.token, value)}
                 />
@@ -3879,9 +4008,9 @@ function BlindEvaluationPanel({
                 <p className="field-help">{translate("Choose a complete order; equal positions can be represented by the typed lock request.")}</p>
               </div>
               {state.rankingTokens ? (
-                <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: null })}>{translate("Remove ranking")}</button>
+                <button className="text-button" type="button" disabled={isSaving} onClick={() => updateState({ ...state, rankingTokens: null })}>{translate("Remove ranking")}</button>
               ) : (
-                <button className="text-button" type="button" onClick={() => updateState({ ...state, rankingTokens: state.preparation.responses.map((response) => response.token) })}>{translate("Add ranking")}</button>
+                <button className="text-button" type="button" disabled={isSaving} onClick={() => updateState({ ...state, rankingTokens: state.preparation.responses.map((response) => response.token) })}>{translate("Add ranking")}</button>
               )}
             </div>
             {state.rankingTokens && state.rankingTokens.map((token, index) => {
@@ -3893,6 +4022,7 @@ function BlindEvaluationPanel({
                   value={token}
                   placeholder={translate("Choose response")}
                   className="blind-score-control"
+                  disabled={isSaving}
                   options={state.preparation.responses
                     .filter((response) => response.token === token || !usedElsewhere.has(response.token))
                     .map((response) => ({ value: response.token, label: response.label }))}
@@ -3902,7 +4032,8 @@ function BlindEvaluationPanel({
             })}
           </div>
           {validationMessage && <p className="field-help evaluation-validation" role="alert">{validationMessage}</p>}
-          <button className="primary-button" type="button" onClick={() => void lock()}>{translate("Lock blind evaluation")}</button>
+          {state.lockError && <p className="field-help evaluation-validation" role="alert">{translate("The evaluation could not be saved. Your scores are still here; you can try again.")} {state.lockError}</p>}
+          <button className="primary-button" type="button" disabled={isSaving} aria-busy={isSaving} onClick={() => void lock()}>{isSaving ? translate("Saving evaluation…") : state.lockError ? translate("Try saving again") : translate("Lock blind evaluation")}</button>
           <p className="field-help">{translate("Locking stores only anonymous presentation evidence, resolved attempt IDs for audit, scores, ranking, and timestamps. Response text is not stored in the evaluation record.")}</p>
         </div>
       )}
@@ -3926,6 +4057,14 @@ function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response
   const summary = attempt.responseSummary;
   const terminalError = attempt.terminalError;
   const objectiveScore = objectiveVerificationEvidence(attempt.result?.score);
+  const dockerEvaluation = typeof attempt.dockerEvaluation === "object"
+    && attempt.dockerEvaluation !== null
+    && !Array.isArray(attempt.dockerEvaluation)
+    ? attempt.dockerEvaluation as Record<string, unknown>
+    : null;
+  const dockerEvaluationReason = typeof dockerEvaluation?.reason === "string"
+    ? dockerEvaluation.reason.slice(0, 512)
+    : null;
   const tone = attemptStatusTone(attempt.status);
   const artifacts = attempt.artifacts.length > 0
     ? attempt.artifacts
@@ -4007,9 +4146,24 @@ function AttemptDetail({ attempt, response }: { attempt: AttemptRecord; response
             <BoundaryRow label="Actual normalized size" value={formatByteCount(objectiveScore.actualNormalizedByteCount)} />
             <BoundaryRow label="Expected SHA-256" value={objectiveScore.expectedSha256} />
             <BoundaryRow label="Actual SHA-256" value={objectiveScore.actualSha256} />
+            {objectiveScore.verifierKind === "docker_contract" && dockerEvaluation && (
+              <>
+                <BoundaryRow label="Docker verifier status" value={dockerEvaluationStatusLabel(dockerEvaluation.status)} />
+                <BoundaryRow label="Docker contract" value={String(dockerEvaluation.verifierId ?? "Unknown")} />
+                <BoundaryRow label="Docker tests" value={`${String(dockerEvaluation.passedTests ?? 0)}/${String(dockerEvaluation.totalTests ?? 0)}`} />
+              </>
+            )}
+          </div>
+        ) : dockerEvaluation ? (
+          <div className="results-facts">
+            <BoundaryRow label="Docker verifier status" value={dockerEvaluationStatusLabel(dockerEvaluation.status)} />
+            {dockerEvaluationReason && <p className="field-help">{dockerEvaluationReason}</p>}
+            <p className="field-help">{attempt.status === "completed"
+              ? translate("The generated response was stored, but no candidate score was recorded because Docker verification did not complete.")
+              : translate("Docker verification did not run because generation did not complete.")}</p>
           </div>
         ) : (
-          <p className="field-help">{translate("No objective exact-text evidence was persisted for this result.")}</p>
+          <p className="field-help">{translate("No objective verifier evidence was persisted for this result.")}</p>
         )}
         <p className="field-help">{translate("This is deterministic hash/count evidence only; human/AI evaluation and rankings are not part of this stored result.")}</p>
       </div>
@@ -4924,7 +5078,7 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
             ))}
           </div>
 
-          {selectedMetadata ? (
+          {selectedMetadata && providerActionsAvailable(selectedMetadata.storageStatus) ? (
             <div className="byok-editor-grid">
               <section className="byok-editor-card" aria-labelledby="byok-configuration-heading">
                 <div className="section-heading compact-heading">
@@ -5091,6 +5245,18 @@ function ByokPanel({ desktop }: { desktop: boolean }) {
                 {generationResult && <ByokGenerationSuccess result={generationResult} />}
               </section>
             </div>
+          ) : selectedMetadata ? (
+            <StateMessage
+              icon="◇"
+              title={translate("Provider actions unavailable")}
+              description={translate(byokErrorMessage({
+                code: selectedMetadata.storageStatus === "unsupported"
+                  ? "provider_storage_unsupported"
+                  : selectedMetadata.storageStatus === "error"
+                    ? "provider_storage_error"
+                    : "provider_storage_unavailable",
+              }))}
+            />
           ) : (
             <StateMessage icon="!" title={translate("Provider metadata incomplete")} description="The desktop bridge did not return a usable record for the selected provider." error />
           )}
@@ -5159,7 +5325,7 @@ function ByokProviderCard({
         <div><span>{translate("Model")}</span><strong>{metadata?.model ?? "Not configured"}</strong></div>
         <div><span>{translate("Identity")}</span><strong>{formatIdentityConfidence(metadata?.identityConfidence)}</strong></div>
       </div>
-      <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata} aria-pressed={selected}>
+      <button className="secondary-button byok-select-button" type="button" onClick={onSelect} disabled={disabled || !metadata || !providerActionsAvailable(metadata.storageStatus)} aria-pressed={selected}>
         {selected ? translate("Selected") : translate("Manage provider")}
       </button>
     </article>

@@ -48,6 +48,7 @@
     "tasks": [
       {
         "taskId": "risk-summary",
+        "categoryId": "summarization",
         "name": "Write a constrained risk summary",
         "prompt": "Write for a busy non-specialist. Follow every length and audience instruction, distinguish facts from recommendations, and do not invent evidence.",
         "cases": [
@@ -68,6 +69,7 @@
       },
       {
         "taskId": "decision-memo",
+        "categoryId": "memos",
         "name": "Write a structured decision memo",
         "prompt": "Produce a concise memo with the requested headings. Make tradeoffs explicit, keep recommendations proportional to the evidence, and avoid claiming work that was not performed.",
         "cases": [
