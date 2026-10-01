@@ -156,6 +156,15 @@ pub enum ModelAvailability {
     Removed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelContentHashStatus {
+    #[default]
+    NotAvailable,
+    VerifiedAtImport,
+    ImportIdentityNotRechecked,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRecord {
@@ -168,6 +177,8 @@ pub struct ModelRecord {
     pub availability: ModelAvailability,
     pub digest: Option<String>,
     pub content_hash: Option<String>,
+    #[serde(default)]
+    pub content_hash_status: ModelContentHashStatus,
     pub size_bytes: Option<u64>,
     pub family: Option<String>,
     pub parameter_size: Option<String>,

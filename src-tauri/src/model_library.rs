@@ -7,9 +7,10 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     domain::{
-        ModelBackend, ModelCatalog, ModelDiscoveryRequest, ModelDuplicateGroup, ModelImportRequest,
-        ModelOperation, ModelOperationKind, ModelOperationStatus, ModelRecord,
-        ModelRemovalEvidence, ModelSource, ModelSourceConfig, ModelSourceStatus, ProfileRevision,
+        ModelBackend, ModelCatalog, ModelContentHashStatus, ModelDiscoveryRequest,
+        ModelDuplicateGroup, ModelImportRequest, ModelOperation, ModelOperationKind,
+        ModelOperationStatus, ModelRecord, ModelRemovalEvidence, ModelSource, ModelSourceConfig,
+        ModelSourceStatus, ProfileRevision,
     },
     ollama::{OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
@@ -373,7 +374,7 @@ pub fn import_managed_gguf_model(
         path: Some(request.source_path.clone()),
     };
     let source_id = stable_model_source_id(&config)?;
-    let record = parse_managed_gguf_record(storage, &source_id, &request.source_path)?;
+    let record = parse_managed_gguf_record(storage, &source_id, &request.source_path, true)?;
     storage.save_model_record(&record, &now_marker())?;
     Ok(record)
 }
@@ -723,7 +724,7 @@ fn execute_import(
     let source_id = operation.source_id.as_deref().ok_or_else(|| {
         ModelLibraryError::InvalidRequest("managed import source identity is missing".to_owned())
     })?;
-    let record = parse_managed_gguf_record(storage, source_id, source_path)?;
+    let record = parse_managed_gguf_record(storage, source_id, source_path, true)?;
     if cancellation.is_cancelled() {
         return Err(RuntimeError::Cancelled.into());
     }
@@ -969,7 +970,13 @@ fn discover_source(
     };
 
     for model in &discovered {
-        storage.save_model_record(model, &now_marker())?;
+        // Managed GGUF discovery is transient. The immutable hashed import record
+        // is saved only by the explicit import action; persisting a metadata-only
+        // rediscovery view under that same identity would conflict, while saving
+        // it separately would create a duplicate hashless catalog row.
+        if !model.managed {
+            storage.save_model_record(model, &now_marker())?;
+        }
     }
     let models = discovered
         .into_iter()
@@ -1013,7 +1020,25 @@ fn discover_source_models(
         ModelBackend::LmStudio | ModelBackend::LlamaCpp => {
             let Some(endpoint) = endpoint else {
                 if let Some(path) = path {
-                    return Ok(vec![parse_managed_gguf_record(storage, source_id, path)?]);
+                    let current = parse_managed_gguf_record(storage, source_id, path, false)?;
+                    let prior_import =
+                        storage
+                            .list_model_records()?
+                            .into_iter()
+                            .rev()
+                            .find(|record| {
+                                record.managed
+                                    && record.content_hash.is_some()
+                                    && record.source_id == source_id
+                                    && record.managed_path.as_deref() == Some(path)
+                                    && same_managed_model_metadata(record, &current)
+                            });
+                    if let Some(mut record) = prior_import {
+                        record.content_hash_status =
+                            ModelContentHashStatus::ImportIdentityNotRechecked;
+                        return Ok(vec![record]);
+                    }
+                    return Ok(vec![current]);
                 }
                 return Err(ModelLibraryError::InvalidRequest(
                     "local model source endpoint or managed GGUF path is required".to_owned(),
@@ -1060,7 +1085,7 @@ fn model_record_from_info(
     backend: ModelBackend,
     model: ModelInfo,
 ) -> Result<ModelRecord, ModelLibraryError> {
-    let model_id = stable_model_id(source_id, &model, None);
+    let model_id = stable_model_id(source_id, &model, None, None);
     Ok(ModelRecord {
         model_id,
         source_id: source_id.to_owned(),
@@ -1071,6 +1096,7 @@ fn model_record_from_info(
         availability: crate::domain::ModelAvailability::Available,
         digest: model.digest,
         content_hash: None,
+        content_hash_status: ModelContentHashStatus::NotAvailable,
         size_bytes: model.size_bytes,
         family: model.family,
         parameter_size: model.parameter_size,
@@ -1171,8 +1197,24 @@ fn first_u64(object: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
         .find_map(|key| object.get(*key).and_then(Value::as_u64))
 }
 
-fn stable_model_id(source_id: &str, model: &ModelInfo, path: Option<&str>) -> String {
-    let identity = format!(
+fn same_managed_model_metadata(left: &ModelRecord, right: &ModelRecord) -> bool {
+    left.backend == right.backend
+        && left.name == right.name
+        && left.size_bytes == right.size_bytes
+        && left.family == right.family
+        && left.parameter_size == right.parameter_size
+        && left.quantization_level == right.quantization_level
+        && left.context_length == right.context_length
+        && left.metadata == right.metadata
+}
+
+fn stable_model_id(
+    source_id: &str,
+    model: &ModelInfo,
+    path: Option<&str>,
+    content_hash: Option<&str>,
+) -> String {
+    let mut identity = format!(
         "{}|{}|{}|{}|{}|{}",
         source_id,
         model.name,
@@ -1182,8 +1224,12 @@ fn stable_model_id(source_id: &str, model: &ModelInfo, path: Option<&str>) -> St
             .size_bytes
             .map(|size| size.to_string())
             .unwrap_or_default(),
-        path.unwrap_or_default()
+        path.unwrap_or_default(),
     );
+    if let Some(content_hash) = content_hash {
+        identity.push('|');
+        identity.push_str(content_hash);
+    }
     format!(
         "model-{}",
         &crate::domain::sha256_hex(identity.as_bytes())[..32]
@@ -1194,11 +1240,20 @@ fn parse_managed_gguf_record(
     storage: &StorageService,
     source_id: &str,
     relative_path: &str,
+    hash_contents: bool,
 ) -> Result<ModelRecord, ModelLibraryError> {
     validate_gguf_path(relative_path)?;
-    let (size, bytes) = storage
-        .read_managed_model_prefix(relative_path, MAX_GGUF_HEADER_BYTES)
-        .map_err(|error| ModelLibraryError::GgufImport(error.to_string()))?;
+    let (size, bytes, content_hash) = if hash_contents {
+        let (size, bytes, hash) = storage
+            .read_managed_model_prefix_and_hash(relative_path, MAX_GGUF_HEADER_BYTES)
+            .map_err(|error| ModelLibraryError::GgufImport(error.to_string()))?;
+        (size, bytes, Some(hash))
+    } else {
+        let (size, bytes) = storage
+            .read_managed_model_prefix(relative_path, MAX_GGUF_HEADER_BYTES)
+            .map_err(|error| ModelLibraryError::GgufImport(error.to_string()))?;
+        (size, bytes, None)
+    };
     if size > MAX_MANAGED_MODEL_BYTES {
         return Err(ModelLibraryError::GgufImport(
             "managed GGUF file exceeds the local size limit".to_owned(),
@@ -1266,8 +1321,18 @@ fn parse_managed_gguf_record(
         metadata: parsed.metadata,
     };
     crate::ollama::validate_model_info(&info)?;
+    let content_hash_status = if content_hash.is_some() {
+        ModelContentHashStatus::VerifiedAtImport
+    } else {
+        ModelContentHashStatus::NotAvailable
+    };
     Ok(ModelRecord {
-        model_id: stable_model_id(source_id, &info, Some(relative_path)),
+        model_id: stable_model_id(
+            source_id,
+            &info,
+            Some(relative_path),
+            content_hash.as_deref(),
+        ),
         source_id: source_id.to_owned(),
         backend: ModelBackend::LlamaCpp,
         name: info.name,
@@ -1275,7 +1340,8 @@ fn parse_managed_gguf_record(
         path: Some(relative_path.to_owned()),
         availability: crate::domain::ModelAvailability::Available,
         digest: info.digest,
-        content_hash: None,
+        content_hash,
+        content_hash_status,
         size_bytes: info.size_bytes,
         family: info.family,
         parameter_size: info.parameter_size,
@@ -1821,6 +1887,7 @@ mod tests {
             availability: crate::domain::ModelAvailability::Available,
             digest: digest.map(str::to_owned),
             content_hash: None,
+            content_hash_status: ModelContentHashStatus::NotAvailable,
             size_bytes: Some(42),
             family: Some("llama".to_owned()),
             parameter_size: Some("7B".to_owned()),
@@ -1831,6 +1898,42 @@ mod tests {
             managed_path: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn adding_import_hash_preserves_existing_unhashed_model_ids() {
+        let info = ModelInfo {
+            name: "local-model".to_owned(),
+            digest: Some("sha256:model".to_owned()),
+            size_bytes: Some(42),
+            modified_at: None,
+            family: Some("llama".to_owned()),
+            parameter_size: Some("7B".to_owned()),
+            quantization_level: Some("Q4_K_M".to_owned()),
+            context_length: None,
+            metadata: BTreeMap::new(),
+        };
+
+        let old_id = stable_model_id("local-source", &info, None, None);
+        let import_id = stable_model_id("local-source", &info, None, Some(&"a".repeat(64)));
+
+        let old_identity = format!(
+            "{}|{}|{}|{}|{}|{}",
+            "local-source",
+            info.name,
+            info.digest.as_deref().unwrap_or_default(),
+            info.quantization_level.as_deref().unwrap_or_default(),
+            info.size_bytes.unwrap_or_default(),
+            "",
+        );
+        assert_eq!(
+            old_id,
+            format!(
+                "model-{}",
+                &crate::domain::sha256_hex(old_identity.as_bytes())[..32]
+            )
+        );
+        assert_ne!(old_id, import_id);
     }
 
     #[test]
@@ -2112,6 +2215,11 @@ mod tests {
             .expect("imported model record");
         assert!(record.managed);
         assert_eq!(record.managed_path.as_deref(), Some(relative_path));
+        assert_eq!(record.content_hash, Some(crate::domain::sha256_hex(&bytes)));
+        assert_eq!(
+            record.content_hash_status,
+            ModelContentHashStatus::VerifiedAtImport
+        );
 
         let removed = run_model_operation(
             &storage,
@@ -2136,6 +2244,119 @@ mod tests {
         assert_eq!(removals[0].managed_path, relative_path);
         assert_eq!(removals[0].content_hash, expected_hash);
         assert_eq!(removals[0].outcome, "removed");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_gguf_rediscovery_preserves_import_identity_without_rechecking_bytes() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/versioned-model.gguf";
+        let mut bytes = minimal_gguf("versioned-model");
+        bytes.push(0x2a);
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &bytes).unwrap();
+
+        let first_import = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "versioned-import-1".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let first_model_id = first_import.model_id.unwrap();
+        let first_hash = crate::domain::sha256_hex(&bytes);
+        let source_config = ModelSourceConfig {
+            backend: ModelBackend::LlamaCpp,
+            label: Some("Managed GGUF".to_owned()),
+            endpoint: None,
+            path: Some(relative_path.to_owned()),
+        };
+        let discover = || {
+            discover_local_models(
+                &storage,
+                &ModelDiscoveryRequest {
+                    sources: vec![source_config.clone()],
+                    query: None,
+                },
+            )
+            .unwrap()
+        };
+
+        let discovered = discover();
+        assert_eq!(discovered.models.len(), 1);
+        assert_eq!(discovered.models[0].model_id, first_model_id);
+        assert_eq!(
+            discovered.models[0].content_hash.as_deref(),
+            Some(first_hash.as_str())
+        );
+        assert_eq!(
+            discovered.models[0].content_hash_status,
+            ModelContentHashStatus::ImportIdentityNotRechecked
+        );
+        let persisted = storage.get_model_record(&first_model_id).unwrap().unwrap();
+        assert_eq!(
+            persisted.content_hash_status,
+            ModelContentHashStatus::VerifiedAtImport
+        );
+        assert_eq!(storage.list_model_records().unwrap().len(), 1);
+
+        // Same-length weight changes cannot be recognized from bounded header
+        // discovery. The catalog retains the historical import identity but
+        // marks current bytes as unverified rather than relabeling the hash.
+        *bytes.last_mut().unwrap() = 0x2b;
+        fs::write(&path, &bytes).unwrap();
+        let after_change = discover();
+        assert_eq!(after_change.models[0].model_id, first_model_id);
+        assert_eq!(
+            after_change.models[0].content_hash.as_deref(),
+            Some(first_hash.as_str())
+        );
+        assert_eq!(
+            after_change.models[0].content_hash_status,
+            ModelContentHashStatus::ImportIdentityNotRechecked
+        );
+        assert_eq!(storage.list_model_records().unwrap().len(), 1);
+
+        let second_import = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "versioned-import-2".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let second_model_id = second_import.model_id.unwrap();
+        let second_hash = crate::domain::sha256_hex(&bytes);
+        assert_ne!(first_model_id, second_model_id);
+        assert_ne!(first_hash, second_hash);
+        let second_record = storage.get_model_record(&second_model_id).unwrap().unwrap();
+        assert_eq!(
+            second_record.content_hash.as_deref(),
+            Some(second_hash.as_str())
+        );
+        assert_eq!(
+            second_record.content_hash_status,
+            ModelContentHashStatus::VerifiedAtImport
+        );
+        assert_eq!(storage.list_model_records().unwrap().len(), 2);
+
+        bytes.push(0x2c);
+        fs::write(&path, &bytes).unwrap();
+        let changed_size = discover();
+        assert_eq!(changed_size.models.len(), 1);
+        assert_eq!(changed_size.models[0].content_hash, None);
+        assert_eq!(
+            changed_size.models[0].content_hash_status,
+            ModelContentHashStatus::NotAvailable
+        );
+        assert_ne!(changed_size.models[0].model_id, second_model_id);
+        assert_eq!(storage.list_model_records().unwrap().len(), 2);
 
         let _ = fs::remove_dir_all(root);
     }

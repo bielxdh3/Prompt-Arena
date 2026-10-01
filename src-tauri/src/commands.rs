@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -16,7 +17,7 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::{
     docker_evaluator::{
-        evaluate as evaluate_docker_contract, DockerEvaluation, DockerEvaluationStatus,
+        evaluate_cancellable as evaluate_docker_contract, DockerEvaluation, DockerEvaluationStatus,
         PINNED_PYTHON_IMAGE, VERIFIER_CONTRACT_VERSION,
     },
     domain::{
@@ -66,7 +67,7 @@ use crate::{
         WorkerErrorCode, WorkerOutcome, WorkerRequest, WorkerResponse, WorkerResult,
         MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, WORKER_PROTOCOL_VERSION,
     },
-    runtime::{ModelInfo, RuntimeError, RuntimeProvider},
+    runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
         BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
@@ -137,10 +138,116 @@ const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
+static ONE_SHOT_CANCELLATIONS: OnceLock<OneShotCancellationRegistry> = OnceLock::new();
 static EXTERNAL_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn model_operation_controller() -> &'static ModelOperationController {
     MODEL_OPERATION_CONTROLLER.get_or_init(ModelOperationController::default)
+}
+
+#[derive(Default)]
+struct OneShotCancellationRegistry {
+    active: Mutex<HashMap<String, ActiveCancellationEntry>>,
+}
+
+struct ActiveCancellationEntry {
+    token: CancellationToken,
+    accepts_cancel: bool,
+}
+
+struct ActiveOneShotCancellation<'a> {
+    registry: &'a OneShotCancellationRegistry,
+    run_id: String,
+}
+
+impl OneShotCancellationRegistry {
+    fn register(
+        &self,
+        run_id: &str,
+    ) -> Result<(CancellationToken, ActiveOneShotCancellation<'_>), CommandError> {
+        if !valid_one_shot_run_id(run_id) {
+            return Err(CommandError {
+                code: "run_plan_invalid",
+                message: "the run id is invalid".to_owned(),
+            });
+        }
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.contains_key(run_id) {
+            return Err(CommandError {
+                code: "run_already_active",
+                message: "a run with this id is already active".to_owned(),
+            });
+        }
+        let cancellation = CancellationToken::new();
+        active.insert(
+            run_id.to_owned(),
+            ActiveCancellationEntry {
+                token: cancellation.clone(),
+                accepts_cancel: true,
+            },
+        );
+        Ok((
+            cancellation,
+            ActiveOneShotCancellation {
+                registry: self,
+                run_id: run_id.to_owned(),
+            },
+        ))
+    }
+
+    fn cancel(&self, run_id: &str) -> bool {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = active.get_mut(run_id).filter(|entry| entry.accepts_cancel) {
+            entry.token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn stop_accepting_cancellation(&self, run_id: &str) {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = active.get_mut(run_id) {
+            entry.accepts_cancel = false;
+        }
+    }
+}
+
+impl ActiveOneShotCancellation<'_> {
+    fn stop_accepting_cancellation(&self) {
+        self.registry.stop_accepting_cancellation(&self.run_id);
+    }
+}
+
+impl Drop for ActiveOneShotCancellation<'_> {
+    fn drop(&mut self) {
+        self.registry
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.run_id);
+    }
+}
+
+fn one_shot_cancellations() -> &'static OneShotCancellationRegistry {
+    ONE_SHOT_CANCELLATIONS.get_or_init(OneShotCancellationRegistry::default)
+}
+
+fn valid_one_shot_run_id(run_id: &str) -> bool {
+    !run_id.is_empty()
+        && run_id.len() <= 96
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
 }
 
 impl From<ValidationError> for CommandError {
@@ -1017,6 +1124,10 @@ pub fn execute_run_once(
     app: AppHandle,
     mut plan: RunPlan,
 ) -> Result<PersistedExecution, CommandError> {
+    // Register first because the UI exposes this run ID before the backend
+    // finishes authoritative preflight. A cancellation during preflight must
+    // still apply to this active sample; a failed bind drops the guard below.
+    let (cancellation, active_run) = one_shot_cancellations().register(&plan.run_id)?;
     let storage = storage_for(&app)?;
     bind_authoritative_execution_boundary(&mut plan, &storage)?;
     let outcome = if let Some(verifier_id) = plan.docker_verifier_id {
@@ -1028,17 +1139,26 @@ pub fn execute_run_once(
         generation_plan.docker_verifier_id = None;
         generation_plan.verifier_policy = None;
         generation_plan.objective_expectation = None;
-        let generated = invoke_worker_once(&app, &generation_plan)?;
-        attach_docker_contract_outcome(generated, verifier_id)
+        let generated = invoke_worker_once(&app, &generation_plan, &cancellation)?;
+        attach_docker_contract_outcome(generated, verifier_id, &cancellation)
     } else {
-        invoke_worker_once(&app, &plan)?
+        invoke_worker_once(&app, &plan, &cancellation)?
     };
+    // Keep the run ID reserved until persistence finishes, while rejecting
+    // late cancel requests after its terminal outcome has been assembled.
+    active_run.stop_accepting_cancellation();
     persist_terminal_outcome(&storage, &outcome, &now_marker()).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn cancel_run_once(run_id: String) -> bool {
+    valid_one_shot_run_id(&run_id) && one_shot_cancellations().cancel(&run_id)
 }
 
 fn attach_docker_contract_outcome(
     outcome: TerminalOutcome,
     verifier_id: DockerVerifierId,
+    cancellation: &CancellationToken,
 ) -> TerminalOutcome {
     match outcome {
         TerminalOutcome::Completed {
@@ -1048,7 +1168,7 @@ fn attach_docker_contract_outcome(
             score: _,
             progress,
         } => {
-            let evaluation = evaluate_docker_contract(verifier_id, &response.text);
+            let evaluation = evaluate_docker_contract(verifier_id, &response.text, cancellation);
             let details = docker_evaluation_details(&evaluation);
             attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
             attempt
@@ -1158,13 +1278,56 @@ fn docker_evaluation_details(evaluation: &DockerEvaluation) -> serde_json::Value
     })
 }
 
-fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
+fn invoke_worker_once(
+    app: &AppHandle,
+    plan: &RunPlan,
+    cancellation: &CancellationToken,
+) -> Result<TerminalOutcome, CommandError> {
     let job_id = worker_job_id(plan);
+    let current_executable = std::env::current_exe().map_err(|_| CommandError {
+        code: "worker_unavailable",
+        message: "the app executable path is unavailable".to_owned(),
+    })?;
+    let packaged_worker = app
+        .path()
+        .resolve(worker_sidecar_resource_path(), BaseDirectory::Resource)
+        .ok();
+    let worker_executable =
+        resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
     let request = WorkerRequest::GenerateOnce {
         protocol_version: WORKER_PROTOCOL_VERSION,
         job_id: job_id.clone(),
         plan: plan.clone(),
     };
+    let response = if cancellation.is_cancelled() {
+        None
+    } else {
+        invoke_worker_request(&worker_executable, request, Some(cancellation))?
+    };
+    let response = match response {
+        Some(response) => response,
+        None => invoke_worker_request(
+            &worker_executable,
+            WorkerRequest::CancelGenerateOnce {
+                protocol_version: WORKER_PROTOCOL_VERSION,
+                job_id: job_id.clone(),
+                plan: plan.clone(),
+            },
+            None,
+        )?
+        .ok_or_else(|| CommandError {
+            code: "worker_failed",
+            message: "the cancellation outcome worker did not finish".to_owned(),
+        })?,
+    };
+    worker_terminal_outcome(response, &job_id)
+}
+
+fn invoke_worker_request(
+    worker_executable: &Path,
+    request: WorkerRequest,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Option<WorkerResponse>, CommandError> {
     let request_bytes = serde_json::to_vec(&request).map_err(|_| CommandError {
         code: "run_plan_invalid",
         message: "the one-shot worker request could not be encoded".to_owned(),
@@ -1176,16 +1339,6 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         });
     }
 
-    let current_executable = std::env::current_exe().map_err(|_| CommandError {
-        code: "worker_unavailable",
-        message: "the app executable path is unavailable".to_owned(),
-    })?;
-    let packaged_worker = app
-        .path()
-        .resolve(worker_sidecar_resource_path(), BaseDirectory::Resource)
-        .ok();
-    let worker_executable =
-        resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
     let mut child = Command::new(worker_executable)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1217,14 +1370,30 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         });
     }
 
-    let status = child.wait().map_err(|_| CommandError {
-        code: "worker_unavailable",
-        message: "the one-shot worker did not exit cleanly".to_owned(),
-    })?;
+    let (status, cancelled) = loop {
+        if let Some(status) = child.try_wait().map_err(|_| CommandError {
+            code: "worker_unavailable",
+            message: "the one-shot worker did not exit cleanly".to_owned(),
+        })? {
+            break (status, false);
+        }
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
+            let _ = child.kill();
+            let status = child.wait().map_err(|_| CommandError {
+                code: "worker_unavailable",
+                message: "the cancelled one-shot worker could not be reaped".to_owned(),
+            })?;
+            break (status, true);
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
     let output = reader.join().map_err(|_| CommandError {
         code: "worker_protocol_failed",
         message: "the one-shot worker output reader failed".to_owned(),
     })?;
+    if cancelled {
+        return Ok(None);
+    }
     let output = output.map_err(|_| CommandError {
         code: "worker_protocol_failed",
         message: "the one-shot worker response exceeded the size limit".to_owned(),
@@ -1241,6 +1410,13 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         code: "worker_protocol_failed",
         message: "the one-shot worker response was not valid JSON".to_owned(),
     })?;
+    Ok(Some(response))
+}
+
+fn worker_terminal_outcome(
+    response: WorkerResponse,
+    job_id: &str,
+) -> Result<TerminalOutcome, CommandError> {
     if response.job_id != job_id {
         return Err(CommandError {
             code: "worker_protocol_failed",
@@ -1432,8 +1608,8 @@ mod tests {
         app_status, docker_evaluation_score, ollama_server_command, ollama_spawn_error,
         read_benchmark_version_from_storage, resolve_worker_executable, start_ollama_with,
         worker_executable_name, worker_executable_path, worker_sidecar_resource_path,
-        OllamaStartStatus, StorageState, OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH,
-        WORKER_SIDECAR_TARGET_TRIPLE,
+        OllamaStartStatus, OneShotCancellationRegistry, StorageState, OLLAMA_START_RETRIES,
+        WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
     use crate::{
@@ -1449,6 +1625,7 @@ mod tests {
         for (status, score_passed) in [
             (DockerEvaluationStatus::Passed, Some(true)),
             (DockerEvaluationStatus::Failed, Some(false)),
+            (DockerEvaluationStatus::Cancelled, None),
             (DockerEvaluationStatus::Unavailable, None),
             (DockerEvaluationStatus::TimedOut, None),
             (DockerEvaluationStatus::OutputLimit, None),
@@ -1471,6 +1648,33 @@ mod tests {
                 assert_eq!(score.verifier_kind, ObjectiveVerifierKind::DockerContract);
             }
         }
+    }
+
+    #[test]
+    fn one_shot_cancellation_only_targets_an_active_run_and_is_removed_at_exit() {
+        let registry = OneShotCancellationRegistry::default();
+        let (token, active) = registry
+            .register("arena-123-1-1")
+            .expect("active run registers");
+        assert!(!registry.cancel("arena-123-1-2"));
+        assert!(registry.cancel("arena-123-1-1"));
+        assert!(token.is_cancelled());
+        assert!(registry.register("arena-123-1-1").is_err());
+        registry.stop_accepting_cancellation("arena-123-1-1");
+        assert!(!registry.cancel("arena-123-1-1"));
+        assert!(registry.register("arena-123-1-1").is_err());
+        drop(active);
+        assert!(!registry.cancel("arena-123-1-1"));
+
+        let (finished_token, finished) = registry
+            .register("arena-123-1-2")
+            .expect("finished run remains reserved until guard drop");
+        finished.stop_accepting_cancellation();
+        assert!(!registry.cancel("arena-123-1-2"));
+        assert!(!finished_token.is_cancelled());
+        assert!(registry.register("arena-123-1-2").is_err());
+        drop(finished);
+        assert!(!registry.cancel("arena-123-1-2"));
     }
 
     #[test]

@@ -99,7 +99,7 @@ The resulting `RunPlan` contains the run ID, published version ID, selected task
 request, and a loopback-only local runtime configuration. Its serialized size remains
 bounded by the existing one-shot plan limit. The bridge exposes typed version read and one-shot execution functions,
 but browser preview does not call either function, create records, or invent task/case/profile data. Full repetition
-controls, run authoring, cancellation, and process lifecycle remain planned.
+controls and run authoring remain outside this helper; the Arena view owns bounded repetition and cancellation behavior.
 
 ## Phase 08 Arena UI boundary
 
@@ -108,11 +108,12 @@ stored canonical version document. It offers only identities present in those re
 version, one immutable profile revision, one task, and one case. It renders the run-plan prompt/system/model preview and
 fixed runtime boundary without exposing raw JSON, endpoint, or credential fields.
 
-The view does not create a run record while selecting or previewing. On explicit desktop execution it gives the existing
-run-plan helper a new bounded run identity and invokes the existing one-shot command with one repetition; the returned
-attempt ID, progress, and terminal outcome are displayed, and history navigation remains a read surface. Browser
-preview invokes no bridge command and creates no sample state. Cancellation, broader repetition controls, and process
-lifecycle remain outside this boundary.
+The view does not create a run record while selecting or previewing. On explicit desktop execution it gives each
+sequential sample a new bounded run identity and invokes the existing one-shot command; returned attempt IDs, progress,
+and terminal outcomes are displayed, and history navigation remains a read surface. An active sample can be cancelled
+by its run ID; queued samples are recorded as cancelled in the Arena summary while completed immutable evidence is
+retained. Browser preview invokes no bridge command and creates no sample state. Broader process lifecycle remains
+outside this boundary.
 
 ## Phase 09 bounded attempt evidence
 

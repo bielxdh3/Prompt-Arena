@@ -5,6 +5,7 @@ import {
   arenaExportMarkdown,
   buildBlindArenaCards,
   executeArena,
+  hasCancelledDockerVerification,
   rankArenaCompetitors,
   summarizeArenaCompetitors,
   summarizeArenaExecutions,
@@ -57,7 +58,7 @@ const profile = (id: string): ProfileRevision => ({
   systemPrompt: "System",
 });
 
-function execution(runId: string, profileId: string, status: "completed" | "failed"): PersistedExecution {
+function execution(runId: string, profileId: string, status: "completed" | "failed" | "cancelled"): PersistedExecution {
   return {
     run: { runId, benchmarkVersionId: "bench@1", profileRevisionIds: [profileId], status, startedAt: "2026-01-01T00:00:00Z", attemptIds: [`${runId}-attempt`], environment: {} },
     attempt: {
@@ -77,6 +78,14 @@ function execution(runId: string, profileId: string, status: "completed" | "fail
 }
 
 describe("arena runner", () => {
+  it("keeps generated evidence completed while exposing cancelled Docker verification", () => {
+    const completed = execution("run", "one@1", "completed");
+    completed.attempt.dockerEvaluation = { status: "cancelled" };
+    expect(hasCancelledDockerVerification(completed)).toBe(true);
+    expect(hasCancelledDockerVerification(execution("run", "one@1", "completed"))).toBe(false);
+    expect(hasCancelledDockerVerification(null)).toBe(false);
+  });
+
   it("stores a task category only when the task and category tree agree", () => {
     const categorizedDocument = JSON.parse(version.documentJson) as Record<string, any>;
     categorizedDocument.pack.categories = [{ categoryId: "reasoning", name: "Reasoning", children: [] }];
@@ -117,6 +126,30 @@ describe("arena runner", () => {
     expect(results).toHaveLength(2);
     expect(results[0].execution?.attempt.status).toBe("completed");
     expect(results[1].cancelled).toBe(true);
+  });
+
+  it("records active-run cancellation and skips later work without changing completed evidence", async () => {
+    let keepRunning = true;
+    const progress: ArenaProgress[] = [];
+    const results = await executeArena(
+      { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two"), profile("three")], repetitions: 1 },
+      async (plan) => {
+        if (plan.profileRevision.profileId === "two") {
+          keepRunning = false;
+          return execution(plan.runId, plan.profileRevision.profileRevisionId, "cancelled");
+        }
+        return execution(plan.runId, plan.profileRevision.profileRevisionId, "completed");
+      },
+      (event) => progress.push(event),
+      () => keepRunning,
+    );
+
+    expect(results.map((item) => item.execution?.attempt.status ?? (item.cancelled ? "cancelled" : "failed")))
+      .toEqual(["completed", "cancelled", "cancelled"]);
+    expect(results[0].execution?.attempt.result?.score).toEqual({ passed: true });
+    expect(progress.find((event) => event.status === "generating")?.runId).toBe("arena-1-1");
+    expect(progress.map((event) => event.status)).toContain("cancelled");
+    expect(summarizeArenaExecutions(results)).toMatchObject({ total: 3, completed: 1, cancelled: 2, successRate: 1 / 3 });
   });
 
   it("isolates a competitor whose plan cannot be built", async () => {

@@ -53,6 +53,7 @@ function modelRecord(overrides: Partial<ModelRecord> = {}): ModelRecord {
     availability: "available",
     digest: "sha256:model",
     contentHash: null,
+    contentHashStatus: "not_available",
     sizeBytes: 4_000,
     family: "llama",
     parameterSize: "7B",
@@ -300,11 +301,28 @@ describe("model library profile boundary", () => {
       { profileRevisionId: "discovered@3", model: "local-model", runtime: "lm_studio", modelId: "lm-q8", sourceId: "lm-source", backend: "lm_studio", modelDigest: "sha256:model", modelContentHash: null, endpoint: "http://127.0.0.1:1234", quantizationLevel: "Q8_0" },
       { profileRevisionId: "discovered@3", model: "local-model", runtime: "llama_cpp", modelId: "gguf-q5", sourceId: "gguf-source", backend: "llama_cpp", path: "models/model-q5.gguf", quantizationLevel: "Q5_K_M" },
     ]);
-    expect(profileRevisionFromModel(form, modelRecord({ contentHash: "a".repeat(64) }))).toMatchObject({
+    expect(profileRevisionFromModel(form, modelRecord({
+      contentHash: "a".repeat(64),
+      contentHashStatus: "verified_at_import",
+    }))).toMatchObject({
       modelDigest: "sha256:model",
       modelContentHash: "a".repeat(64),
+      modelContentHashStatus: "verified_at_import",
     });
+    expect(profileRevisionFromModel(form, modelRecord({
+      backend: "llama_cpp",
+      endpoint: null,
+      path: "models/model.gguf",
+      managed: true,
+      managedPath: "models/model.gguf",
+      contentHash: "b".repeat(64),
+      contentHashStatus: "import_identity_not_rechecked",
+    })).modelContentHashStatus).toBe("import_identity_not_rechecked");
     expect(() => profileRevisionFromModel(form, modelRecord({ contentHash: "invalid" }))).toThrow("SHA-256 digest");
+    expect(() => profileRevisionFromModel(form, modelRecord({
+      contentHash: "c".repeat(64),
+      contentHashStatus: "not_available",
+    }))).toThrow("status must match");
   });
 
   it("persists off reasoning in the immutable profile parameters and defaults to runtime behavior", () => {

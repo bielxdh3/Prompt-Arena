@@ -2,7 +2,7 @@ import type { BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvalu
 import { translate, formatLocaleNumber } from "./i18n";
 
 export type AttemptStatusTone = "success" | "failure" | "neutral";
-export type DockerEvaluationStatus = "passed" | "failed" | "unavailable" | "timed_out" | "output_limit" | "invalid_output" | "not_run";
+export type DockerEvaluationStatus = "passed" | "failed" | "cancelled" | "unavailable" | "timed_out" | "output_limit" | "invalid_output" | "not_run";
 
 export const BLIND_RESPONSE_MAX_HEIGHT_PX = 320;
 
@@ -10,6 +10,7 @@ export function dockerEvaluationStatusLabel(status: unknown): string {
   switch (status) {
     case "passed": return translate("Verifier passed");
     case "failed": return translate("Verifier failed");
+    case "cancelled": return translate("Verifier cancelled");
     case "unavailable": return translate("Verifier unavailable");
     case "timed_out": return translate("Verifier timed out");
     case "output_limit": return translate("Verifier output limit");

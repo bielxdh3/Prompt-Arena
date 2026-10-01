@@ -677,6 +677,7 @@ export type ModelInfo = {
 export type ModelBackend = "ollama" | "lm_studio" | "llama_cpp";
 export type ModelSourceStatus = "available" | "unavailable" | "error";
 export type ModelAvailability = "available" | "unavailable" | "removed";
+export type ModelContentHashStatus = "not_available" | "verified_at_import" | "import_identity_not_rechecked";
 
 export type ModelRecord = {
   modelId: string;
@@ -688,6 +689,7 @@ export type ModelRecord = {
   availability: ModelAvailability;
   digest: string | null;
   contentHash: string | null;
+  contentHashStatus: ModelContentHashStatus;
   sizeBytes: number | null;
   family: string | null;
   parameterSize: string | null;
@@ -1296,5 +1298,13 @@ export async function executeRunOnce(plan: RunPlan): Promise<PersistedExecution>
     "execute_run_once",
     "The one-shot run could not be executed.",
     { plan },
+  );
+}
+
+export async function cancelRunOnce(runId: string): Promise<boolean> {
+  return invokeDesktop<boolean>(
+    "cancel_run_once",
+    "The active one-shot run could not be cancelled.",
+    { runId },
   );
 }

@@ -164,6 +164,9 @@ export function profileRevisionFromForm(form: ProfileFormState, model?: ModelRec
   if (model.contentHash !== null && !/^[a-f0-9]{64}$/iu.test(model.contentHash)) {
     throw new Error("Model content hash must be a SHA-256 digest.");
   }
+  if ((model.contentHash === null) !== (model.contentHashStatus === "not_available")) {
+    throw new Error("Model content hash status must match its available import identity.");
+  }
   if (model.backend !== "llama_cpp" && path !== null) {
     throw new Error("Only llama.cpp profiles can carry a managed GGUF path.");
   }
@@ -173,6 +176,7 @@ export function profileRevisionFromForm(form: ProfileFormState, model?: ModelRec
     backend: model.backend,
     modelDigest: model.digest,
     modelContentHash: model.contentHash,
+    modelContentHashStatus: model.contentHashStatus,
     endpoint,
     path,
     quantizationLevel: model.quantizationLevel,
