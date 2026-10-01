@@ -2,6 +2,7 @@ import { formatMessage } from "./i18n";
 import { TechnicalDetails } from "./technical-details";
 import { HumanError, FormFeedback } from "./human-error";
 import { containsMachineIdentity, displayName, isMachineIdentity, numberedName, profileDisplayName, runtimeDisplayName } from "./display-names";
+import { arenaSummaryIdentityRevealed } from "./arena-summary-visibility";
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
@@ -3114,9 +3115,8 @@ function ArenaResultsSurface({
   const cards = buildBlindArenaCards(results, responseMap, blindOrderSeed);
   const grouped = groupArenaExecutions(results);
   const competitorSummaries = summarizeArenaCompetitors(results);
-  const blindExecutionLocked = request.blind === true && !revealed;
   const showBlindEvaluation = !revealed && (blind || request.blind === true);
-  const showMeasuredResults = !blindExecutionLocked;
+  const showMeasuredResults = !showBlindEvaluation;
   const ranking = lockState === "locked"
     ? rankArenaCompetitors(results, new Map(cards.map((card) => [card.executionKey, scores[card.executionKey] ?? 3] as const)))
     : [];
@@ -3520,7 +3520,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
 type ArenaSummaryDetailState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; record: ArenaSummaryRecord }
+  | { status: "ready"; record: ArenaSummaryRecord; identityRevealed: boolean }
   | { status: "error"; message: string };
 
 function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryRecord[]; versions: BenchmarkVersionSummary[] }) {
@@ -3552,7 +3552,9 @@ function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryR
         setDetail({ status: "error", message: "The selected Arena summary no longer exists locally." });
         return;
       }
-      setDetail({ status: "ready", record });
+      const identityRevealed = await arenaSummaryIdentityRevealed(record, readBlindEvaluation);
+      if (requestId !== summaryRequestRef.current) return;
+      setDetail({ status: "ready", record, identityRevealed });
     } catch (error: unknown) {
       if (requestId !== summaryRequestRef.current) return;
       setDetail({
@@ -3598,7 +3600,7 @@ function ArenaSummaryHistory({ summaries, versions }: { summaries: ArenaSummaryR
             {detail.status === "loading" && <StateMessage icon="…" title={translate("Loading Arena summary")} description="Reading the selected immutable aggregate record." />}
             {detail.status === "error" && <StateMessage icon="!" title={translate("Arena summary unavailable")} description={detail.message} error />}
             {detail.status === "ready" && (
-              <ArenaSummaryHistoryDetail record={detail.record} />
+              <ArenaSummaryHistoryDetail record={detail.record} identityRevealed={detail.identityRevealed} />
             )}
           </div>
         </div>
@@ -3660,7 +3662,7 @@ function ArenaSummaryExportActions({ record }: { record: ArenaSummaryRecord }) {
   );
 }
 
-function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
+function ArenaSummaryHistoryDetail({ record, identityRevealed }: { record: ArenaSummaryRecord; identityRevealed: boolean }) {
   const summary = record.summary;
   return (
     <div className="arena-summary-history-detail">
@@ -3669,17 +3671,19 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
         <TechnicalDetails label={translate("Task / case")} value={`${record.taskId} / ${record.caseId}`} />
         <BoundaryRow label="Saved" value={formatDisplayTimestamp(record.createdAt)} />
         <BoundaryRow label="Content hash" value={record.contentHash} />
-        <BoundaryRow label="Samples" value={String(record.evidence.length)} />
-        <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
-        <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
-        <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
-        <BoundaryRow label="Tie margin" value={summaryMetricText(summary, "tieMargin")} />
-        <BoundaryRow label="Objective uncertainty" value={summaryMetricText(summary, "objectiveUncertainty")} />
-        <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
+        {identityRevealed ? <>
+          <BoundaryRow label="Samples" value={String(record.evidence.length)} />
+          <BoundaryRow label="Completed" value={summaryNumberText(summary, "completed")} />
+          <BoundaryRow label="Success rate" value={summaryPercentText(summary, "successRate")} />
+          <BoundaryRow label="Uncertainty" value={summaryMetricText(summary, "uncertainty")} />
+          <BoundaryRow label="Tie margin" value={summaryMetricText(summary, "tieMargin")} />
+          <BoundaryRow label="Objective uncertainty" value={summaryMetricText(summary, "objectiveUncertainty")} />
+          <BoundaryRow label="Objective tie margin" value={summaryMetricText(summary, "objectiveTieMargin")} />
+        </> : <p className="field-help" role="status">{translate("Blind results locked until reveal")}</p>}
       </div>
       <div className="results-section">
         <p className="eyebrow">{translate("Competitor summaries")}</p>
-        {record.competitors.length === 0 ? (
+        {!identityRevealed ? <p className="field-help">{translate("Blind results locked until reveal")}</p> : record.competitors.length === 0 ? (
           <p className="field-help">{translate("No competitor summary rows were persisted in this record.")}</p>
         ) : (
           <ul className="arena-sample-list">
@@ -3696,7 +3700,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
       </div>
       <div className="results-section">
         <p className="eyebrow">{translate("Per-sample evidence")}</p>
-        {record.evidence.length === 0 ? (
+        {!identityRevealed ? <p className="field-help">{translate("Blind results locked until reveal")}</p> : record.evidence.length === 0 ? (
           <p className="field-help">{translate("No per-sample evidence was persisted in this record.")}</p>
         ) : (
           <div className="evidence-table-wrap" role="region" aria-label={translate("Scrollable comparison table")} tabIndex={0}>
@@ -3732,7 +3736,7 @@ function ArenaSummaryHistoryDetail({ record }: { record: ArenaSummaryRecord }) {
           </div>
         )}
       </div>
-      <ArenaSummaryExportActions record={record} />
+      {identityRevealed && <ArenaSummaryExportActions record={record} />}
     </div>
   );
 }

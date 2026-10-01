@@ -93,7 +93,8 @@ describe("arena runner", () => {
     const categorizedVersion = { ...version, documentJson: JSON.stringify(categorizedDocument) };
     const request = { arenaId: "arena", version: categorizedVersion, taskId: "task", caseId: "case", profiles: [profile("one")], repetitions: 1 };
 
-    expect(buildArenaSummaryPayload(request, [])).toMatchObject({ categoryId: "reasoning", categoryName: "Reasoning" });
+    expect(buildArenaSummaryPayload({ ...request, blind: true }, [])).toMatchObject({ blind: true, categoryId: "reasoning", categoryName: "Reasoning" });
+    expect(buildArenaSummaryPayload(request, [])).toHaveProperty("blind", false);
 
     categorizedDocument.benchmarkVersion.tasks[0].categoryId = "unlisted";
     expect(buildArenaSummaryPayload({ ...request, version: { ...categorizedVersion, documentJson: JSON.stringify(categorizedDocument) } }, []))

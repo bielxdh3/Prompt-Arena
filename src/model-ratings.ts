@@ -5,7 +5,7 @@ export type RatingRuleVersion = "elo-v1" | "bradley-terry-v1";
 export type RatingUncertaintyMethod = "sample_count_heuristic" | "laplace_standard_error" | "cluster_robust_standard_error_v1" | "prior_only_standard_deviation_insufficient_clusters_v1" | "component_specific_v1";
 export type ModelRating = { competitorId: string; category: string | null; categoryName?: string | null; rating: number; sampleCount: number; /** Distinct source IDs when complete; this count does not assert statistical independence. */ sourceClusterCount?: number; uncertainty: number; uncertaintyMethod?: Exclude<RatingUncertaintyMethod, "component_specific_v1">; comparisonGroupId?: string | null; wins: number; losses: number; ties: number };
 export type RatingSourceReference = { arenaId: string; contentHash: string };
-export type RatingSet = { schemaVersion: 1; kind: "model_ratings"; ruleVersion: RatingRuleVersion; uncertaintyMethod?: RatingUncertaintyMethod; ratings: ModelRating[]; sourcePopulation?: RatingSourceReference[]; createdAt: string };
+export type RatingSet = { schemaVersion: 1; kind: "model_ratings"; ruleVersion: RatingRuleVersion; uncertaintyMethod?: RatingUncertaintyMethod; ratings: ModelRating[]; sourcePopulation?: RatingSourceReference[]; verificationStatus?: "unverified"; createdAt: string };
 
 const RATING_UNCERTAINTY_METHODS: readonly RatingUncertaintyMethod[] = [
   "sample_count_heuristic",
@@ -35,6 +35,7 @@ export function isRatingSet(value: unknown): value is RatingSet {
   const method = record.uncertaintyMethod;
   return record.schemaVersion === 1
     && record.kind === "model_ratings"
+    && (record.verificationStatus === undefined || record.verificationStatus === "unverified")
     && (record.ruleVersion === "elo-v1" || record.ruleVersion === "bradley-terry-v1")
     && (method === undefined || (typeof method === "string" && RATING_UNCERTAINTY_METHODS.includes(method as RatingUncertaintyMethod)))
     && typeof record.createdAt === "string"

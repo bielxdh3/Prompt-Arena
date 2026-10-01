@@ -9,6 +9,9 @@ export type HistoricalRegression = {
   candidateId: string;
   baselineSourceKind?: "single_model_benchmark" | "arena_summary";
   candidateSourceKind?: "single_model_benchmark" | "arena_summary";
+  /** App-calculated comparisons remain explicitly unverified after source linking. */
+  verificationStatus?: "unverified";
+  sourceReferences?: HistoricalSourceReference[];
   compatibility: { compatible: boolean; changedDimensions: string[]; warnings: string[] };
   metrics: RegressionMetric[];
   createdAt: string;
@@ -36,6 +39,9 @@ export type RepeatedRunHistoricalRegression = {
   kind: "repeated_run_historical_regression";
   baselineRunIds: string[];
   candidateRunIds: string[];
+  /** App-calculated comparisons remain explicitly unverified after source linking. */
+  verificationStatus?: "unverified";
+  sourceReferences?: HistoricalSourceReference[];
   compatibility: { compatible: boolean; changedDimensions: string[]; unverifiedDimensions: string[]; warnings: string[]; incompatibilityReasons?: string[] };
   minimumSamplesPerGroup: number;
   confidenceLevel: 0.95;
@@ -46,6 +52,11 @@ export type RepeatedRunHistoricalRegression = {
 };
 
 export type HistoricalSource = SingleModelBenchmarkPayload | ArenaSummaryRecord;
+export type HistoricalSourceReference = {
+  sourceKind: "single_model_benchmark" | "arena_summary";
+  sourceId: string;
+  contentHash: string;
+};
 type Comparable = { conditions: Record<string, unknown>; metrics: Record<string, number | null>; uncertainty: Record<string, number | null> };
 
 function sourceId(value: HistoricalSource): string { return "runId" in value ? value.runId : value.arenaId; }
@@ -82,26 +93,44 @@ function comparableRun(value: HistoricalSource): Comparable {
     const p = value.performance.metrics;
     const environment = value.sourceRun.environment && typeof value.sourceRun.environment === "object" ? value.sourceRun.environment as Record<string, unknown> : {};
     return {
-      conditions: { benchmarkVersionId: value.benchmarkVersionId, taskId: value.taskId, caseId: value.caseId, profileRevisionId: value.profileRevision.profileRevisionId ?? null, runtime: value.profileRevision.runtime, model: value.profileRevision.model, quantization: value.profileRevision.quantizationLevel ?? null, context: profileContextWindow(value.profileRevision), seed: profileParameters(value.profileRevision).seed ?? null, promptArenaVersion: environment.promptArenaVersion ?? null, hardware: value.hardware },
+      conditions: { sourceScope: "single_model", benchmarkVersionId: value.benchmarkVersionId, taskId: value.taskId, caseId: value.caseId, profileRevisionId: value.profileRevision.profileRevisionId ?? null, runtime: value.profileRevision.runtime, model: value.profileRevision.model, quantization: value.profileRevision.quantizationLevel ?? null, context: profileContextWindow(value.profileRevision), seed: profileParameters(value.profileRevision).seed ?? null, promptArenaVersion: environment.promptArenaVersion ?? null, hardware: value.hardware },
       metrics: { quality: typeof value.objective?.passed === "boolean" ? value.objective.passed ? 1 : 0 : null, wallClockMs: p.wallClockMs.value, generationTokensPerSecond: p.generationTokensPerSecond.value, ttftMs: p.ttftMs.value, thinkingTimeMs: p.thinkingTimeMs.value, vramPeakBytes: p.vramPeakBytes.value, ramPeakBytes: p.ramPeakBytes.value },
       uncertainty: { quality: null, wallClockMs: null, generationTokensPerSecond: null, ttftMs: null, thinkingTimeMs: null, vramPeakBytes: null, ramPeakBytes: null },
     };
   }
   const summary = value.summary as Record<string, unknown>;
-  const competitor = Array.isArray(value.competitors) ? value.competitors[0] as Record<string, unknown> | undefined : undefined;
-  const evidence = value.evidence[0];
+  const competitors = value.competitors.map((item) => ({
+    competitorId: item.competitorId ?? null,
+    runtime: item.runtime ?? null,
+    model: item.model ?? item.competitorLabel ?? null,
+    quantization: item.quantization ?? null,
+    context: item.context ?? null,
+    promptArenaVersion: item.promptArenaVersion ?? null,
+    hardware: item.hardware ?? null,
+  })).sort((left, right) => (stableJson(left) ?? "").localeCompare(stableJson(right) ?? ""));
+  const checked = value.competitors.reduce((total, item) => total + (typeof item.objectiveChecked === "number" && Number.isFinite(item.objectiveChecked) ? item.objectiveChecked : 0), 0);
+  const passed = value.competitors.reduce((total, item) => total + (typeof item.objectivePassed === "number" && Number.isFinite(item.objectivePassed) ? item.objectivePassed : 0), 0);
+  const evidence = value.evidence;
+  const throughputSamples = evidence.filter((sample) => sample.status === "completed" && typeof sample.completionTokens === "number" && Number.isFinite(sample.completionTokens)
+    && typeof sample.generationDurationMs === "number" && Number.isFinite(sample.generationDurationMs) && sample.generationDurationMs > 0);
+  const throughputDurationMs = throughputSamples.reduce((total, sample) => total + sample.generationDurationMs!, 0);
+  const throughput = throughputDurationMs > 0
+    ? throughputSamples.reduce((total, sample) => total + sample.completionTokens!, 0) / (throughputDurationMs / 1_000)
+    : null;
+  const ttftSamples = evidence.filter((sample) => sample.status === "completed").map((sample) => sample.ttftMs).filter((sample): sample is number => typeof sample === "number" && Number.isFinite(sample));
+  const averageTtft = ttftSamples.length ? ttftSamples.reduce((total, sample) => total + sample, 0) / ttftSamples.length : null;
   return {
-    conditions: { benchmarkVersionId: value.benchmarkVersionId, taskId: value.taskId, caseId: value.caseId, repetitions: value.repetitions, profileRevisionId: competitor?.competitorId ?? null, runtime: competitor?.runtime ?? null, model: competitor?.model ?? competitor?.competitorLabel ?? null, quantization: competitor?.quantization ?? null, context: competitor?.context ?? null, seed: value.materializationSeed, promptArenaVersion: competitor?.promptArenaVersion ?? null, hardware: competitor?.hardware ?? null },
-    metrics: { quality: typeof competitor?.objectivePassRate === "number" ? competitor.objectivePassRate : typeof summary.objectivePassRate === "number" ? summary.objectivePassRate : null, wallClockMs: value.arenaWallTimeMs ?? evidence?.durationMs ?? null, generationTokensPerSecond: evidence?.tokensPerSecond ?? null, ttftMs: evidence?.ttftMs ?? null, thinkingTimeMs: null, vramPeakBytes: null, ramPeakBytes: null },
-    uncertainty: { quality: typeof competitor?.objectiveUncertainty === "number" ? competitor.objectiveUncertainty : null, wallClockMs: null, generationTokensPerSecond: null, ttftMs: null, thinkingTimeMs: null, vramPeakBytes: null, ramPeakBytes: null },
+    conditions: { sourceScope: "whole_arena", benchmarkVersionId: value.benchmarkVersionId, taskId: value.taskId, caseId: value.caseId, repetitions: value.repetitions, competitors, seed: value.materializationSeed },
+    metrics: { quality: checked > 0 ? passed / checked : typeof summary.objectivePassRate === "number" ? summary.objectivePassRate : null, wallClockMs: value.arenaWallTimeMs ?? null, generationTokensPerSecond: throughput, ttftMs: averageTtft, thinkingTimeMs: null, vramPeakBytes: null, ramPeakBytes: null },
+    uncertainty: { quality: typeof summary.objectiveUncertainty === "number" ? summary.objectiveUncertainty : null, wallClockMs: null, generationTokensPerSecond: null, ttftMs: null, thinkingTimeMs: null, vramPeakBytes: null, ramPeakBytes: null },
   };
 }
 
 export function compareHistoricalRuns(baseline: HistoricalSource, candidate: HistoricalSource, createdAt = new Date().toISOString()): HistoricalRegression {
   const left = comparableRun(baseline);
   const right = comparableRun(candidate);
-  const dimensions = ["benchmarkVersionId", "taskId", "caseId", "repetitions", "profileRevisionId", "runtime", "model", "quantization", "context", "seed", "promptArenaVersion", "hardware"] as const;
-  const changedDimensions = dimensions.filter((key) => JSON.stringify(left.conditions[key]) !== JSON.stringify(right.conditions[key]));
+  const dimensions = ["sourceScope", "benchmarkVersionId", "taskId", "caseId", "repetitions", "profileRevisionId", "runtime", "model", "quantization", "context", "seed", "promptArenaVersion", "hardware", "competitors"] as const;
+  const changedDimensions = dimensions.filter((key) => stableJson(left.conditions[key]) !== stableJson(right.conditions[key]));
   const warnings = changedDimensions.map((key) => `${key} differs between source runs; interpret deltas with caution.`);
   const metrics = ["quality", "wallClockMs", "generationTokensPerSecond", "ttftMs", "thinkingTimeMs", "vramPeakBytes", "ramPeakBytes"].map((name) => {
     const baselineValue = left.metrics[name] ?? null;

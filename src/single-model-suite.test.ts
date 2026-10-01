@@ -73,4 +73,28 @@ describe("single-model suite evidence", () => {
     expect(outcomes[0].status).toBe("completed");
     expect(outcomes[0].errorCode).toBe("evidence_save_failed");
   });
+
+  it("marks queued cases cancelled without invoking the runner or evidence store", async () => {
+    const executed: string[] = [];
+    const persisted: string[] = [];
+    let allowed = true;
+    const outcomes = await executeSingleModelSuiteCases(
+      ["first", "cancelled-a", "cancelled-b"].map((caseId) => ({ taskId: "logic", caseId })),
+      async (challenge) => {
+        executed.push(challenge.caseId);
+        allowed = false;
+        return { status: "completed", runId: `run-${challenge.caseId}`, attemptId: `attempt-${challenge.caseId}`, objectivePassed: true, value: challenge.caseId };
+      },
+      async (_challenge, value) => { persisted.push(value); },
+      () => allowed,
+    );
+
+    expect(executed).toEqual(["first"]);
+    expect(persisted).toEqual(["first"]);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["completed", "cancelled", "cancelled"]);
+    expect(outcomes.slice(1)).toEqual([
+      { taskId: "logic", caseId: "cancelled-a", status: "cancelled", runId: null, attemptId: null, objectivePassed: null },
+      { taskId: "logic", caseId: "cancelled-b", status: "cancelled", runId: null, attemptId: null, objectivePassed: null },
+    ]);
+  });
 });

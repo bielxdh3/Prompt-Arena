@@ -4,11 +4,13 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   executeRunOnce,
+  cancelRunOnce,
   isDesktopEnvironment,
   readBenchmarkVersion,
   readBenchmarkVersions,
   readArenaSummaries,
   readAttemptResponse,
+  readBlindEvaluation,
   readLiveProfileModelIdentity,
   readProfileRevisions,
   readRoadmapRecords,
@@ -25,6 +27,7 @@ import {
   type RoadmapRecord,
   type RunRecord,
   type PersistedExecution,
+  type RunPlan,
 } from "./bridge";
 import { buildRunPlan } from "./run-plan";
 import { caseOptions, parseArenaDocument, taskOptions, versionOptions, type ArenaDocument } from "./arena-ui";
@@ -35,13 +38,16 @@ import {
 } from "./single-model-benchmark";
 import { buildSingleModelSuitePayload, executeSingleModelSuiteCases, singleModelSuiteRecord, type SingleModelSuitePayload } from "./single-model-suite";
 import { buildPerformanceRecord, performanceEvidenceFromExecution, type MetricEvidence } from "./performance-lab";
-import { buildHistoricalRegressionExport, compareHistoricalRuns, compareRepeatedHistoricalRuns, REPEATED_METRIC_CONFIDENCE_LEVEL, type HistoricalRegression, type HistoricalSource, type RepeatedRunHistoricalRegression } from "./historical-regression";
+import { buildHistoricalRegressionExport, compareHistoricalRuns, compareRepeatedHistoricalRuns, REPEATED_METRIC_CONFIDENCE_LEVEL, type HistoricalRegression, type HistoricalSource, type HistoricalSourceReference, type RepeatedRunHistoricalRegression } from "./historical-regression";
 import { computeGlobalAndCategoryRatings, isRatingSet, ratingOutcomesFromArenaSummaries, type ModelRating, type RatingRuleVersion, type RatingSet, type RatingUncertaintyMethod } from "./model-ratings";
 import { executeRobustnessVariants, generatePerturbations, isEffectivePerturbation, scoreRobustness, type PerturbationType, type RobustnessResult, type RobustnessVariantOutcome } from "./robustness-arena";
 import { compareRobustnessHistory, exportRobustnessHistoryComparison, type RobustnessHistoryComparison } from "./robustness-history";
 import { canReproRunWithLocalIdentity, compareReproLocalIdentity, decodeReproBenchmarkDocumentChunks, encodeReproBenchmarkDocumentChunks, exportReproBundle, importReproBundle, matchesReproSource, reproModelArtifactFromProfile, reproRunRequest, verifyReproBenchmarkSnapshot, MAX_REPRO_BUNDLE_BYTES, ReproBundleImportError, type ReproBundleDifference, type ReproIdentityDifference, type ReproRunRequest } from "./repro-bundle";
 import { AccessibleListbox } from "./accessible-listbox";
 import { formatLocaleDate, formatLocaleNumber, formatLocalePercent, formatMessage, translate } from "./i18n";
+import { createRunCancellationController } from "./run-cancellation";
+import { arenaSummaryIdentityRevealed } from "./arena-summary-visibility";
+import { historicalRegressionSourcesVisible } from "./historical-regression-visibility";
 
 type SurfaceState =
   | { status: "loading" }
@@ -83,6 +89,7 @@ function isUsableArenaSummary(value: unknown): value is ArenaSummaryRecord {
     && typeof record.caseId === "string" && record.caseId.length > 0
     && typeof record.contentHash === "string" && /^[a-f0-9]{64}$/iu.test(record.contentHash)
     && typeof record.createdAt === "string"
+    && (record.blind === undefined || typeof record.blind === "boolean")
     && (record.arenaWallTimeMs === undefined || finiteOrNull(record.arenaWallTimeMs))
     && summary !== null && typeof summary === "object" && !Array.isArray(summary)
     && Array.isArray(competitors) && competitors.length <= 8 && competitors.every((item) => item !== null && typeof item === "object" && !Array.isArray(item))
@@ -117,6 +124,20 @@ function resolveHistoricalSelection(
   }
 }
 
+function findHistoricalSourceReference(
+  sourceKind: HistoricalSourceReference["sourceKind"],
+  sourceId: string,
+  records: RoadmapRecord[],
+  arenaSummaries: ArenaSummaryRecord[],
+): HistoricalSourceReference | null {
+  if (sourceKind === "arena_summary") {
+    const source = arenaSummaries.find((item) => item.arenaId === sourceId);
+    return source ? { sourceKind, sourceId, contentHash: source.contentHash } : null;
+  }
+  const source = records.find((item) => item.kind === "single_model_benchmark" && item.payload.runId === sourceId);
+  return source ? { sourceKind, sourceId, contentHash: source.contentHash } : null;
+}
+
 let fallbackIdSequence = 0;
 function newId(prefix: string): string {
   return `${prefix}-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${(++fallbackIdSequence).toString(36)}`}`;
@@ -132,6 +153,7 @@ function asAttemptRecord(execution: PersistedExecution): AttemptRecord {
 
 export function RoadmapFeaturesView() {
   const [state, setState] = useState<SurfaceState>(() => isDesktopEnvironment() ? { status: "loading" } : { status: "preview" });
+  const [revealedArenaIds, setRevealedArenaIds] = useState<Set<string>>(() => new Set());
   const [version, setVersion] = useState<BenchmarkVersion | null>(null);
   const [document, setDocument] = useState<ArenaDocument | null>(null);
   const [versionId, setVersionId] = useState("");
@@ -140,9 +162,12 @@ export function RoadmapFeaturesView() {
   const [caseId, setCaseId] = useState("");
   const [busy, setBusy] = useState(false);
   const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null);
+  const [cancelPending, setCancelPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [single, setSingle] = useState<SingleModelBenchmarkPayload | null>(null);
+  const cancellationRef = useRef<ReturnType<typeof createRunCancellationController> | null>(null);
+  if (cancellationRef.current === null) cancellationRef.current = createRunCancellationController();
   const [performanceRunId, setPerformanceRunId] = useState("");
   const [baselineId, setBaselineId] = useState("");
   const [candidateId, setCandidateId] = useState("");
@@ -192,6 +217,25 @@ export function RoadmapFeaturesView() {
   }
 
   useEffect(() => { void refresh(); }, []);
+
+  useEffect(() => {
+    if (state.status !== "ready") {
+      setRevealedArenaIds(new Set());
+      return;
+    }
+    let active = true;
+    const explicitlyNonBlind = state.summaries.filter((summary) => summary.blind === false).map((summary) => summary.arenaId);
+    void Promise.all(state.summaries
+      .filter((summary) => summary.blind !== false)
+      .map(async (summary) => await arenaSummaryIdentityRevealed(summary, readBlindEvaluation) ? summary.arenaId : null))
+      .then((ids) => {
+        if (active) setRevealedArenaIds(new Set([...explicitlyNonBlind, ...ids.filter((id): id is string => id !== null)]));
+      })
+      .catch(() => {
+        if (active) setRevealedArenaIds(new Set(explicitlyNonBlind));
+      });
+    return () => { active = false; };
+  }, [state]);
 
   useEffect(() => () => {
     if (bundleDownloadUrl) URL.revokeObjectURL(bundleDownloadUrl);
@@ -274,7 +318,10 @@ export function RoadmapFeaturesView() {
     value: payload.runId,
     label: `${displayName(payload.profileRevision.model, "Model")} / ${numberedName("Run", payload.runId, singlePayloads.map((item) => item.runId))}`,
   }));
-  const comparableArenaSummaries = state.status === "ready" ? state.summaries.filter(isUsableArenaSummary) : [];
+  const revealedArenaSummaries = useMemo(() => state.status === "ready"
+    ? state.summaries.filter((summary) => summary.blind === false || revealedArenaIds.has(summary.arenaId))
+    : [], [state, revealedArenaIds]);
+  const comparableArenaSummaries = useMemo(() => revealedArenaSummaries.filter(isUsableArenaSummary), [revealedArenaSummaries]);
   const historicalRunOptions = [
     ...singlePayloads.map((payload) => ({
       value: encodeHistoricalSelection("single_model_benchmark", payload.runId),
@@ -282,33 +329,39 @@ export function RoadmapFeaturesView() {
     })),
     ...comparableArenaSummaries.map((summary) => ({
       value: encodeHistoricalSelection("arena_summary", summary.arenaId),
-      label: `${numberedName("Arena", summary.arenaId, comparableArenaSummaries.map((item) => item.arenaId))} / ${displayName(summary.taskId, "Task")} / ${displayName(summary.caseId, "Case")} / ${formatLocaleDate(summary.createdAt)}`,
+      label: `${translate("Whole Arena run")} / ${numberedName("Arena", summary.arenaId, comparableArenaSummaries.map((item) => item.arenaId))} / ${displayName(summary.taskId, "Task")} / ${displayName(summary.caseId, "Case")} / ${formatLocaleDate(summary.createdAt)}`,
     })),
   ];
   const repeatedRunGroupsOverlap = baselineRunIds.some((runId) => candidateRunIds.includes(runId));
 
   const ratings = useMemo<RatingSet | null>(() => {
-    if (state.status !== "ready") return null;
-    const outcomes = ratingOutcomesFromArenaSummaries(state.summaries);
+    const outcomes = ratingOutcomesFromArenaSummaries(revealedArenaSummaries);
     if (outcomes.length === 0) return null;
     const sourceClusters = new Set(outcomes.map((outcome) => outcome.clusterId).filter((value): value is string => typeof value === "string"));
-    const sourcePopulation = [...new Map(state.summaries
+    const sourcePopulation = [...new Map(revealedArenaSummaries
       .filter((summary) => sourceClusters.has(`arena-summary:${summary.contentHash}`))
       .map((summary) => [`${summary.arenaId}:${summary.contentHash}`, { arenaId: summary.arenaId, contentHash: summary.contentHash }] as const))
       .values()]
       .sort((left, right) => left.arenaId.localeCompare(right.arenaId) || left.contentHash.localeCompare(right.contentHash));
-    return { ...computeGlobalAndCategoryRatings(outcomes, undefined, ratingRuleVersion), sourcePopulation };
-  }, [state, ratingRuleVersion]);
+    return { ...computeGlobalAndCategoryRatings(outcomes, undefined, ratingRuleVersion), sourcePopulation, verificationStatus: "unverified" as const };
+  }, [revealedArenaSummaries, ratingRuleVersion]);
   const ratingHistory = useMemo(() => state.status === "ready"
-    ? state.records.filter((record) => record.kind === "model_ratings" && isRatingSet(record.payload)).map((record) => ({ recordId: record.recordId, payload: record.payload as unknown as RatingSet })).sort((left, right) => right.payload.createdAt.localeCompare(left.payload.createdAt))
-    : [], [state]);
-  const regressionHistory = useMemo(() => state.status === "ready"
-    ? state.records.filter((record) => record.kind === "historical_regression" && (isHistoricalRegression(record.payload) || isRepeatedHistoricalRegression(record.payload))).map((record) => ({
+    ? state.records.filter((record) => {
+      if (record.kind !== "model_ratings" || !isRatingSet(record.payload)) return false;
+      const sourcePopulation = record.payload.sourcePopulation;
+      return Array.isArray(sourcePopulation) && sourcePopulation.length > 0 && sourcePopulation.every((source) =>
+        revealedArenaSummaries.some((summary) => summary.arenaId === source.arenaId && summary.contentHash === source.contentHash));
+    }).map((record) => ({ recordId: record.recordId, payload: record.payload as unknown as RatingSet })).sort((left, right) => right.payload.createdAt.localeCompare(left.payload.createdAt))
+    : [], [state, revealedArenaSummaries]);
+  const regressionHistory = useMemo(() => {
+    if (state.status !== "ready") return [];
+    return state.records.filter((record) => record.kind === "historical_regression" && (isHistoricalRegression(record.payload) || isRepeatedHistoricalRegression(record.payload))).map((record) => ({
       recordId: record.recordId,
       createdAt: record.createdAt,
       comparison: record.payload as unknown as HistoricalRegression | RepeatedRunHistoricalRegression,
-    })).sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    : [], [state]);
+    })).filter(({ comparison }) => historicalRegressionSourcesVisible(comparison, state.records, comparableArenaSummaries))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }, [state, comparableArenaSummaries]);
   const robustnessHistory = useMemo(() => state.status === "ready"
     ? state.records.filter((record) => record.kind === "robustness_arena" && isRobustnessResult(record.payload)).map((record) => ({
       recordId: record.recordId,
@@ -332,6 +385,31 @@ export function RoadmapFeaturesView() {
         : activeOperation.kind === "suite" ? activeOperation.completed === 0 ? translate("Running benchmark suite") : formatMessage("Benchmark case {completed} of {total}", activeOperation)
           : activeOperation.kind === "robustness_baseline" ? translate("Running robustness baseline")
             : formatMessage("Running robustness variant {completed} of {total}", activeOperation);
+  const cancellableOperation = activeOperation !== null && activeOperation.kind !== "repro";
+
+  function beginCancellableOperation() {
+    cancellationRef.current?.begin();
+    setCancelPending(false);
+  }
+
+  async function executeTrackedRun(plan: RunPlan): Promise<PersistedExecution> {
+    const cancellation = cancellationRef.current;
+    cancellation?.setActive(plan.runId);
+    try {
+      return await executeRunOnce(plan);
+    } finally {
+      cancellation?.clearActive(plan.runId);
+    }
+  }
+
+  async function requestCancel() {
+    setCancelPending(true);
+    const result = await cancellationRef.current?.request(cancelRunOnce);
+    if (result === "queued") setNotice(translate("Queued samples will be skipped; no run is active yet."));
+    else if (result === "requested") setNotice(translate("Cancellation requested. The model service may continue inference."));
+    else if (result === "already_finished") setNotice(translate("The active request had already finished; queued samples will be skipped."));
+    else if (result === "failed") setNotice(translate("The active request could not be stopped; queued samples will be skipped."));
+  }
 
   async function persistRatings() {
     if (!ratings) {
@@ -362,6 +440,7 @@ export function RoadmapFeaturesView() {
     }
     const sourcePrompt = [task.prompt.trim(), sourceCase.prompt?.trim() ?? null].filter(Boolean).join("\n\n");
     const variants = generatePerturbations(sourcePrompt, sourceCase.expected, version.summary.versionId, 1, ["paraphrase", "instruction_reorder", "variable_rename", "formatting_variation", "concise_wording", "verbose_wording", "irrelevant_noise"] as PerturbationType[]);
+    beginCancellableOperation();
     setBusy(true);
     setActiveOperation({ kind: "robustness_baseline" });
     setNotice(null);
@@ -374,11 +453,12 @@ export function RoadmapFeaturesView() {
       let baseAttemptId: string | undefined;
       let basePassed: boolean | null = null;
       let baseStatus: "completed" | "failed" | "cancelled" | "unavailable" = "unavailable";
+      let baseSourceContentHash: string | undefined;
       let baseEvidenceSaved: boolean | undefined;
       let baseFailure: string | null = null;
-      if (basePlan.executionBoundary.status === "available") {
+      if (basePlan.executionBoundary.status === "available" && cancellationRef.current?.shouldContinue()) {
         try {
-          const baseExecution = await executeRunOnce(basePlan);
+          const baseExecution = await executeTrackedRun(basePlan);
           baseRunId = baseExecution.run.runId;
           baseAttemptId = baseExecution.attempt.attemptId;
           baseStatus = baseExecution.attempt.status === "completed" ? "completed" : baseExecution.attempt.status === "cancelled" ? "cancelled" : "failed";
@@ -388,7 +468,8 @@ export function RoadmapFeaturesView() {
             : null;
           basePayload = buildSingleModelBenchmarkPayload({ run: baseExecution.run, attempt: baseExecution.attempt, profile, execution: baseExecution, performance: performanceEvidenceFromExecution(baseExecution), benchmarkVersionId: version.summary.versionId, benchmarkContentHash: version.summary.contentHash, taskId, caseId, hardware });
           try {
-            await saveRoadmapRecord(singleModelRecord(basePayload));
+            const savedSource = await saveRoadmapRecord(singleModelRecord(basePayload));
+            baseSourceContentHash = savedSource.record.contentHash;
             await saveRoadmapRecord(buildPerformanceRecord(basePayload));
             baseEvidenceSaved = true;
           } catch (error: unknown) {
@@ -399,6 +480,8 @@ export function RoadmapFeaturesView() {
           baseStatus = "failed";
           baseFailure = error instanceof Error ? error.message : String(error);
         }
+      } else if (!cancellationRef.current?.shouldContinue()) {
+        baseStatus = "cancelled";
       } else {
         baseFailure = basePlan.executionBoundary.reason ?? translate("The selected case is unavailable in this environment.");
       }
@@ -426,7 +509,7 @@ export function RoadmapFeaturesView() {
           if (plan.generation.prompt !== variant.prompt) throw new Error("The generated variant does not match its typed transformation request.");
           if (plan.executionBoundary.status !== "available") return { status: "unavailable", passed: null };
           if (!isEffectivePerturbation(variant, plan.generation.prompt ?? "", basePlan.generation.prompt ?? "")) return { status: "unavailable", passed: null };
-          const execution = await executeRunOnce(plan);
+          const execution = await executeTrackedRun(plan);
           const status = execution.attempt.status === "completed" ? "completed" : execution.attempt.status === "cancelled" ? "cancelled" : "failed";
           const objective = execution.attempt.result?.score;
           const passed = objective && typeof objective === "object" && !Array.isArray(objective) && typeof (objective as Record<string, unknown>).passed === "boolean"
@@ -436,11 +519,17 @@ export function RoadmapFeaturesView() {
           return { status, passed, runId: execution.run.runId, attemptId: execution.attempt.attemptId, value: payload };
         },
         async (_variant, payload) => {
-          await saveRoadmapRecord(singleModelRecord(payload));
-          await saveRoadmapRecord(buildPerformanceRecord(payload));
+          const savedSource = await saveRoadmapRecord(singleModelRecord(payload));
+          try {
+            await saveRoadmapRecord(buildPerformanceRecord(payload));
+          } catch {
+            return { sourceContentHash: savedSource.record.contentHash, errorCode: "evidence_save_failed" };
+          }
+          return savedSource.record.contentHash;
         },
+        () => cancellationRef.current?.shouldContinue() ?? false,
       );
-      const result = scoreRobustness(basePassed, outcomes, undefined, { taskId, caseId, profileRevisionId: profile.profileRevisionId, baseRunId, baseAttemptId, baseEvidenceSaved, baseStatus });
+      const result = scoreRobustness(basePassed, outcomes, undefined, { taskId, caseId, profileRevisionId: profile.profileRevisionId, baseRunId, baseAttemptId, baseSourceContentHash, baseEvidenceSaved, baseStatus });
       setSingle(basePayload);
       let recordId: string;
       try {
@@ -468,6 +557,7 @@ export function RoadmapFeaturesView() {
     } finally {
       setBusy(false);
       setActiveOperation(null);
+      setCancelPending(false);
     }
   }
 
@@ -732,7 +822,16 @@ export function RoadmapFeaturesView() {
       setNotice(translate("Select two different immutable runs."));
       return;
     }
-    const result = compareHistoricalRuns(baseline, candidate);
+    const comparison = compareHistoricalRuns(baseline, candidate);
+    const sourceReferences = [
+      findHistoricalSourceReference(comparison.baselineSourceKind ?? "single_model_benchmark", comparison.baselineId, state.status === "ready" ? state.records : [], comparableArenaSummaries),
+      findHistoricalSourceReference(comparison.candidateSourceKind ?? "single_model_benchmark", comparison.candidateId, state.status === "ready" ? state.records : [], comparableArenaSummaries),
+    ];
+    if (sourceReferences.some((reference) => reference === null)) {
+      setNotice(translate("The comparison source records are not available locally."));
+      return;
+    }
+    const result: HistoricalRegression = { ...comparison, verificationStatus: "unverified", sourceReferences: sourceReferences as HistoricalSourceReference[] };
     setRegression(result);
     setRepeatedRegression(null);
     try {
@@ -812,7 +911,14 @@ export function RoadmapFeaturesView() {
       setRepeatedRegression(null);
       return;
     }
-    const result = compareRepeatedHistoricalRuns(baseline, candidate);
+    const comparison = compareRepeatedHistoricalRuns(baseline, candidate);
+    const sourceReferences = [...baselineRunIds, ...candidateRunIds].map((runId) => findHistoricalSourceReference("single_model_benchmark", runId, state.status === "ready" ? state.records : [], []));
+    if (sourceReferences.some((reference) => reference === null)) {
+      setNotice(translate("The comparison source records are not available locally."));
+      setRepeatedRegression(null);
+      return;
+    }
+    const result: RepeatedRunHistoricalRegression = { ...comparison, verificationStatus: "unverified", sourceReferences: sourceReferences as HistoricalSourceReference[] };
     setRepeatedRegression(result);
     setRegression(null);
     try {
@@ -859,21 +965,24 @@ export function RoadmapFeaturesView() {
       return;
     }
     setBusy(true);
+    beginCancellableOperation();
     setActiveOperation({ kind: "single" });
     setNotice(null);
     setErrorDetail(null);
     try {
       const hardware = await readHardwareSnapshot().catch(() => null);
-      const execution = await executeRunOnce(buildRunPlan({
+      const plan = buildRunPlan({
         runId: newId("single"),
         version,
         taskId,
         caseId,
         profileRevision: profile,
         metadata: { mode: "single_model_benchmark", featureVersion: 1 },
-      }));
+      });
+      if (!cancellationRef.current?.shouldContinue()) return;
+      const execution = await executeTrackedRun(plan);
       await saveSingle(execution, profile, taskId, caseId, hardware);
-      setNotice(translate("Single-model evidence saved immutably."));
+      setNotice(execution.attempt.status === "cancelled" ? translate("Cancellation recorded. Queued samples were skipped; completed evidence was retained.") : translate("Single-model evidence saved immutably."));
       await refresh();
     } catch (error: unknown) {
       setNotice(translate("The single-model benchmark could not be completed."));
@@ -881,6 +990,7 @@ export function RoadmapFeaturesView() {
     } finally {
       setBusy(false);
       setActiveOperation(null);
+      setCancelPending(false);
     }
   }
 
@@ -900,6 +1010,7 @@ export function RoadmapFeaturesView() {
       return;
     }
     setBusy(true);
+    beginCancellableOperation();
     setActiveOperation({ kind: "suite", completed: 0, total: challenges.length });
     setNotice(null);
     setErrorDetail(null);
@@ -922,7 +1033,7 @@ export function RoadmapFeaturesView() {
             metadata: { mode: "single_model_benchmark", suite: true, suiteId, featureVersion: 1 },
           });
           if (plan.executionBoundary.status !== "available") return { status: "unavailable", runId: null } as const;
-          const execution = await executeRunOnce(plan);
+          const execution = await executeTrackedRun(plan);
           const status = execution.attempt.status === "completed"
             ? "completed"
             : execution.attempt.status === "cancelled" ? "cancelled" : "failed";
@@ -934,7 +1045,8 @@ export function RoadmapFeaturesView() {
         },
         async (challenge, execution) => {
           lastPayload = await saveSingle(execution, profile, challenge.taskId, challenge.caseId, hardware);
-        });
+        },
+        () => cancellationRef.current?.shouldContinue() ?? false);
       const suitePayload = buildSingleModelSuitePayload({
         suiteId,
         benchmarkVersionId: version.summary.versionId,
@@ -953,6 +1065,7 @@ export function RoadmapFeaturesView() {
     } finally {
       setBusy(false);
       setActiveOperation(null);
+      setCancelPending(false);
     }
   }
 
@@ -977,7 +1090,7 @@ export function RoadmapFeaturesView() {
           <FieldSelect id="insights-task" label={translate("Task")} value={taskId} options={taskChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setTaskId} />
           <FieldSelect id="insights-case" label={translate("Case")} value={caseId} options={caseChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setCaseId} />
         </div>
-        <div className="arena-actions"><button className="primary-button" type="button" onClick={() => void runSingle()} disabled={busy}>{activeOperation?.kind === "single" ? translate("Running…") : translate("Run single benchmark")}</button><button className="secondary-button" type="button" onClick={() => void runSuite()} disabled={busy}>{activeOperation?.kind === "suite" ? translate("Running…") : translate("Run full benchmark suite")}</button></div>
+        <div className="arena-actions"><button className="primary-button" type="button" onClick={() => void runSingle()} disabled={busy}>{activeOperation?.kind === "single" ? translate("Running…") : translate("Run single benchmark")}</button><button className="secondary-button" type="button" onClick={() => void runSuite()} disabled={busy}>{activeOperation?.kind === "suite" ? translate("Running…") : translate("Run full benchmark suite")}</button>{cancellableOperation && (activeOperation?.kind === "single" || activeOperation?.kind === "suite") && <button className="secondary-button" type="button" aria-label={translate("Cancel run")} onClick={() => void requestCancel()} disabled={cancelPending}>{cancelPending ? translate("Cancelling…") : translate("Cancel run")}</button>}</div>
         {activeOperationLabel && activeOperation?.kind !== "robustness_baseline" && activeOperation?.kind !== "robustness_variants" && <p className="field-help" role="status" aria-live="polite" aria-atomic="true">{activeOperationLabel}</p>}
         {single && <EvidenceSummary payload={single} />}
       </section>
@@ -1051,7 +1164,7 @@ export function RoadmapFeaturesView() {
         <p className="field-help">{translate("Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.")}</p>
         <p className="field-help">{translate("Unverified app-calculated snapshot. The local store preserves it immutably but does not verify it against source evidence.")}</p>
         <p className="field-help">{translate("Robustness comparison exports include prompt variants and saved results. Review the file before sharing.")}</p>
-        <button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>{activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants" ? translate("Running…") : translate("Run robustness variants")}</button>
+        <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>{activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants" ? translate("Running…") : translate("Run robustness variants")}</button>{cancellableOperation && (activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants") && <button className="secondary-button" type="button" aria-label={translate("Cancel run")} onClick={() => void requestCancel()} disabled={cancelPending}>{cancelPending ? translate("Cancelling…") : translate("Cancel run")}</button>}</div>
         {(activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants") && activeOperationLabel && <p className="field-help" role="status" aria-live="polite" aria-atomic="true">{activeOperationLabel}</p>}
         <p className="field-help">{translate("Deterministic prompt transformations do not prove semantic equivalence. The original benchmark verifier and expected-answer contract remain authoritative.")}</p>
         {robustnessHistory.length === 0 ? <StateMessage title={translate("No saved robustness results yet")} description={translate("Run robustness variants to save an immutable result that can be reopened here.")} /> : <>
@@ -1125,6 +1238,7 @@ function isRobustnessResult(value: Record<string, unknown>): value is Record<str
   const nullableString = (item: unknown): item is string | null => item === null || typeof item === "string";
   return value.schemaVersion === 1
     && value.kind === "robustness_arena"
+    && (value.verificationStatus === undefined || value.verificationStatus === "unverified")
     && typeof value.createdAt === "string" && value.createdAt.length <= 64
     && typeof value.sourceTaskVersion === "string" && value.sourceTaskVersion.length <= 128
     && nullableString(value.taskId)
@@ -1163,6 +1277,7 @@ function isHistoricalRegression(value: Record<string, unknown>): value is Record
     : null;
   return value.schemaVersion === 1
     && value.kind === "historical_regression"
+    && (value.verificationStatus === undefined || value.verificationStatus === "unverified")
     && typeof value.baselineId === "string"
     && typeof value.candidateId === "string"
     && (value.baselineSourceKind === undefined || ["single_model_benchmark", "arena_summary"].includes(String(value.baselineSourceKind)))
@@ -1199,6 +1314,7 @@ function isRepeatedHistoricalRegression(value: Record<string, unknown>): value i
   const numericOrNull = (item: unknown): item is number | null => item === null || (typeof item === "number" && Number.isFinite(item));
   return value.schemaVersion === 1
     && value.kind === "repeated_run_historical_regression"
+    && (value.verificationStatus === undefined || value.verificationStatus === "unverified")
     && validRunIds(value.baselineRunIds)
     && validRunIds(value.candidateRunIds)
     && new Set([...value.baselineRunIds, ...value.candidateRunIds]).size === value.baselineRunIds.length + value.candidateRunIds.length

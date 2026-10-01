@@ -260,6 +260,8 @@ pub struct ArenaExecutionEvidence {
 #[serde(rename_all = "camelCase")]
 pub struct ArenaSummaryPayload {
     pub arena_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blind: Option<bool>,
     pub benchmark_version_id: String,
     pub task_id: String,
     pub case_id: String,
@@ -1173,16 +1175,7 @@ impl StorageService {
         rows.map(|row| {
             let (arena_id, content_hash, document_json, created_at) =
                 row.map_err(|_| StorageError::DatabaseFailure)?;
-            let payload: ArenaSummaryPayload =
-                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
-            if payload.arena_id != arena_id {
-                return Err(StorageError::DatabaseFailure);
-            }
-            Ok(ArenaSummaryRecord {
-                payload,
-                content_hash,
-                created_at,
-            })
+            parse_arena_summary_record(&arena_id, content_hash, &document_json, created_at)
         })
         .collect()
     }
@@ -1934,6 +1927,9 @@ impl StorageService {
             "single_model_benchmark" => self.validate_single_model_benchmark_sources(request),
             "single_model_suite" => self.validate_single_model_suite_sources(request),
             "performance_lab" => self.validate_performance_record_sources(request),
+            "historical_regression" => self.validate_historical_regression_sources(request),
+            "model_ratings" => self.validate_model_ratings_sources(request),
+            "robustness_arena" => self.validate_robustness_sources(request),
             _ => Ok(()),
         }
     }
@@ -2192,6 +2188,437 @@ impl StorageService {
         Ok(())
     }
 
+    fn validate_derived_source_reference(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+        source_hash: &str,
+    ) -> Result<(), StorageError> {
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if source_hash.len() != 64 || !source_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        match source_kind {
+            "single_model_benchmark" => {
+                let record_id = format!("benchmark-{source_id}");
+                validate_record_id(&record_id).map_err(|_| invalid())?;
+                let source = self
+                    .get_roadmap_record(&record_id)?
+                    .filter(|record| record.kind == "single_model_benchmark")
+                    .ok_or_else(invalid)?;
+                if source.content_hash != source_hash
+                    || source.payload.get("runId").and_then(Value::as_str) != Some(source_id)
+                {
+                    return Err(invalid());
+                }
+            }
+            "arena_summary" => {
+                validate_record_id(source_id).map_err(|_| invalid())?;
+                let source = self.get_arena_summary(source_id)?.ok_or_else(invalid)?;
+                if source.content_hash != source_hash {
+                    return Err(invalid());
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+
+    fn validate_historical_regression_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("verificationStatus").and_then(Value::as_str) != Some("unverified")
+            || payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+        {
+            return Err(invalid());
+        }
+        let references = payload
+            .get("sourceReferences")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        match payload.get("kind").and_then(Value::as_str) {
+            Some("historical_regression") => {
+                if references.len() != 2
+                    || payload.get("metrics").and_then(Value::as_array).is_none()
+                {
+                    return Err(invalid());
+                }
+                let mut expected = Vec::with_capacity(2);
+                for (id_key, kind_key) in [
+                    ("baselineId", "baselineSourceKind"),
+                    ("candidateId", "candidateSourceKind"),
+                ] {
+                    let source_id = payload
+                        .get(id_key)
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid)?;
+                    let source_kind = payload
+                        .get(kind_key)
+                        .and_then(Value::as_str)
+                        .unwrap_or("single_model_benchmark");
+                    if !matches!(source_kind, "single_model_benchmark" | "arena_summary") {
+                        return Err(invalid());
+                    }
+                    expected.push((source_kind, source_id));
+                }
+                if expected[0] == expected[1] {
+                    return Err(invalid());
+                }
+                for (source_kind, source_id) in expected {
+                    let reference = references
+                        .iter()
+                        .find(|reference| {
+                            reference.get("sourceKind").and_then(Value::as_str) == Some(source_kind)
+                                && reference.get("sourceId").and_then(Value::as_str)
+                                    == Some(source_id)
+                        })
+                        .ok_or_else(invalid)?;
+                    let source_hash = reference
+                        .get("contentHash")
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid)?;
+                    self.validate_derived_source_reference(source_kind, source_id, source_hash)?;
+                }
+            }
+            Some("repeated_run_historical_regression") => {
+                let baseline = payload
+                    .get("baselineRunIds")
+                    .and_then(Value::as_array)
+                    .ok_or_else(invalid)?;
+                let candidate = payload
+                    .get("candidateRunIds")
+                    .and_then(Value::as_array)
+                    .ok_or_else(invalid)?;
+                if baseline.len() < 5
+                    || candidate.len() < 5
+                    || references.len() != baseline.len() + candidate.len()
+                    || payload.get("metrics").and_then(Value::as_array).is_none()
+                {
+                    return Err(invalid());
+                }
+                let expected_ids: Vec<&str> = baseline
+                    .iter()
+                    .chain(candidate)
+                    .map(|item| item.as_str().ok_or_else(invalid))
+                    .collect::<Result<_, _>>()?;
+                let unique_ids: std::collections::HashSet<_> =
+                    expected_ids.iter().copied().collect();
+                if unique_ids.len() != expected_ids.len() {
+                    return Err(invalid());
+                }
+                for source_id in expected_ids {
+                    let reference = references
+                        .iter()
+                        .find(|reference| {
+                            reference.get("sourceKind").and_then(Value::as_str)
+                                == Some("single_model_benchmark")
+                                && reference.get("sourceId").and_then(Value::as_str)
+                                    == Some(source_id)
+                        })
+                        .ok_or_else(invalid)?;
+                    let source_hash = reference
+                        .get("contentHash")
+                        .and_then(Value::as_str)
+                        .ok_or_else(invalid)?;
+                    self.validate_derived_source_reference(
+                        "single_model_benchmark",
+                        source_id,
+                        source_hash,
+                    )?;
+                }
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+
+    fn validate_model_ratings_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+            || payload.get("kind").and_then(Value::as_str) != Some("model_ratings")
+            || payload.get("verificationStatus").and_then(Value::as_str) != Some("unverified")
+        {
+            return Err(invalid());
+        }
+        let population = payload
+            .get("sourcePopulation")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        let ratings = payload
+            .get("ratings")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if population.is_empty() || population.len() > 4096 || ratings.len() > 1000 {
+            return Err(invalid());
+        }
+        let mut source_ids = std::collections::HashSet::new();
+        let mut competitor_ids = std::collections::HashSet::new();
+        for source in population {
+            let arena_id = source
+                .get("arenaId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let content_hash = source
+                .get("contentHash")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if !source_ids.insert(arena_id.to_owned()) {
+                return Err(invalid());
+            }
+            self.validate_derived_source_reference("arena_summary", arena_id, content_hash)?;
+            let arena = self.get_arena_summary(arena_id)?.ok_or_else(invalid)?;
+            for competitor in &arena.payload.competitors {
+                if let Some(competitor_id) = competitor.get("competitorId").and_then(Value::as_str)
+                {
+                    competitor_ids.insert(competitor_id.to_owned());
+                }
+            }
+        }
+        for rating in ratings {
+            let competitor_id = rating
+                .get("competitorId")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if !competitor_ids.contains(competitor_id) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_robustness_sources(
+        &self,
+        request: &RoadmapRecordRequest,
+    ) -> Result<(), StorageError> {
+        let payload = &request.payload;
+        let invalid = || StorageError::AdvancedArtifactInvalid;
+        if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+            || payload.get("kind").and_then(Value::as_str) != Some("robustness_arena")
+            || payload.get("verificationStatus").and_then(Value::as_str) != Some("unverified")
+        {
+            return Err(invalid());
+        }
+        let source_task_version = payload
+            .get("sourceTaskVersion")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let prompt_variant_for = |variant: &Value| -> Result<Value, StorageError> {
+            let version = variant
+                .get("version")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let transformation_type = variant
+                .get("transformationType")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let seed = variant
+                .get("seed")
+                .and_then(Value::as_u64)
+                .filter(|seed| *seed <= u32::MAX as u64)
+                .ok_or_else(invalid)?;
+            let variant_task_version = variant
+                .get("sourceTaskVersion")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if version != "2"
+                || !matches!(
+                    transformation_type,
+                    "paraphrase"
+                        | "instruction_reorder"
+                        | "variable_rename"
+                        | "formatting_variation"
+                        | "concise_wording"
+                        | "verbose_wording"
+                        | "irrelevant_noise"
+                )
+                || variant_task_version != source_task_version
+            {
+                return Err(invalid());
+            }
+            Ok(serde_json::json!({
+                "version": version,
+                "transformationType": transformation_type,
+                "seed": seed,
+                "sourceTaskVersion": variant_task_version
+            }))
+        };
+        let validate_link = |run_id: &str,
+                             attempt_id: &str,
+                             content_hash: &str,
+                             expected_variant: Option<Value>|
+         -> Result<(), StorageError> {
+            self.validate_derived_source_reference("single_model_benchmark", run_id, content_hash)?;
+            let record = self
+                .get_roadmap_record(&format!("benchmark-{run_id}"))?
+                .ok_or_else(invalid)?;
+            let source_status = record.payload.get("status").and_then(Value::as_str);
+            let source_passed = record
+                .payload
+                .get("objective")
+                .and_then(|objective| objective.get("passed"))
+                .and_then(Value::as_bool);
+            if record
+                .payload
+                .get("attempt")
+                .and_then(|attempt| attempt.get("attemptId"))
+                .and_then(Value::as_str)
+                != Some(attempt_id)
+                || record.payload.get("taskId").and_then(Value::as_str)
+                    != payload.get("taskId").and_then(Value::as_str)
+                || record.payload.get("caseId").and_then(Value::as_str)
+                    != payload.get("caseId").and_then(Value::as_str)
+                || record
+                    .payload
+                    .get("benchmarkVersionId")
+                    .and_then(Value::as_str)
+                    != Some(source_task_version)
+                || record
+                    .payload
+                    .get("profileRevision")
+                    .and_then(|profile| profile.get("profileRevisionId"))
+                    .and_then(Value::as_str)
+                    != payload.get("profileRevisionId").and_then(Value::as_str)
+            {
+                return Err(invalid());
+            }
+            let stored_variant = record
+                .payload
+                .get("attempt")
+                .and_then(|attempt| attempt.get("effectiveConfig"))
+                .and_then(|effective_config| effective_config.get("promptVariant"));
+            if expected_variant.as_ref() != stored_variant {
+                return Err(invalid());
+            }
+            // Bind claims about linked attempts while retaining the explicit app-calculated/unverified label.
+            let is_base = payload.get("baseRunId").and_then(Value::as_str) == Some(run_id);
+            let claimed_status = if is_base {
+                payload.get("baseStatus").and_then(Value::as_str)
+            } else {
+                None
+            };
+            let claimed_passed = if is_base {
+                payload.get("basePassed").and_then(Value::as_bool)
+            } else {
+                None
+            };
+            if is_base {
+                if claimed_status != source_status || claimed_passed != source_passed {
+                    return Err(invalid());
+                }
+            } else {
+                let matching_variant = payload
+                    .get("variants")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .find(|variant| variant.get("runId").and_then(Value::as_str) == Some(run_id))
+                    .ok_or_else(invalid)?;
+                let variant_status = matching_variant
+                    .get("executionStatus")
+                    .and_then(Value::as_str);
+                let variant_passed = matching_variant.get("passed").and_then(Value::as_bool);
+                let save_failed = matching_variant.get("errorCode").and_then(Value::as_str)
+                    == Some("evidence_save_failed");
+                if variant_status != source_status
+                    || (save_failed && variant_passed.is_some())
+                    || (!save_failed && variant_passed != source_passed)
+                {
+                    return Err(invalid());
+                }
+            }
+            Ok(())
+        };
+        let base_run = payload.get("baseRunId").and_then(Value::as_str);
+        let base_attempt = payload.get("baseAttemptId").and_then(Value::as_str);
+        let base_hash = payload.get("baseSourceContentHash").and_then(Value::as_str);
+        let base_status = payload
+            .get("baseStatus")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let base_passed = payload.get("basePassed").filter(|value| !value.is_null());
+        if !matches!(
+            base_status,
+            "completed" | "failed" | "cancelled" | "unavailable"
+        ) || (base_status == "completed"
+            && (base_run.is_none() || base_attempt.is_none() || base_hash.is_none()))
+            || (base_status != "completed" && base_passed.is_some())
+            || (base_hash.is_none() && base_passed.is_some())
+        {
+            return Err(invalid());
+        }
+        if base_run.is_some() != base_attempt.is_some()
+            || (payload.get("baseEvidenceSaved").and_then(Value::as_bool) == Some(true)
+                && base_hash.is_none())
+            || (base_hash.is_some() && (base_run.is_none() || base_attempt.is_none()))
+        {
+            return Err(invalid());
+        }
+        if let (Some(run_id), Some(attempt_id), Some(content_hash)) =
+            (base_run, base_attempt, base_hash)
+        {
+            validate_link(run_id, attempt_id, content_hash, None)?;
+        }
+        let variants = payload
+            .get("variants")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if variants.len() > 7 {
+            return Err(invalid());
+        }
+        let mut linked_run_ids = std::collections::HashSet::new();
+        if let Some(run_id) = base_run {
+            linked_run_ids.insert(run_id);
+        }
+        for variant in variants {
+            let run_id = variant.get("runId").and_then(Value::as_str);
+            let attempt_id = variant.get("attemptId").and_then(Value::as_str);
+            let content_hash = variant.get("sourceContentHash").and_then(Value::as_str);
+            let save_failed =
+                variant.get("errorCode").and_then(Value::as_str) == Some("evidence_save_failed");
+            let execution_status = variant
+                .get("executionStatus")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let passed = variant.get("passed").filter(|value| !value.is_null());
+            if !matches!(
+                execution_status,
+                "completed" | "failed" | "cancelled" | "unavailable"
+            ) || (execution_status == "completed"
+                && (run_id.is_none() || attempt_id.is_none() || content_hash.is_none()))
+                || (execution_status != "completed" && passed.is_some())
+                || (run_id.is_none() && passed.is_some())
+                || (save_failed && passed.is_some())
+            {
+                return Err(invalid());
+            }
+            if run_id.is_some() != attempt_id.is_some()
+                || run_id.is_some_and(|run_id| !linked_run_ids.insert(run_id))
+                || (run_id.is_some() && content_hash.is_none() && !save_failed)
+                || (content_hash.is_some() && (run_id.is_none() || attempt_id.is_none()))
+            {
+                return Err(invalid());
+            }
+            if let (Some(run_id), Some(attempt_id), Some(content_hash)) =
+                (run_id, attempt_id, content_hash)
+            {
+                validate_link(
+                    run_id,
+                    attempt_id,
+                    content_hash,
+                    Some(prompt_variant_for(variant)?),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn validate_single_model_suite_sources(
         &self,
         request: &RoadmapRecordRequest,
@@ -2302,7 +2729,13 @@ impl StorageService {
             let attempt_id = case.get("attemptId").filter(|value| !value.is_null());
             match (run_id, attempt_id) {
                 (None, None) => {
-                    if status != "unavailable" && error_code != Some("execution_failed") {
+                    let status_without_evidence_is_valid = matches!(
+                        (status, error_code),
+                        ("unavailable", None)
+                            | ("failed", Some("execution_failed"))
+                            | ("cancelled", None)
+                    );
+                    if !status_without_evidence_is_valid {
                         return Err(invalid());
                     }
                     if case
@@ -3589,18 +4022,33 @@ fn query_arena_summary(
         .optional()
         .map_err(|_| StorageError::DatabaseFailure)?
         .map(|(content_hash, document_json, created_at)| {
-            let payload: ArenaSummaryPayload =
-                serde_json::from_str(&document_json).map_err(|_| StorageError::DatabaseFailure)?;
-            if payload.arena_id != arena_id {
-                return Err(StorageError::DatabaseFailure);
-            }
-            Ok(ArenaSummaryRecord {
-                payload,
-                content_hash,
-                created_at,
-            })
+            parse_arena_summary_record(arena_id, content_hash, &document_json, created_at)
         })
         .transpose()
+}
+
+fn parse_arena_summary_record(
+    arena_id: &str,
+    content_hash: String,
+    document_json: &str,
+    created_at: String,
+) -> Result<ArenaSummaryRecord, StorageError> {
+    let document: Value =
+        serde_json::from_str(document_json).map_err(|_| StorageError::DatabaseFailure)?;
+    let (_, computed_hash) = canonical_json_and_hash(&document)?;
+    if computed_hash != content_hash {
+        return Err(StorageError::DatabaseFailure);
+    }
+    let payload: ArenaSummaryPayload =
+        serde_json::from_value(document).map_err(|_| StorageError::DatabaseFailure)?;
+    if payload.arena_id != arena_id {
+        return Err(StorageError::DatabaseFailure);
+    }
+    Ok(ArenaSummaryRecord {
+        payload,
+        content_hash,
+        created_at,
+    })
 }
 
 fn validate_sha256(value: &str) -> Result<(), StorageError> {
@@ -3707,6 +4155,16 @@ fn validate_roadmap_record(request: &RoadmapRecordRequest) -> Result<(), Storage
     validate_record_id(&request.record_id)?;
     validate_roadmap_kind(&request.kind)?;
     if !request.payload.is_object() {
+        return Err(StorageError::AdvancedArtifactInvalid);
+    }
+    if matches!(
+        request.kind.as_str(),
+        "historical_regression" | "model_ratings" | "robustness_arena"
+    ) && request
+        .payload
+        .get("verificationStatus")
+        .is_some_and(|status| status.as_str() != Some("unverified"))
+    {
         return Err(StorageError::AdvancedArtifactInvalid);
     }
     validate_bounded_json(&request.payload, 0)?;
@@ -5180,9 +5638,64 @@ mod tests {
             service.validate_reproduction_provenance(&external_reference, "run-2"),
             Ok(())
         );
-        service
+        let (saved_reproduction, _) = service
             .save_roadmap_record(&reproduction, "110")
             .expect("matching persisted source run verifies the reproduction");
+        let mut robustness_variant_run = reproduced_run.clone();
+        robustness_variant_run.run_id = "robustness-variant-run".to_owned();
+        robustness_variant_run.started_at = "111".to_owned();
+        robustness_variant_run.attempt_ids = vec!["robustness-variant-attempt".to_owned()];
+        let mut robustness_variant_attempt = reproduced_attempt.clone();
+        robustness_variant_attempt.attempt_id = "robustness-variant-attempt".to_owned();
+        robustness_variant_attempt.run_id = robustness_variant_run.run_id.clone();
+        let robustness_variant_result = ImmutableResultReference {
+            result_id: "robustness-variant-result".to_owned(),
+            content_hash: "robustness-variant-result-hash".to_owned(),
+            artifact: ArtifactRef::new(
+                "robustness-variant-result-artifact",
+                "runs/robustness-variant-run/result.json",
+            )
+            .unwrap(),
+            score: Some(json!({"passed": true})),
+            extra: Default::default(),
+        };
+        robustness_variant_attempt.result = Some(robustness_variant_result.clone());
+        robustness_variant_attempt.effective_config.insert(
+            "promptVariant".to_owned(),
+            json!({
+                "version": "2",
+                "transformationType": "paraphrase",
+                "seed": 1,
+                "sourceTaskVersion": version.version_id
+            }),
+        );
+        service
+            .save_run(&robustness_variant_run, "111")
+            .expect("robustness variant run saves");
+        service
+            .save_attempt(&robustness_variant_attempt, "111")
+            .expect("robustness variant attempt saves");
+        service
+            .save_result_reference(
+                &robustness_variant_result,
+                &robustness_variant_attempt.attempt_id,
+                "111",
+            )
+            .expect("robustness variant result saves");
+        let mut robustness_variant_source = request.clone();
+        robustness_variant_source.record_id = "benchmark-robustness-variant-run".to_owned();
+        robustness_variant_source.payload["runId"] = json!(robustness_variant_run.run_id);
+        robustness_variant_source.payload["sourceRun"] =
+            serde_json::to_value(&robustness_variant_run).unwrap();
+        robustness_variant_source.payload["attempt"] =
+            serde_json::to_value(&robustness_variant_attempt).unwrap();
+        robustness_variant_source.payload["performance"] =
+            super::performance_evidence_from_attempt(&robustness_variant_attempt);
+        robustness_variant_source.payload["objective"] = json!({"passed": true});
+        robustness_variant_source.payload["createdAt"] = json!("2026-09-29T01:10:00Z");
+        let (saved_variant_source, _) = service
+            .save_roadmap_record(&robustness_variant_source, "111")
+            .expect("prompt-variant source record saves");
 
         assert!(service
             .list_roadmap_records(Some("performance_lab"))
@@ -5245,6 +5758,274 @@ mod tests {
                 .unwrap(),
             vec![saved_suite]
         );
+        let queued_cancellation = RoadmapRecordRequest {
+            record_id: "suite-queued-cancellation".to_owned(),
+            kind: "single_model_suite".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "single_model_suite",
+                "suiteId": "suite-queued-cancellation",
+                "benchmarkVersionId": version.version_id,
+                "profileRevision": serde_json::to_value(&profile).unwrap(),
+                "status": "failed",
+                "summary": {"total": 1, "completed": 0, "failed": 0, "cancelled": 1, "unavailable": 0, "evidenceErrors": 0},
+                "cases": [{"taskId": "task", "caseId": "case", "status": "cancelled", "runId": null, "attemptId": null, "objectivePassed": null}],
+                "startedAt": "2026-09-29T00:00:00Z",
+                "createdAt": "2026-09-29T00:01:00Z"
+            }),
+        };
+        service
+            .save_roadmap_record(&queued_cancellation, "251")
+            .expect("a queued cancellation is retained in the suite summary");
+        let mut forged_cancel_error = queued_cancellation.clone();
+        forged_cancel_error.record_id = "suite-forged-cancel-error".to_owned();
+        forged_cancel_error.payload["suiteId"] = json!("suite-forged-cancel-error");
+        forged_cancel_error.payload["cases"][0]["errorCode"] = json!("execution_failed");
+        assert_eq!(
+            service.save_roadmap_record(&forged_cancel_error, "252"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+
+        let historical = RoadmapRecordRequest {
+            record_id: "regression-local-sources".to_owned(),
+            kind: "historical_regression".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "historical_regression",
+                "baselineId": "run-1",
+                "candidateId": "run-2",
+                "baselineSourceKind": "single_model_benchmark",
+                "candidateSourceKind": "single_model_benchmark",
+                "verificationStatus": "unverified",
+                "sourceReferences": [
+                    {"sourceKind": "single_model_benchmark", "sourceId": "run-1", "contentHash": first.content_hash},
+                    {"sourceKind": "single_model_benchmark", "sourceId": "run-2", "contentHash": saved_reproduction.content_hash}
+                ],
+                "compatibility": {"compatible": true, "changedDimensions": [], "warnings": []},
+                "metrics": [],
+                "createdAt": "2026-09-29T02:00:00Z"
+            }),
+        };
+        let mut missing_derived_source = historical.clone();
+        missing_derived_source.payload["sourceReferences"][0]["sourceId"] = json!("missing-run");
+        assert_eq!(
+            service.save_roadmap_record(&missing_derived_source, "260"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismatched_derived_hash = historical.clone();
+        mismatched_derived_hash.payload["sourceReferences"][0]["contentHash"] =
+            json!("f".repeat(64));
+        assert_eq!(
+            service.save_roadmap_record(&mismatched_derived_hash, "260"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut falsely_verified = historical.clone();
+        falsely_verified.payload["verificationStatus"] = json!("verified");
+        assert_eq!(
+            service.save_roadmap_record(&falsely_verified, "260"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_historical, _) = service
+            .save_roadmap_record(&historical, "260")
+            .expect("local source links save explicitly unverified");
+
+        let source_arena = ArenaSummaryPayload {
+            arena_id: "ratings-arena".to_owned(),
+            blind: None,
+            benchmark_version_id: version.version_id.clone(),
+            task_id: "task".to_owned(),
+            case_id: "case".to_owned(),
+            repetitions: 1,
+            pack_id: None,
+            category_id: None,
+            category_name: None,
+            materialization_seed: None,
+            arena_wall_time_ms: None,
+            summary: json!({"objectivePassRate": 1.0}),
+            competitors: vec![json!({"competitorId": profile.profile_revision_id})],
+            evidence: Vec::new(),
+        };
+        let (saved_arena, _) = service
+            .save_arena_summary(&source_arena, "261")
+            .expect("rating source saves");
+        let ratings = RoadmapRecordRequest {
+            record_id: "ratings-local-sources".to_owned(),
+            kind: "model_ratings".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "model_ratings",
+                "ruleVersion": "elo-v1",
+                "verificationStatus": "unverified",
+                "sourcePopulation": [{"arenaId": "ratings-arena", "contentHash": saved_arena.content_hash}],
+                "ratings": [{"competitorId": profile.profile_revision_id, "category": null, "rating": 1000.0, "sampleCount": 1, "uncertainty": 400.0, "wins": 1, "losses": 0, "ties": 0}],
+                "createdAt": "2026-09-29T02:00:00Z"
+            }),
+        };
+        let mut missing_rating_sources = ratings.clone();
+        missing_rating_sources.payload["sourcePopulation"] = json!([]);
+        assert_eq!(
+            service.save_roadmap_record(&missing_rating_sources, "262"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismatched_rating_hash = ratings.clone();
+        mismatched_rating_hash.payload["sourcePopulation"][0]["contentHash"] =
+            json!("e".repeat(64));
+        assert_eq!(
+            service.save_roadmap_record(&mismatched_rating_hash, "262"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut fabricated_rating = ratings.clone();
+        fabricated_rating.payload["ratings"][0]["competitorId"] = json!("not-in-source");
+        assert_eq!(
+            service.save_roadmap_record(&fabricated_rating, "262"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_ratings, _) = service
+            .save_roadmap_record(&ratings, "262")
+            .expect("hash-linked ratings save explicitly unverified");
+
+        let robustness = RoadmapRecordRequest {
+            record_id: "robustness-local-sources".to_owned(),
+            kind: "robustness_arena".to_owned(),
+            payload: json!({
+                "schemaVersion": 1,
+                "kind": "robustness_arena",
+                "verificationStatus": "unverified",
+                "sourceTaskVersion": version.version_id,
+                "taskId": "task",
+                "caseId": "case",
+                "profileRevisionId": profile.profile_revision_id,
+                "basePassed": null,
+                "baseRunId": "run-1",
+                "baseAttemptId": "attempt-1",
+                "baseSourceContentHash": first.content_hash,
+                "baseEvidenceSaved": true,
+                "baseStatus": "completed",
+                "variants": [],
+                "robustnessScore": null,
+                "variance": null,
+                "failureClusters": [],
+                "createdAt": "2026-09-29T02:00:00Z"
+            }),
+        };
+        let mut missing_robustness_hash = robustness.clone();
+        missing_robustness_hash
+            .payload
+            .as_object_mut()
+            .unwrap()
+            .remove("baseSourceContentHash");
+        assert_eq!(
+            service.save_roadmap_record(&missing_robustness_hash, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut mismatched_robustness_attempt = robustness.clone();
+        mismatched_robustness_attempt.payload["baseAttemptId"] = json!("attempt-2");
+        assert_eq!(
+            service.save_roadmap_record(&mismatched_robustness_attempt, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let completed_variant = json!({
+            "version": "2",
+            "transformationType": "paraphrase",
+            "seed": 1,
+            "sourceTaskVersion": version.version_id,
+            "executionStatus": "completed",
+            "passed": true,
+            "runId": robustness_variant_run.run_id,
+            "attemptId": robustness_variant_attempt.attempt_id,
+            "sourceContentHash": saved_variant_source.content_hash
+        });
+        let mut unlinked_completed_variant = robustness.clone();
+        unlinked_completed_variant.record_id = "robustness-unlinked-completed".to_owned();
+        unlinked_completed_variant.payload["variants"] = json!([{
+            "version": "2",
+            "transformationType": "paraphrase",
+            "seed": 1,
+            "sourceTaskVersion": version.version_id,
+            "executionStatus": "completed",
+            "passed": true
+        }]);
+        assert_eq!(
+            service.save_roadmap_record(&unlinked_completed_variant, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut wrong_condition_variant = robustness.clone();
+        wrong_condition_variant.record_id = "robustness-wrong-condition".to_owned();
+        wrong_condition_variant.payload["variants"] = json!([{
+            "version": "2",
+            "transformationType": "paraphrase",
+            "seed": 1,
+            "sourceTaskVersion": version.version_id,
+            "executionStatus": "completed",
+            "passed": null,
+            "runId": "run-2",
+            "attemptId": "attempt-2",
+            "sourceContentHash": saved_reproduction.content_hash
+        }]);
+        assert_eq!(
+            service.save_roadmap_record(&wrong_condition_variant, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let mut valid_variant_result = robustness.clone();
+        valid_variant_result.record_id = "robustness-valid-variant".to_owned();
+        valid_variant_result.payload["variants"] = json!([completed_variant]);
+        service
+            .save_roadmap_record(&valid_variant_result, "263")
+            .expect("variant result links to the matching immutable prompt configuration");
+        let mut partially_saved_variant = valid_variant_result.clone();
+        partially_saved_variant.record_id = "robustness-partial-save-variant".to_owned();
+        partially_saved_variant.payload["variants"][0]["passed"] = json!(null);
+        partially_saved_variant.payload["variants"][0]["errorCode"] = json!("evidence_save_failed");
+        service
+            .save_roadmap_record(&partially_saved_variant, "263")
+            .expect("a failed secondary evidence save retains and validates the source link without exposing its pass claim");
+        let mut misbound_partial_variant = partially_saved_variant.clone();
+        misbound_partial_variant.record_id = "robustness-misbound-partial-save".to_owned();
+        misbound_partial_variant.payload["variants"][0]["transformationType"] =
+            json!("concise_wording");
+        assert_eq!(
+            service.save_roadmap_record(&misbound_partial_variant, "263"),
+            Err(StorageError::AdvancedArtifactInvalid)
+        );
+        let (saved_robustness, _) = service
+            .save_roadmap_record(&robustness, "263")
+            .expect("source-bound unverified robustness saves");
+
+        let connection = Connection::open(service.layout().database_path())
+            .expect("database opens for derived tamper fixture");
+        let mut tampered_historical = saved_historical.payload.clone();
+        tampered_historical["metrics"] =
+            json!([{"metric": "quality", "baseline": 0.0, "candidate": 1.0}]);
+        connection
+            .execute(
+                "UPDATE roadmap_records SET document_json = ?1 WHERE record_id = ?2",
+                rusqlite::params![
+                    serde_json::to_string(&tampered_historical).unwrap(),
+                    saved_historical.record_id
+                ],
+            )
+            .expect("tamper fixture updates derived document");
+        assert_eq!(
+            service.get_roadmap_record(&saved_historical.record_id),
+            Err(StorageError::DatabaseFailure)
+        );
+        assert_eq!(
+            service
+                .get_roadmap_record(&saved_ratings.record_id)
+                .unwrap()
+                .unwrap()
+                .payload["verificationStatus"],
+            "unverified"
+        );
+        assert_eq!(
+            service
+                .get_roadmap_record(&saved_robustness.record_id)
+                .unwrap()
+                .unwrap()
+                .payload["verificationStatus"],
+            "unverified"
+        );
+
         let mut changed = request.clone();
         changed.payload["createdAt"] = json!("2026-09-29T00:00:01Z");
         assert_eq!(
@@ -5255,13 +6036,13 @@ mod tests {
         let preview = service
             .preview_storage_retention_at(30, "200")
             .expect("retention previews both old run and attempt cascades");
-        assert_eq!(preview.eligible_records, 4);
+        assert_eq!(preview.eligible_records, 7);
         service
             .cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 4,
-                confirmation: "DELETE 4 LOCAL RECORDS".to_owned(),
+                expected_records: 7,
+                confirmation: "DELETE 7 LOCAL RECORDS".to_owned(),
             })
             .expect("retention removes the source attempt and run");
         let (replay_after_retention, replay_after_retention_outcome) = service
@@ -5455,6 +6236,7 @@ mod tests {
         let service = StorageService::open(&root).expect("storage opens");
         let summary = ArenaSummaryPayload {
             arena_id: "arena-1".to_owned(),
+            blind: None,
             benchmark_version_id: "logic@1".to_owned(),
             task_id: "task".to_owned(),
             case_id: "case".to_owned(),
@@ -5519,6 +6301,24 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("categoryName"));
+        let tampered = Connection::open(service.layout().database_path())
+            .expect("database opens for immutable summary tampering fixture");
+        let mut changed_document = serde_json::to_value(&summary).expect("summary serializes");
+        changed_document["summary"]["tieMargin"] = json!(99.0);
+        tampered
+            .execute(
+                "UPDATE arena_summaries SET document_json = ?1 WHERE record_id = ?2",
+                rusqlite::params![serde_json::to_string(&changed_document).unwrap(), "arena-1"],
+            )
+            .expect("tamper fixture changes the payload without its stored hash");
+        assert_eq!(
+            service.get_arena_summary("arena-1"),
+            Err(StorageError::DatabaseFailure)
+        );
+        assert_eq!(
+            service.list_arena_summaries(),
+            Err(StorageError::DatabaseFailure)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -5532,6 +6332,7 @@ mod tests {
             .expect("benchmark version saves");
         let mut source_summary = ArenaSummaryPayload {
             arena_id: "advanced-arena-1".to_owned(),
+            blind: None,
             benchmark_version_id: benchmark_summary.version_id.clone(),
             task_id: "task".to_owned(),
             case_id: "case".to_owned(),

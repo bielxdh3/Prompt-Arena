@@ -491,6 +491,7 @@ export function buildArenaSummaryPayload(
   const taskCategory = categoryForTask(request.version.documentJson, request.taskId);
   return {
     arenaId: request.arenaId,
+    blind: request.blind === true,
     benchmarkVersionId: request.version.summary.versionId,
     taskId: request.taskId,
     caseId: request.caseId,

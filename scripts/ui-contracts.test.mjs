@@ -77,6 +77,9 @@ describe("static UI parity contracts", () => {
     expect(advancedSource).toContain('translate("Quality, latency, throughput, and human signal")');
     expect(roadmapSource).toContain('translate("Single-model benchmark")');
     expect(roadmapSource).toContain('translate("Performance Lab")');
+    expect(roadmapSource).toContain('cancelRunOnce');
+    expect(roadmapSource).toContain('aria-label={translate("Cancel run")}');
+    expect(roadmapSource).toContain('() => cancellationRef.current?.shouldContinue() ?? false');
 
     const resourceKeys = new Set(
       [...i18nSource.matchAll(/^(?:\s*)(?:"((?:[^"\\]|\\.)+)"|([A-Za-z][A-Za-z0-9_]*))\s*:/gm)]
@@ -97,12 +100,31 @@ describe("static UI parity contracts", () => {
 
   it("keeps historical sources distinguishable and scrollable by keyboard, and gates unsupported repro runtimes", () => {
     expect(roadmapSource).toContain('numberedName("Arena", summary.arenaId, comparableArenaSummaries.map((item) => item.arenaId))');
+    expect(roadmapSource).toContain('translate("Whole Arena run")');
+    expect(roadmapSource).not.toContain("describeArenaCompetitors");
+    expect(roadmapSource).not.toContain("competitor.competitorId");
+    expect(roadmapSource).not.toContain("competitor.competitorLabel");
     expect(roadmapSource).toContain('formatLocaleDate(summary.createdAt)');
+    expect(roadmapSource).toContain('summary.blind === false || revealedArenaIds.has(summary.arenaId)');
+    expect(roadmapSource).toContain('arenaSummaryIdentityRevealed(summary, readBlindEvaluation)');
+    expect(advancedSource).toContain('arenaSummaryIdentityRevealed(summary, readBlindEvaluation)');
+    expect(advancedSource).toContain('calibrationResults.filter((record) => hasVisibleSource(record.sourceArenaId, record.sourceContentHash))');
+    expect(advancedSource).toContain('tournamentResults.filter((record) => hasVisibleSource(record.sourceArenaId, record.sourceContentHash))');
+    expect(roadmapSource).toContain('historicalRegressionSourcesVisible(comparison, state.records, comparableArenaSummaries)');
+    expect(roadmapSource).toContain('ratingOutcomesFromArenaSummaries(revealedArenaSummaries)');
+    expect(appSource).toContain('arenaSummaryIdentityRevealed(record, readBlindEvaluation)');
+    expect(appSource).toContain('identityRevealed && <ArenaSummaryExportActions record={record} />');
+    expect(appSource).toContain('const showMeasuredResults = !showBlindEvaluation;');
     expect(roadmapSource).toContain('role="region" aria-label={translate("Saved comparisons")} tabIndex={0}');
     expect(roadmapSource).toContain('const importedRuntimeSupportsLiveIdentity = importedBundle?.profileRevision.runtime === "ollama";');
     expect(roadmapSource).toContain('&& importedRuntimeSupportsLiveIdentity');
     expect(roadmapSource).toContain(': runRequest.profileRevision.runtime !== "ollama"');
     expect(roadmapSource).toContain('translate("The imported benchmark and saved profile match local records, but this runtime does not provide the live model identity check required for Re-run. Re-running is disabled.")');
+  });
+
+  it("pads the Insights preview root panel as well as its nested panels", () => {
+    expect(roadmapSource).toContain('className="panel roadmap-features-view"');
+    expect(styles).toMatch(/\.roadmap-features-view\.panel\s*\{[^}]*padding:\s*clamp\(20px,\s*3vw,\s*32px\)/s);
   });
 
   it("connects robustness history to comparison and hash-linked export", () => {

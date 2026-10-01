@@ -129,7 +129,18 @@ jobs:
 
       - name: Verify Windows packages and run clean-install smoke
         if: runner.os == 'Windows'
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run verify:package -- --platform windows --smoke
+
+      - name: Upload Windows MSI smoke diagnostics
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        with:
+          name: prompt-arena-msi-diagnostics-${{ steps.commit.outputs.sha }}
+          path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify Linux packages and run package/app smoke
         if: runner.os == 'Linux'

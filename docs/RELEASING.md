@@ -31,6 +31,8 @@ Until those prerequisites are met, use the workflow only for candidate validatio
 
 `.github/workflows/release.yml` is manual and candidate-only. It validates the requested version and exact 40-character SHA, confirms that SHA is the reviewed pull request merge commit on `main`, then calls the reusable Windows/Linux packaging workflow. It does not create tags, GitHub Releases, or public assets. Pushing release notes to `main` does not publish anything.
 
+The local `release:windows` helper that committed and pushed to the checked-out branch has been removed. `npm run build:windows-msi` remains available for a local MSI build, while public distribution stays behind the reviewed candidate and administrator-controlled publication process above.
+
 There is no automated publication path until the server-side prerequisites above have been verified and publication is explicitly reauthorized. Stable release acceptance requirements remain in `RELEASE_CHECKLIST.md`.
 
 ## Signing

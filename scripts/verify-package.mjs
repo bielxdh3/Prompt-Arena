@@ -125,14 +125,17 @@ function findUninstaller(installDirectory) {
   return uninstaller;
 }
 
-export function buildMsiexecArguments(action, installer, installDirectory) {
+export function buildMsiexecArguments(action, installer, installDirectory, logPath) {
+  if (typeof logPath !== "string" || !logPath || logPath.includes('"')) {
+    throw new Error("MSI log path is invalid");
+  }
   if (action === "install") {
     if (typeof installDirectory !== "string" || !installDirectory || installDirectory.includes('"')) {
       throw new Error("MSI install directory is invalid");
     }
-    return ["/i", installer, "/qn", "/norestart", `INSTALLDIR="${installDirectory}"`];
+    return ["/i", installer, "/qn", "/norestart", `INSTALLDIR="${installDirectory}"`, "/L*V!", logPath];
   }
-  if (action === "uninstall") return ["/x", installer, "/qn", "/norestart"];
+  if (action === "uninstall") return ["/x", installer, "/qn", "/norestart", "/L*V!", logPath];
   throw new Error(`unsupported MSI action: ${action}`);
 }
 
@@ -144,14 +147,18 @@ export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = fal
   throw new Error(`MSI ${action} failed with msiexec exit code ${exitCode}`);
 }
 
-function runMsiexec(args, action) {
+function runMsiexec(args, action, logPath) {
   try {
     execFileSync("msiexec.exe", args, { stdio: "ignore", timeout: MSI_TIMEOUT_MS });
     return 0;
   } catch (error) {
     if (error && Number.isInteger(error.status)) return error.status;
     if (error?.code === "ETIMEDOUT") {
-      throw new Error(`MSI ${action} timed out after ${MSI_TIMEOUT_MS / 1_000} seconds`, { cause: error });
+      const timeoutError = new Error(`MSI ${action} timed out after ${MSI_TIMEOUT_MS / 1_000} seconds`, { cause: error });
+      timeoutError.name = "MsiexecTimeoutError";
+      timeoutError.action = action;
+      timeoutError.logPath = logPath;
+      throw timeoutError;
     }
     throw error;
   }
@@ -168,17 +175,20 @@ function appendCleanupError(currentError, phase, cleanupError) {
     : new Error(message, { cause: cleanupError });
 }
 
-async function msiSmoke(artifactDirectory, metadata, smokeRoot, lines) {
+async function msiSmoke(artifactDirectory, metadata, smokeRoot, diagnosticDirectory, lines) {
   const installer = windowsInstallerPath(artifactDirectory, metadata.version, "msi");
   const installDirectory = path.join(smokeRoot, "msi-installed");
+  const installLogPath = path.join(diagnosticDirectory, "msi-install.log");
+  const uninstallLogPath = path.join(diagnosticDirectory, "msi-uninstall.log");
   const expectedExecutable = path.join(installDirectory, `${metadata.mainBinaryName}.exe`);
   let executable = expectedExecutable;
   let installAttempted = false;
+  let installTimedOut = false;
   let smokeError;
 
   try {
     installAttempted = true;
-    const installCode = runMsiexec(buildMsiexecArguments("install", installer, installDirectory), "install");
+    const installCode = runMsiexec(buildMsiexecArguments("install", installer, installDirectory, installLogPath), "install", installLogPath);
     const installResult = checkMsiexecExitCode(installCode, "install");
     lines.push(`MSI clean install: passed (msiexec exit code ${installCode}${installResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
     executable = findInstalledExecutable(installDirectory, metadata.productName, metadata.mainBinaryName);
@@ -189,10 +199,16 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, lines) {
     lines.push("MSI installed executable restart: passed.");
   } catch (error) {
     smokeError = error;
+    if (error instanceof Error && error.name === "MsiexecTimeoutError" && error.action === "install") {
+      installTimedOut = true;
+      lines.push(`MSI install verbose log: ${error.logPath}`);
+    }
   } finally {
-    if (installAttempted) {
+    if (installAttempted && installTimedOut) {
+      lines.push("MSI teardown: skipped because the install timed out and Windows Installer state is unresolved; the clean runner will be discarded.");
+    } else if (installAttempted) {
       try {
-        const uninstallCode = runMsiexec(buildMsiexecArguments("uninstall", installer), "uninstall");
+        const uninstallCode = runMsiexec(buildMsiexecArguments("uninstall", installer, undefined, uninstallLogPath), "uninstall", uninstallLogPath);
         const uninstallResult = checkMsiexecExitCode(uninstallCode, "uninstall", { allowNotInstalled: true });
         if (uninstallResult.notInstalled) {
           if (fs.existsSync(expectedExecutable)) throw new Error("MSI product was not registered for uninstall but its executable remains");
@@ -202,6 +218,7 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, lines) {
           lines.push(`MSI silent uninstall: passed (msiexec exit code ${uninstallCode}${uninstallResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
         }
       } catch (error) {
+        if (error instanceof Error && error.name === "MsiexecTimeoutError") lines.push(`MSI uninstall verbose log: ${error.logPath}`);
         smokeError = appendCleanupError(smokeError, "MSI teardown", error);
       }
     }
@@ -280,7 +297,12 @@ async function windowsSmoke(artifactDirectory, metadata, lines) {
   const smokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-arena-p7-windows-"));
   const installDirectory = path.join(smokeRoot, "installed");
   try {
-    await msiSmoke(artifactDirectory, metadata, smokeRoot, lines);
+    const configuredDiagnosticsDirectory = process.env.PACKAGE_DIAGNOSTICS_DIR?.trim();
+    const diagnosticDirectory = configuredDiagnosticsDirectory
+      ? path.resolve(configuredDiagnosticsDirectory)
+      : path.join(smokeRoot, "diagnostics");
+    fs.mkdirSync(diagnosticDirectory, { recursive: true });
+    await msiSmoke(artifactDirectory, metadata, smokeRoot, diagnosticDirectory, lines);
     execFileSync(installer, ["/S", `/D=${installDirectory}`], { stdio: "ignore", timeout: 120_000 });
     const executable = findInstalledExecutable(installDirectory, metadata.productName, metadata.mainBinaryName);
     lines.push(`NSIS clean install: passed (${path.basename(executable)}).`);
