@@ -196,7 +196,9 @@ Hardware is a read-only ephemeral snapshot, not a SQLite record or artifact. `re
 platform plus typed metrics for logical CPU count, RAM bytes, GPU name, and VRAM bytes. Each metric carries a value or
 `null`, an available/unavailable status, a source, and a confidence. The baseline uses standard-library CPU detection,
 fixed Linux `/proc/meminfo`, and a narrow Windows physical-memory API; GPU/VRAM remain unavailable when safe feature
-detection is absent. No hardware telemetry, model-path inspection, shell/process spawning, or persistence is involved.
+detection is absent. This hardware snapshot is not itself persisted. Separately, each generation can persist bounded host CPU
+counter samples and system-memory samples as `hostHardwareTelemetry` in its immutable attempt evidence. Sampling is
+host-scoped and does not inspect model paths or spawn a process; unavailable metrics remain unavailable rather than zero.
 
 The Models view derives per-model Ideal/Acceptable/Heavy/Unavailable labels from existing bounded Ollama `ModelInfo`
 size metadata and detected RAM. Ideal and acceptable percentage thresholds are bounded and held in UI state only; the
@@ -277,8 +279,9 @@ management remain incomplete.
 The completion UI composes multiple existing immutable `RunPlan` values rather than mutating profile revisions or
 benchmark versions. Every competitor/repetition is persisted as its own immutable `Run`/`Attempt` pair with a unique run
 identity, and a bounded Arena summary record stores aggregate metrics and source attempt references. Response text is
-retrieved only through the verified `read_attempt_response` command and is never copied into metadata or exports as a
-filesystem path.
+retrieved only through the verified `read_attempt_response` command; it is not copied into run metadata or exported as
+a filesystem path. An explicit Repro Bundle export may include the selected saved response text as a bounded, hash-checked
+snapshot.
 
 ## Insights records
 
@@ -328,14 +331,17 @@ called out in the UI.
 
 Repro Bundle v3 export produces a bounded JSON file with canonical-body SHA-256 and byte-count metadata plus the exact
 UTF-8 bytes of the full canonical benchmark document, base64-chunked so renderer sanitization and JavaScript number
-formatting cannot alter the Rust-canonical representation. The final serialized envelope, including integrity metadata,
-must fit the same 8 MiB limit accepted by import. Bundles carry model identity fields when available and explicit
+formatting cannot alter the Rust-canonical representation. When the selected completed attempt has a saved response, the
+bundle may also include its exact UTF-8 text, run/attempt IDs, byte count, and SHA-256; response text is capped at 4 MiB,
+and import verifies the text digest, byte count, and link to the included attempt. Older bundles without this optional
+snapshot remain valid. The final serialized envelope, including integrity metadata, must fit the same 8 MiB limit
+accepted by import. Bundles carry model identity fields when available and explicit
 seed/runtime controls. Import
 checks the source envelope's byte count and digest before returning it; v1/v2 envelope migrations preserve the nested
 payload and add no identity proof. The benchmark snapshot's canonical content hash and exact version/task/case must match
 before a run request is accepted. Legacy single-model payloads without the v2 identity snapshot remain read-only. The
 self-contained checksum does not authenticate the creator. Credential-keyed fields are filtered, while the profile
-system prompt is retained for replay and may contain private text; review a bundle before sharing it. A rerun requires
+system prompt and saved response text may contain private information; review a bundle before sharing it. A rerun requires
 the locally registered full profile and a matching model digest. On explicit Re-run, the app makes a bounded read-only
 Ollama tags/version check against the profile's saved loopback endpoint before and after generation; after generation,
 it also requires `/api/ps` to report exactly one loaded model with a digest matching the current tag. These checks do not

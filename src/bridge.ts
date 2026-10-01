@@ -185,6 +185,36 @@ export type ResponseSummary = {
   timing: TimingMetrics | null;
 };
 
+export type HostTelemetryMetricEvidence = {
+  value: number | null;
+  status: "available" | "unavailable";
+  source: string;
+  samplingMethod: "os_counter" | "os_sample";
+  method: string;
+  samplingIntervalMs: number | null;
+  sampleCount: number;
+  intervalCount: number;
+};
+
+export type HostTelemetrySample = [
+  elapsedMs: number,
+  totalCpuCounter: string | null,
+  idleCpuCounter: string | null,
+  ramUsedBytes: number | null,
+];
+
+export type HostHardwareTelemetry = {
+  scope: "host";
+  platform: HardwarePlatform;
+  windowDurationMs: number;
+  targetSamplingIntervalMs: number;
+  rawSamples: HostTelemetrySample[];
+  samplesTruncated: boolean;
+  cpuUtilizationPercent: HostTelemetryMetricEvidence;
+  ramAverageBytes: HostTelemetryMetricEvidence;
+  ramPeakBytes: HostTelemetryMetricEvidence;
+};
+
 export type ArtifactRef = {
   artifactId: string;
   relativePath: string;
@@ -620,6 +650,7 @@ export type AttemptRecord = {
   result: ImmutableResultReference | null;
   artifacts: ArtifactRef[];
   responseSummary?: ResponseSummary;
+  hostHardwareTelemetry?: HostHardwareTelemetry;
   [key: string]: unknown;
 };
 

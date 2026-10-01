@@ -59,6 +59,30 @@ describe("robustness arena", () => {
     expect(variant.version).toBe("2");
   });
 
+  it("keeps the same ground-truth answer for each versioned wording transform fixture", () => {
+    const source = "Compute x where x = 1 + 1.\n\nReturn exactly the integer, without explanation.";
+    const expected = "2";
+    const variants = generatePerturbations(source, expected, "math@1", 23);
+
+    expect(variants.map((variant) => variant.transformationType)).toEqual([
+      "paraphrase",
+      "instruction_reorder",
+      "variable_rename",
+      "formatting_variation",
+      "concise_wording",
+      "verbose_wording",
+      "irrelevant_noise",
+    ]);
+    expect(variants.every((variant) => variant.expected === expected)).toBe(true);
+    expect(variants.every((variant) => variant.sourcePrompt === source)).toBe(true);
+    expect(variants.every((variant) => variant.prompt !== source)).toBe(true);
+    expect(variants.every((variant) => variant.provenance === `deterministic-local/${variant.transformationType}/v2`)).toBe(true);
+    expect(variants.find((variant) => variant.transformationType === "paraphrase")?.prompt).toContain("calculate x");
+    expect(variants.find((variant) => variant.transformationType === "instruction_reorder")?.prompt.startsWith("Return exactly the integer")).toBe(true);
+    expect(variants.find((variant) => variant.transformationType === "variable_rename")?.prompt).toContain("x_renamed");
+    expect(variants.find((variant) => variant.transformationType === "irrelevant_noise")?.prompt).toContain("this note is irrelevant to the task");
+  });
+
   it("changes effective prompts for applicable transforms and marks no-ops unavailable", () => {
     const source = "Solve x + 1 = 2.\n\nReturn the exact answer.";
     const variants = generatePerturbations(source, "1", "bench@1", 1);

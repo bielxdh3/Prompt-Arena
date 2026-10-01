@@ -39,9 +39,11 @@ The authenticated repository snapshot showed no open Code Scanning alerts; the f
 alerts are closed as fixed. Secret Scanning showed no open alerts. Dependabot vulnerability-alerting is disabled, so no
 zero-finding claim is available for that category; it was not enabled by this work. The mission branch's production and
 full-tree `npm audit --audit-level=high` checks both reported zero known vulnerabilities. `cargo-audit`, `cargo-deny`,
-and Trivy are unavailable in the local environment, and GitHub Dependency Review must run on the pushed candidate before
-the branch's dependency gate is considered verified. GitHub Actions references in the edited CI, CodeQL, and Dependency
-Review workflows are pinned to full commit SHAs.
+and Trivy are unavailable in the local environment. PR #89's Dependency Review check passed for candidate
+`bf4a94e5dc6613c7e2a8acdf0776a31e789d3219`; it is candidate-specific and must pass again on any later PR head before
+merge. The check does not enumerate disabled Dependabot alerts or establish that unchanged transitive dependencies have
+no exposure. GitHub Actions references in the edited CI, CodeQL, and Dependency Review workflows are pinned to full
+commit SHAs.
 
 The lockfile includes `glib 0.18.5`, affected by [RustSec RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html),
 an informational unsoundness advisory fixed in `glib >=0.20.0`. The advisory names `VariantStrIter` iterator methods;
@@ -105,10 +107,15 @@ model paths, download files, or send telemetry.
   response headers and chunk trailers are separately capped at 64 KiB and 128 entries; non-stream bodies are capped at
   16 MiB, cumulative streamed NDJSON payload bytes at 16 MiB, and every response has a finite 10-minute overall read
   deadline by default, configurable from 1 ms through 60 minutes, in addition to the 500 ms per-read socket timeout.
-- Hardware discovery uses only `std::thread::available_parallelism`, the fixed Linux `/proc/meminfo` file, and a narrow
-  Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are not guessed:
-  they remain null with unavailable status/confidence when feature detection is absent. The snapshot is read-only and
-  ephemeral; no hardware telemetry or user override is persisted.
+- The static hardware snapshot uses only `std::thread::available_parallelism`, the fixed Linux `/proc/meminfo` file,
+  and a narrow Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are
+  not guessed: they remain null with unavailable status/confidence when feature detection is absent. That baseline
+  snapshot is read-only and ephemeral. Separately, the one-shot generation executor records host-wide CPU and physical-RAM
+  samples during each generation window in the local attempt evidence; Performance Lab projects those values into local
+  performance evidence. They are not attributed to the model process and are not sent to a Prompt Arena service. Because
+  the explicit Repro Bundle export includes the attempt evidence and, when available, the saved response artifact, a
+  bundle may contain these host metrics, prompt/profile data, and response text. The UI warns that this text may be
+  private; review the full bundle before sharing it.
 - Cancellation is scoped to an active Arena run ID. If cancellation wins before the app receives the worker's terminal
   response, Tauri stops only the app-owned worker and asks a fresh one-shot worker to persist a typed cancelled outcome.
   A terminal response already received by the app is preserved. After its terminal outcome is assembled, cancellation
@@ -156,8 +163,9 @@ model paths, download files, or send telemetry.
 - Phase 14 comparability remains a pure in-memory diagnostic over one local run and its typed attempts. The separate
   Insights surface stores bounded single-model suite summaries, per-run metrics, single-run comparisons across saved
   single-model/Arena sources, repeated single-model regression intervals, Elo v1/Bradley–Terry v1 rating snapshots,
-  robustness outcomes, and integrity-checked repro bundles. Derived comparisons retain source IDs/content hashes on
-  export. Repeated regression intervals apply a Bonferroni family-wise correction across seven metrics. Bradley–Terry
+  robustness outcomes and comparisons, and integrity-checked repro bundles. Derived comparisons retain source IDs/content
+  hashes on export. Robustness comparison exports include both source records and may contain private source/variant prompt
+  text; the UI warns users to review these files before sharing. Repeated regression intervals apply a Bonferroni family-wise correction across seven metrics. Bradley–Terry
   outcomes are clustered by immutable Arena summary hash when present; source-cluster counts do not establish statistical
   independence, and new rating snapshots carry their contributing Arena summary IDs and content hashes. Repro Bundle
   v3 preserves exact Rust-canonical benchmark UTF-8 bytes in bounded base64 chunks, so JavaScript number formatting
@@ -208,10 +216,11 @@ model paths, download files, or send telemetry.
   a combined output cap; timeout/output failure kills the Docker CLI process and attempts removal by generated container
   name. The @2 text contracts use lexical phrase requirements; a matching phrase can pass without proving semantic
   behavior. The @3 function contract executes only its AST-restricted function
-  under fixed tests; it does not execute unrestricted model-generated programs. The user-triggered cancel lifecycle
-  is not yet connected to this evaluator. The earlier pinned-image smoke report is not bound to the current candidate
-  SHA, and the local Docker daemon was unavailable on 2026-09-30, so live execution of these contracts remains unverified
-  for this branch. Docker access remains part of the trust boundary: a rootful daemon socket
+  under fixed tests; it does not execute unrestricted model-generated programs. The active Arena flow passes its run
+  cancellation token through this evaluator and can cancel the active run. The separate one-shot execution UI does not
+  expose a cancellation control. The earlier pinned-image smoke report is not bound to the current candidate SHA, and
+  the local Docker daemon was unavailable on 2026-09-30, so live execution of these contracts remains unverified for this
+  branch. Docker access remains part of the trust boundary: a rootful daemon socket
   permits host-level daemon control, while rootless Docker reduces but does not remove kernel/daemon risk.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/hardware/Arena/official-pack commands, validate benchmarks, query
@@ -234,6 +243,15 @@ process that can modify app-owned files can still race separate path checks and 
 - Worker execution selects only the fixed app-owned development sibling or the target-triple-suffixed Tauri resource and
   supplies no shell, PATH lookup, or user path. Its `is_file` validation and subsequent spawn are separate, so the
   selected worker executable can still be replaced between validation and spawn.
+- Managed GGUF import and removal validate a relative path and reject symlink components, then use path-based file opens
+  or removal. A concurrent same-user process able to modify the app-owned model directory could replace an intermediate
+  component between validation and the operation. No cross-user or remote exploitability was established; portable
+  no-follow-handle semantics would be needed to close this local race. A capability-root API such as
+  [`cap-std::fs::Dir`](https://docs.rs/cap-std/4.0.3/cap_std/fs/struct.Dir.html) can anchor relative opens/removal and
+  prevent escapes from an opened root, but alone it would not preserve the current reject-every-symlink policy, and
+  `remove_file` remains name-based rather than atomically unlinking the file handle whose contents were hash-checked.
+  This service currently opens storage per command, so a complete mitigation also needs an app-lifetime anchored root
+  and explicit Windows/Linux reparse-point semantics; a partial path rewrite would leave the integrity race.
 - `start_local_ollama` launches `ollama serve` without a shell or caller-supplied arguments, but resolves `ollama` through
   `PATH`. A lower-trust actor would need control of a searched directory or an elevated-launch condition for this to
   become a distinct execution path; neither was established in the Standard scan.
@@ -245,9 +263,10 @@ checked against 256 KiB before `serde_json::from_str`, and draft input is size-c
 ## Required future controls
 
 Linux secure credential storage and BYOK transport, calibrated rating intervals, full robustness semantic-preservation
-evidence and functional-verifier integration, portable seed application and authenticated Repro provenance, complete
-hardware/energy telemetry, multi-rater human evaluation, AI judging, unified model search, empirical recommendation
-history, broader official coding-pack coverage, and user-triggered Docker cancellation are not complete. When extended, these require
+evidence and functional-verifier integration, portable seed application and authenticated Repro provenance, Performance Lab
+telemetry beyond host-wide CPU/RAM sampling (model-process attribution, GPU/VRAM, and trustworthy energy/power metrics),
+multi-rater human evaluation, AI judging, unified model search, empirical recommendation history, broader official
+coding-pack coverage, and user-triggered Docker cancellation are not complete. When extended, these require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.
 Historical benchmark records must not be deleted as a migration side effect.

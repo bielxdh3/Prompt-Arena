@@ -11,6 +11,7 @@ use crate::{
         ObjectiveVerifierEvidencePolicy, ObjectiveVerifierKind, ObjectiveVerifierPolicy,
         ProfileRevision, Run,
     },
+    hardware::{HostHardwareTelemetry, HostTelemetrySampler},
     ollama::{OllamaConfig, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleRuntime},
     runtime::{
@@ -1107,11 +1108,13 @@ pub fn execute_once_with_provider(
         });
     }
 
+    let telemetry_sampler = HostTelemetrySampler::start();
     let stream_result = provider.stream(
         &plan.generation,
         cancellation,
         &mut |chunk: GenerationChunk| progress.record_chunk(chunk, cancellation),
     );
+    let host_telemetry = telemetry_sampler.finish();
 
     match stream_result {
         Ok(response) => {
@@ -1121,16 +1124,12 @@ pub fn execute_once_with_provider(
                 plan.objective_expectation.as_deref(),
             );
             progress.finish(ProgressKind::Completed);
+            let mut attempt =
+                build_attempt(plan, &attempt_id, "completed", effective_config, None, None);
+            attach_host_telemetry(&mut attempt, &host_telemetry)?;
             Ok(TerminalOutcome::Completed {
                 run: build_run(plan, &attempt_id, "completed", &started_at, provider),
-                attempt: build_attempt(
-                    plan,
-                    &attempt_id,
-                    "completed",
-                    effective_config,
-                    None,
-                    None,
-                ),
+                attempt,
                 response,
                 score,
                 progress: progress.into_events(),
@@ -1138,36 +1137,49 @@ pub fn execute_once_with_provider(
         }
         Err(RuntimeError::Cancelled) => {
             progress.finish(ProgressKind::Cancelled);
+            let mut attempt =
+                build_attempt(plan, &attempt_id, "cancelled", effective_config, None, None);
+            attach_host_telemetry(&mut attempt, &host_telemetry)?;
             Ok(TerminalOutcome::Cancelled {
                 run: build_run(plan, &attempt_id, "cancelled", &started_at, provider),
-                attempt: build_attempt(
-                    plan,
-                    &attempt_id,
-                    "cancelled",
-                    effective_config,
-                    None,
-                    None,
-                ),
+                attempt,
                 progress: progress.into_events(),
             })
         }
         Err(error) => {
             progress.finish(ProgressKind::Failed);
+            let mut attempt = build_attempt(
+                plan,
+                &attempt_id,
+                "failed",
+                effective_config,
+                None,
+                Some(&error),
+            );
+            attach_host_telemetry(&mut attempt, &host_telemetry)?;
             Ok(TerminalOutcome::Failed {
                 run: build_run(plan, &attempt_id, "failed", &started_at, provider),
-                attempt: build_attempt(
-                    plan,
-                    &attempt_id,
-                    "failed",
-                    effective_config,
-                    None,
-                    Some(&error),
-                ),
+                attempt,
                 error,
                 progress: progress.into_events(),
             })
         }
     }
+}
+
+fn attach_host_telemetry(
+    attempt: &mut Attempt,
+    telemetry: &HostHardwareTelemetry,
+) -> Result<(), OrchestrationError> {
+    let value = serde_json::to_value(telemetry).map_err(|_| {
+        OrchestrationError::InvalidResponseSummary(
+            "host hardware telemetry could not be serialized".to_owned(),
+        )
+    })?;
+    attempt
+        .extra
+        .insert("hostHardwareTelemetry".to_owned(), value);
+    Ok(())
 }
 
 pub fn persist_terminal_outcome(
@@ -2963,6 +2975,56 @@ mod tests {
         ));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_generation_window_persists_host_scoped_telemetry_on_success_and_failure() {
+        for provider in [
+            MockProvider {
+                error: None,
+                chunks: 1,
+            },
+            MockProvider {
+                error: Some(RuntimeError::Unavailable {
+                    message: "mock failure".to_owned(),
+                }),
+                chunks: 0,
+            },
+        ] {
+            let outcome = execute_once_with_provider(&plan(), &provider, &CancellationToken::new())
+                .expect("local plan reaches its generation window");
+            let attempt = match outcome {
+                TerminalOutcome::Completed { attempt, .. }
+                | TerminalOutcome::Failed { attempt, .. } => attempt,
+                TerminalOutcome::Cancelled { .. } => panic!("mock run was not cancelled"),
+            };
+            let telemetry = attempt
+                .extra
+                .get("hostHardwareTelemetry")
+                .expect("generation attempt carries host telemetry");
+            assert_eq!(telemetry["scope"], "host");
+            assert!(telemetry["windowDurationMs"].as_f64().unwrap() >= 0.0);
+            assert_eq!(telemetry["targetSamplingIntervalMs"], 1_000);
+            assert!(telemetry["rawSamples"]
+                .as_array()
+                .is_some_and(|samples| { !samples.is_empty() && samples.len() <= 8_192 }));
+            assert_eq!(telemetry["samplesTruncated"], false);
+            for key in ["cpuUtilizationPercent", "ramAverageBytes", "ramPeakBytes"] {
+                assert!(telemetry[key]["source"].as_str().is_some());
+                assert!(telemetry[key]["method"].as_str().is_some());
+                assert!(matches!(
+                    telemetry[key]["status"].as_str(),
+                    Some("available" | "unavailable")
+                ));
+                assert!(telemetry[key]["sampleCount"].as_u64().is_some());
+                assert!(telemetry[key]["intervalCount"].as_u64().is_some());
+            }
+            assert_eq!(
+                telemetry["cpuUtilizationPercent"]["samplingMethod"],
+                "os_counter"
+            );
+            assert_eq!(telemetry["ramAverageBytes"]["samplingMethod"], "os_sample");
+        }
     }
 
     #[test]

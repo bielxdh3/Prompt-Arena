@@ -26,7 +26,7 @@ Current canonical version: **0.1.4 beta**.
 | P4 Advanced Arena | comparison, rating, single-model, robustness and repro feature slices integrated | deeper acceptance/statistical completeness remains | **IN PROGRESS** |
 | P5 External BYOK | provider/cost/credential/network boundaries and adapters integrated | broader real-provider acceptance and publication security review remain | **IN PROGRESS** |
 | P6 Product polish | responsive UI, i18n, accessibility controls, themes, motion, keyboard-focusable scroll tables, and human-readable IDs | physical changed-DPI check, rendered native-screen-reader review and final accessibility closeout remain | **IN PROGRESS** |
-| P7 Packaging & release | Windows MSI/NSIS and Linux DEB/AppImage pipelines exist; clean Windows MSI lifecycle proven in QA | signed production distribution is not yet guaranteed; beta release process is being formalized | **IN PROGRESS** |
+| P7 Packaging & release | Windows MSI/NSIS and Linux DEB/AppImage pipelines exist; a clean Windows MSI lifecycle passed in prior QA | latest PR-candidate MSI smoke timed out during install after 600 seconds without a diagnostic identifying the cause; NSIS smoke was not reached; signed production distribution is not guaranteed | **IN PROGRESS** |
 
 ## Open feature acceptance issues
 
@@ -41,14 +41,11 @@ Remaining acceptance:
 
 ### #37 — Performance Lab
 
-Implemented: runtime token counts, wall-clock/load/generation time, streamed first-visible-text TTFT, and derived generation throughput. Prompt/prefill tokens per second is derived only when the runtime reports both prompt-token count and prompt-evaluation duration. Provenance and unavailable states are explicit.
+Implemented: runtime token counts, wall-clock/load/generation time, streamed first-visible-text TTFT, and derived generation throughput. Prompt/prefill tokens per second is derived only when the runtime reports both prompt-token count and prompt-evaluation duration. Local host-wide CPU counters and physical RAM snapshots are sampled during generation at a one-second target interval. Records retain the bounded raw series (up to 8,192 points with an explicit truncation flag), exact CPU counter strings, source, scope, sampling and aggregation methods, sample/interval counts, and aggregate values. CPU utilization is weighted by counter deltas; RAM mean and peak describe sampled host physical memory, not the model process. Provenance and unavailable states are explicit.
 
 Remaining:
-- thinking/reasoning time;
-- VRAM/RAM sampling;
-- CPU/GPU utilization;
-- energy/power where trustworthy;
-- cold/warm sampling policy, aggregate hardware telemetry, and native charts/history acceptance.
+- thinking/reasoning time, VRAM, GPU utilization, and energy/power where trustworthy;
+- model-process resource attribution, cold/warm sampling policy, and native charts/history acceptance.
 
 ### #38 — Historical regression
 
@@ -70,27 +67,40 @@ Remaining:
 
 Implemented: versioned deterministic perturbation generation, no-op variants marked unavailable after effective-plan
 validation, same-profile execution with per-variant failure isolation, immutable base/variant run links, and visible
-score, variance and failure clusters. A separate `software-engineering@3` official pack now adds a bounded Python function
-challenge with fixed hidden cases in the restricted Docker harness; it is not yet composed with the perturbation flow.
+score, variance and failure clusters. A deterministic arithmetic fixture checks that every transform retains its expected
+answer and provenance. Each variant uses the normal `execute_run_once` command, so stored Docker-required cases bind and
+apply the same fixed-function verifier as the baseline. A separate `software-engineering@3` official pack adds a bounded
+Python function challenge with fixed hidden cases in the restricted Docker harness. Saved robustness records can also be
+compared by benchmark version, task/case, immutable profile, and transformation set. The comparison keeps base-task
+outcomes separate from robustness score/variance and exports both source records with their local content hashes and a
+bounded SHA-256 integrity envelope.
 
 Remaining:
-- stronger semantic-preservation guarantees and fixtures;
+- stronger semantic-preservation guarantees and broader curated fixtures; the current fixture is not a semantic guarantee for arbitrary prompts;
 - benchmark-version governance for published perturbations;
 - broader transform validation;
-- coding robustness that applies functional verifiers to perturbation variants (the separate Python function challenge does not yet provide this integration).
+- live Docker variant and native UI acceptance.
 
 ### #41 — Repro Bundle
 
-Implemented in this branch: bounded secret-sanitized JSON export with a version-3 envelope, SHA-256 checksum and byte-count
-validation, exact Rust-canonical benchmark bytes preserved in bounded base64 chunks, and explicit seed/runtime/model identity reporting. The complete serialized envelope including integrity metadata is capped at 8 MiB. Re-run reads the current Ollama model digest at the saved loopback endpoint before and after generation, and after generation requires `/api/ps` to report one matching loaded-model digest; these checks do not write catalog rows. Changed or mismatched digests block the reproduced-run record. Providers without live model digests remain read-only.
+Implemented in this branch: bounded JSON export with a version-3 envelope, SHA-256 checksum and byte-count validation,
+exact Rust-canonical benchmark bytes preserved in bounded base64 chunks, and explicit seed/runtime/model identity reporting.
+When the saved attempt has a response artifact, export now reads it through the verified local response command and includes
+its exact UTF-8 text, run/attempt linkage, byte count, and SHA-256 (maximum 4 MiB). Import revalidates this metadata, and
+older bundles without the optional response snapshot remain valid. The complete serialized envelope including integrity
+metadata is capped at 8 MiB. Re-run reads the current Ollama model digest at the saved loopback endpoint before and after
+generation, and after generation requires `/api/ps` to report one matching loaded-model digest; these checks do not write
+catalog rows. Changed or mismatched digests block the reproduced-run record. Providers without live model digests remain
+read-only, and the UI disables Re-run before execution for unsupported runtimes.
 Version-1 and version-2 envelopes are integrity-checked before their payloads are preserved by a read-only envelope
 migration; legacy single-model payloads without a complete portable snapshot remain read-only. Re-run validates the
 imported benchmark locally and saves a missing version only after the user explicitly selects Re-run, then rereads and
 checks its exact version and hash. The saved profile must match local records, and the current Ollama digest is compared
 before and after generation while the loaded-model digest is checked after generation. This is a best-effort check and
 does not atomically pin a digest to the generation request. Reproduced-run links are created only when the source
-single-model record is also locally verified. Provider-reported hashes do not attest which weights a runtime loaded. Prompt text may contain private information and is
-flagged before sharing; the checksum does not authenticate bundle creators.
+single-model record is also locally verified. Provider-reported hashes do not attest which weights a runtime loaded. Prompt
+and saved response text may contain private information; the UI warns users to review the bundle before sharing. The
+checksum does not authenticate bundle creators.
 
 Remaining:
 - authenticated external provenance (the self-contained checksum detects changes but does not verify who created the bundle);
