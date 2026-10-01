@@ -20,7 +20,7 @@ const SMOKE_WAIT_MS = 2_500;
 const SMOKE_TERMINATION_WAIT_MS = 5_000;
 const UNINSTALL_DISAPPEAR_WAIT_MS = 5_000;
 const UNINSTALL_POLL_INTERVAL_MS = 100;
-// Tauri's MSI may download and install the WebView2 runtime on a clean runner.
+// The MSI may install its embedded WebView2 runtime on a clean runner.
 const MSI_TIMEOUT_MS = 10 * 60_000;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
