@@ -24,7 +24,7 @@ This matrix is the acceptance ledger for branch `codex/prompt-arena-roadmap`, ba
 | Themes / accessibility motion | implemented | prior main-branch UI contracts | Native themes/high contrast/motion were exercised for the prior source; mission-branch feature surfaces await review | **IN PROGRESS** |
 | PA atom animation | repaired in PR #58 | focused UI contract assertions | owner confirmed working in 0.1.4.6 QA MSI | **ACCEPTED** |
 | Windows GUI launch | production PE GUI subsystem | Rust/build checks | no cmd/conhost child in installed QA | **ACCEPTED** |
-| Windows MSI | build pipeline + stable upgrade code + silent install/start/restart/uninstall smoke | package-verification script contract tests | prior QA install/uninstall passed; candidate-specific MSI lifecycle still awaits Windows package CI | **IN PROGRESS** |
+| Windows MSI | build pipeline + stable upgrade code + silent install/start/restart/uninstall smoke | package-verification script contract tests | prior QA install/uninstall passed; candidate lifecycle smoke runs in Windows package CI | **IN PROGRESS** |
 | Windows NSIS | build pipeline | package workflow | release-run validation required | **IN PROGRESS** |
 | Linux DEB/AppImage | build pipeline | package workflow | release-run validation required | **IN PROGRESS** |
 | Release signing | no guaranteed signed release yet | — | — | **NOT COMPLETE** |

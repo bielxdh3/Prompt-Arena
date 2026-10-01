@@ -20,7 +20,8 @@ const SMOKE_WAIT_MS = 2_500;
 const SMOKE_TERMINATION_WAIT_MS = 5_000;
 const UNINSTALL_DISAPPEAR_WAIT_MS = 5_000;
 const UNINSTALL_POLL_INTERVAL_MS = 100;
-const MSI_TIMEOUT_MS = 120_000;
+// Tauri's MSI may download and install the WebView2 runtime on a clean runner.
+const MSI_TIMEOUT_MS = 10 * 60_000;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
   const configPath = path.join(repositoryRoot, "src-tauri", "tauri.conf.json");
@@ -143,12 +144,15 @@ export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = fal
   throw new Error(`MSI ${action} failed with msiexec exit code ${exitCode}`);
 }
 
-function runMsiexec(args) {
+function runMsiexec(args, action) {
   try {
     execFileSync("msiexec.exe", args, { stdio: "ignore", timeout: MSI_TIMEOUT_MS });
     return 0;
   } catch (error) {
     if (error && Number.isInteger(error.status)) return error.status;
+    if (error?.code === "ETIMEDOUT") {
+      throw new Error(`MSI ${action} timed out after ${MSI_TIMEOUT_MS / 1_000} seconds`, { cause: error });
+    }
     throw error;
   }
 }
@@ -174,7 +178,7 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, lines) {
 
   try {
     installAttempted = true;
-    const installCode = runMsiexec(buildMsiexecArguments("install", installer, installDirectory));
+    const installCode = runMsiexec(buildMsiexecArguments("install", installer, installDirectory), "install");
     const installResult = checkMsiexecExitCode(installCode, "install");
     lines.push(`MSI clean install: passed (msiexec exit code ${installCode}${installResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
     executable = findInstalledExecutable(installDirectory, metadata.productName, metadata.mainBinaryName);
@@ -188,7 +192,7 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, lines) {
   } finally {
     if (installAttempted) {
       try {
-        const uninstallCode = runMsiexec(buildMsiexecArguments("uninstall", installer));
+        const uninstallCode = runMsiexec(buildMsiexecArguments("uninstall", installer), "uninstall");
         const uninstallResult = checkMsiexecExitCode(uninstallCode, "uninstall", { allowNotInstalled: true });
         if (uninstallResult.notInstalled) {
           if (fs.existsSync(expectedExecutable)) throw new Error("MSI product was not registered for uninstall but its executable remains");
