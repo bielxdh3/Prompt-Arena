@@ -33,26 +33,36 @@ loopback invariants, secret-file ignore rules, lockfiles, and obvious key-materi
 production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
 repository state.
 
-## GitHub security and dependency status (2026-09-30)
+## GitHub security and dependency status (2026-10-01)
 
-The authenticated repository snapshot showed no open Code Scanning alerts; the five historical `js/file-system-race`
-alerts are closed as fixed. Secret Scanning showed no open alerts. Dependabot vulnerability-alerting is disabled, so no
-zero-finding claim is available for that category; it was not enabled by this work. The mission branch's production and
-full-tree `npm audit --audit-level=high` checks both reported zero known vulnerabilities. `cargo-audit`, `cargo-deny`,
-and Trivy are unavailable in the local environment. PR #89's Dependency Review check passed for candidate
-`bf4a94e5dc6613c7e2a8acdf0776a31e789d3219`; it is candidate-specific and must pass again on any later PR head before
-merge. The check does not enumerate disabled Dependabot alerts or establish that unchanged transitive dependencies have
-no exposure. GitHub Actions references in the edited CI, CodeQL, and Dependency Review workflows are pinned to full
+The authenticated repository snapshot showed no open Code Scanning or Secret Scanning alerts; the five historical
+`js/file-system-race` Code Scanning alerts are closed as fixed. Secret scanning and push protection are enabled; non-provider
+patterns and validity checks are disabled. Dependabot vulnerability alerts were enabled during this mission, and the current
+open-alert query reports alert #1: `glib 0.18.5`, Medium, GHSA-wrw7-89jp-8q8g / RUSTSEC-2024-0429. Automated Dependabot
+security-update pull requests remain disabled. Production and full-tree `npm audit --audit-level=high` both reported zero
+known npm vulnerabilities on candidate `81b52716d6559720a0228059562b1c35e21dc19b`. `cargo-audit`, `cargo-deny`, and Trivy
+are unavailable in the local environment, so no standalone Cargo audit was run. PR #89's Dependency Review check passed for
+candidate `81b52716d6559720a0228059562b1c35e21dc19b`; it is candidate-specific and must pass again on any later PR head
+before merge. Dependency Review does not replace Dependabot alerts or establish that unchanged transitive dependencies
+have no exposure. GitHub Actions references in the edited CI, CodeQL, and Dependency Review workflows are pinned to full
 commit SHAs.
 
-The lockfile includes `glib 0.18.5`, affected by [RustSec RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html),
-an informational unsoundness advisory fixed in `glib >=0.20.0`. The advisory names `VariantStrIter` iterator methods;
-application reachability and exploitability were not established in this review. This remains an unresolved transitive-
-dependency review item; no clean Rust dependency-audit result is available.
+The advisory concerns unsound `VariantStrIter` iterator methods and is fixed in `glib >=0.20.0`
+([GHSA-wrw7-89jp-8q8g](https://github.com/advisories/GHSA-wrw7-89jp-8q8g),
+[RustSec RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)). The affected dependency is
+Linux-target-only in this lockfile: Tauri 2.11.6 selects GTK 0.18.2 and its gtk-rs family, which constrain `glib` to the
+vulnerable 0.18 line. The current stable Tauri v2.12.1 manifest still selects GTK 0.18
+([source](https://github.com/tauri-apps/tauri/blob/tauri-v2.12.1/crates/tauri/Cargo.toml)); the gtk-rs 0.18
+backport [#2009](https://github.com/gtk-rs/gtk-rs-core/pull/2009) and 0.18.6 release request
+[#2010](https://github.com/gtk-rs/gtk-rs-core/issues/2010) were closed without a published fixed version, while
+Tauri's GTK4 migration remains tracked upstream ([Tauri issue #12561](https://github.com/tauri-apps/tauri/issues/12561)).
+Repository and locally cached dependency source searches found no direct `VariantStrIter` call site, but they do not
+prove application unreachability through native libraries. Keep Dependabot alert #1 open; reassess when upstream ships a
+maintained backport or a compatible stable native stack. Do not dismiss it as a false positive.
 
-The release workflow is candidate-validation only and has no publishing permissions or tag/release operations. Release
-publication remains disabled pending server-side repository protections and an independently approved publisher, as
-documented in `docs/RELEASING.md`.
+The release workflow is candidate-validation only and has no publishing permissions or tag/release operations. The current
+GitHub snapshot has no `main` branch protection or repository ruleset. Release publication remains disabled pending
+server-side protections and an independently approved publisher, as documented in `docs/RELEASING.md`.
 
 The local runtime adapters accept only plain-HTTP loopback endpoints; the Models surface supplies a fixed Ollama default
 and selected loopback endpoints for LM Studio and llama.cpp. The adapters request health, model metadata, generation,
@@ -160,6 +170,9 @@ model paths, download files, or send telemetry.
   re-enables post-lock audit IDs. Failed lock writes retain scores and offer a retry after checking whether a record was
   already committed. The persisted record contains no response text, and scores/ranking are validated at the Rust
   boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
+  Arena summaries record whether execution was blind. Summary history, exports, historical comparisons, and ratings hide
+  identity-sensitive results until locked per-run evaluation records cover every completed source attempt. Legacy
+  summaries without the marker use the same fail-closed lock check.
 - Phase 14 comparability remains a pure in-memory diagnostic over one local run and its typed attempts. The separate
   Insights surface stores bounded single-model suite summaries, per-run metrics, single-run comparisons across saved
   single-model/Arena sources, repeated single-model regression intervals, Elo v1/Bradley–Terry v1 rating snapshots,

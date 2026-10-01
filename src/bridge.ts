@@ -363,6 +363,8 @@ export type ArenaExecutionEvidence = {
 
 export type ArenaSummaryPayload = {
   arenaId: string;
+  /** `undefined` is a legacy record whose pre-reveal identity visibility cannot be inferred safely. */
+  blind?: boolean;
   benchmarkVersionId: string;
   taskId: string;
   caseId: string;

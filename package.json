@@ -18,8 +18,7 @@
     "build:windows-msi": "node scripts/build-windows-msi.mjs",
     "prepare:worker-sidecar": "node scripts/prepare-worker-sidecar.mjs",
     "package:artifacts": "node scripts/package-artifacts.mjs",
-    "verify:package": "node scripts/verify-package.mjs",
-    "release:windows": "node scripts/release-windows.mjs"
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

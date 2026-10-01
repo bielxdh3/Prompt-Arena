@@ -85,9 +85,21 @@ export async function executeSingleModelSuiteCases<T>(
   challenges: Array<{ taskId: string; caseId: string }>,
   execute: (challenge: { taskId: string; caseId: string }) => Promise<SingleModelSuiteCaseExecution<T>>,
   persist: (challenge: { taskId: string; caseId: string }, execution: T) => Promise<void>,
+  shouldContinue: () => boolean = () => true,
 ): Promise<SingleModelSuiteCaseOutcome[]> {
   const outcomes: SingleModelSuiteCaseOutcome[] = [];
   for (const challenge of challenges) {
+    if (!shouldContinue()) {
+      outcomes.push({
+        taskId: challenge.taskId,
+        caseId: challenge.caseId,
+        status: "cancelled",
+        runId: null,
+        attemptId: null,
+        objectivePassed: null,
+      });
+      continue;
+    }
     let result: SingleModelSuiteCaseExecution<T>;
     try {
       result = await execute(challenge);

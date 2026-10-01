@@ -7,8 +7,14 @@ export type RobustnessVariantOutcome = PerturbedTask & {
   passed: boolean | null;
   runId?: string;
   attemptId?: string;
+  sourceContentHash?: string;
   executionStatus: "completed" | "failed" | "cancelled" | "unavailable";
   errorCode?: "execution_failed" | "evidence_save_failed";
+};
+
+type RobustnessEvidencePersistenceResult = string | void | {
+  sourceContentHash: string;
+  errorCode: "evidence_save_failed";
 };
 export type RobustnessResult = {
   schemaVersion: 1;
@@ -20,12 +26,14 @@ export type RobustnessResult = {
   basePassed: boolean | null;
   baseRunId: string | null;
   baseAttemptId: string | null;
+  baseSourceContentHash?: string;
   baseEvidenceSaved: boolean | null;
   baseStatus: "completed" | "failed" | "cancelled" | "unavailable";
   variants: RobustnessVariantOutcome[];
   robustnessScore: number | null;
   variance: number | null;
   failureClusters: string[];
+  verificationStatus?: "unverified";
   createdAt: string;
 };
 
@@ -98,10 +106,15 @@ export function isEffectivePerturbation(variant: PerturbedTask, effectivePrompt:
 export async function executeRobustnessVariants<T>(
   variants: ReadonlyArray<PerturbedTask>,
   execute: (variant: PerturbedTask) => Promise<{ status: "completed" | "failed" | "cancelled" | "unavailable"; passed: boolean | null; runId?: string; attemptId?: string; value?: T }>,
-  persist: (variant: PerturbedTask, value: T) => Promise<void>,
+  persist: (variant: PerturbedTask, value: T) => Promise<RobustnessEvidencePersistenceResult>,
+  shouldContinue: () => boolean = () => true,
 ): Promise<RobustnessVariantOutcome[]> {
   const outcomes: RobustnessVariantOutcome[] = [];
   for (const variant of variants) {
+    if (!shouldContinue()) {
+      outcomes.push({ ...variant, passed: null, executionStatus: "cancelled" });
+      continue;
+    }
     let result: Awaited<ReturnType<typeof execute>>;
     try {
       result = await execute(variant);
@@ -110,18 +123,25 @@ export async function executeRobustnessVariants<T>(
       continue;
     }
     let errorCode: RobustnessVariantOutcome["errorCode"];
+    let sourceContentHash: string | undefined;
     if (result.value !== undefined && result.status !== "unavailable") {
       try {
-        await persist(variant, result.value);
+        const persistedHash = await persist(variant, result.value);
+        if (typeof persistedHash === "string") sourceContentHash = persistedHash;
+        else if (persistedHash) {
+          sourceContentHash = persistedHash.sourceContentHash;
+          errorCode = persistedHash.errorCode;
+        }
       } catch {
         errorCode = "evidence_save_failed";
       }
     }
     outcomes.push({
       ...variant,
-      passed: result.status === "completed" ? result.passed : null,
+      passed: result.status === "completed" && !errorCode ? result.passed : null,
       ...(result.runId ? { runId: result.runId } : {}),
       ...(result.attemptId ? { attemptId: result.attemptId } : {}),
+      ...(sourceContentHash ? { sourceContentHash } : {}),
       executionStatus: result.status,
       ...(errorCode ? { errorCode } : {}),
     });
@@ -133,7 +153,7 @@ export function scoreRobustness(
   basePassed: boolean | null,
   variants: ReadonlyArray<RobustnessVariantOutcome>,
   createdAt = new Date().toISOString(),
-  context: { taskId?: string; caseId?: string; profileRevisionId?: string; baseRunId?: string; baseAttemptId?: string; baseEvidenceSaved?: boolean; baseStatus?: RobustnessResult["baseStatus"] } = {},
+  context: { taskId?: string; caseId?: string; profileRevisionId?: string; baseRunId?: string; baseAttemptId?: string; baseSourceContentHash?: string; baseEvidenceSaved?: boolean; baseStatus?: RobustnessResult["baseStatus"] } = {},
 ): RobustnessResult {
   const scoredVariants = variants.filter((variant) => variant.errorCode !== "evidence_save_failed");
   const observed = scoredVariants.map((variant) => variant.passed).filter((value): value is boolean => typeof value === "boolean");
@@ -151,12 +171,14 @@ export function scoreRobustness(
     basePassed,
     baseRunId: context.baseRunId ?? null,
     baseAttemptId: context.baseAttemptId ?? null,
+    ...(context.baseSourceContentHash ? { baseSourceContentHash: context.baseSourceContentHash } : {}),
     baseEvidenceSaved: context.baseEvidenceSaved ?? null,
     baseStatus: context.baseStatus ?? (basePassed === null ? "unavailable" : "completed"),
     variants: [...variants],
     robustnessScore: average,
     variance,
     failureClusters: [...new Set(clusters)],
+    verificationStatus: "unverified",
     createdAt,
   };
 }

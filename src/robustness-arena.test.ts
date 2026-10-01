@@ -25,11 +25,12 @@ describe("robustness arena", () => {
       async (variant) => {
         if (variant.transformationType === "concise_wording") throw new Error("runtime unavailable");
         if (variant.transformationType === "verbose_wording") return { status: "cancelled", passed: null, runId: "run-cancel", attemptId: "attempt-cancel", value: "cancelled" };
-        if (variant.transformationType === "irrelevant_noise") return { status: "completed", passed: false, runId: "run-unpersisted", attemptId: "attempt-unpersisted", value: "unpersisted-complete" };
+        if (variant.transformationType === "irrelevant_noise") return { status: "completed", passed: false, runId: "run-partial", attemptId: "attempt-partial", value: "partial-complete" };
         return { status: "completed", passed: true, runId: "run-complete", attemptId: "attempt-complete", value: "complete" };
       },
       async (_variant, value) => {
-        if (value === "cancelled" || value === "unpersisted-complete") throw new Error("artifact store unavailable");
+        if (value === "cancelled") throw new Error("artifact store unavailable");
+        if (value === "partial-complete") return { sourceContentHash: "a".repeat(64), errorCode: "evidence_save_failed" };
         persisted.push(value);
       },
     );
@@ -37,7 +38,7 @@ describe("robustness arena", () => {
     expect(outcomes.map((outcome) => outcome.executionStatus)).toEqual(["failed", "cancelled", "completed", "completed"]);
     expect(outcomes[0].errorCode).toBe("execution_failed");
     expect(outcomes[1].errorCode).toBe("evidence_save_failed");
-    expect(outcomes[2]).toMatchObject({ passed: false, runId: "run-unpersisted", errorCode: "evidence_save_failed" });
+    expect(outcomes[2]).toMatchObject({ passed: null, runId: "run-partial", attemptId: "attempt-partial", sourceContentHash: "a".repeat(64), errorCode: "evidence_save_failed" });
     expect(persisted).toEqual(["complete"]);
     expect(outcomes[3].passed).toBe(true);
     const scored = scoreRobustness(null, outcomes);
@@ -95,5 +96,29 @@ describe("robustness arena", () => {
     expect(isEffectivePerturbation(noParaphrase, noParaphrase.prompt, noParaphrase.sourcePrompt)).toBe(false);
     expect(isEffectivePerturbation(variants[0], variants[0].prompt, variants[0].sourcePrompt)).toBe(true);
     expect(isEffectivePerturbation(variants[0], source, source)).toBe(false);
+  });
+
+  it("skips queued variants after cancellation and retains the active cancelled result", async () => {
+    const variants = generatePerturbations("Solve a stable task.", "ok", "bench@1", 1, ["concise_wording", "verbose_wording", "irrelevant_noise"]);
+    const executed: string[] = [];
+    const persisted: string[] = [];
+    let allowed = true;
+    const outcomes = await executeRobustnessVariants(
+      variants,
+      async (variant) => {
+        executed.push(variant.transformationType);
+        allowed = false;
+        return { status: "cancelled", passed: null, runId: "active-run", attemptId: "active-attempt", value: "cancelled evidence" };
+      },
+      async (_variant, value) => { persisted.push(value); return "f".repeat(64); },
+      () => allowed,
+    );
+
+    expect(executed).toEqual(["concise_wording"]);
+    expect(persisted).toEqual(["cancelled evidence"]);
+    expect(outcomes.map((outcome) => outcome.executionStatus)).toEqual(["cancelled", "cancelled", "cancelled"]);
+    expect(outcomes[0]).toMatchObject({ runId: "active-run", attemptId: "active-attempt", sourceContentHash: "f".repeat(64) });
+    expect(outcomes.slice(1).every((outcome) => outcome.runId === undefined && outcome.attemptId === undefined)).toBe(true);
+    expect(scoreRobustness(null, outcomes).verificationStatus).toBe("unverified");
   });
 });

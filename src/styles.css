@@ -3946,7 +3946,8 @@ button.official-pack-row:hover,
 .roadmap-bundle-preview { background: var(--color-surface-muted); }
 
 /* Shared card containment: grid children and long labels may shrink within their panel. */
-.roadmap-features-view > .panel { padding: clamp(20px, 3vw, 32px); }
+.roadmap-features-view > .panel,
+.roadmap-features-view.panel { padding: clamp(20px, 3vw, 32px); }
 .arena-selection-grid > *, .metric-grid > *, .roadmap-table, .arena-custom-listbox { min-width: 0; max-width: 100%; }
 .metric-card strong, .run-row h3, .profile-record-row strong, .roadmap-table td { overflow-wrap: anywhere; }
 .arena-actions { flex-wrap: wrap; }

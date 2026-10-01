@@ -19,24 +19,32 @@ describe("Windows package smoke helpers", () => {
     );
   });
 
-  it("uses quiet, no-restart MSI install and uninstall commands", () => {
+  it("uses quiet, no-restart MSI install and uninstall commands with verbose logs", () => {
     const installer = path.join("C:", "runner temp", "Prompt-Arena.msi");
     const installDirectory = path.join("C:", "runner temp", "Prompt Arena MSI");
-    expect(buildMsiexecArguments("install", installer, installDirectory)).toEqual([
+    const installLog = path.join("C:", "runner temp", "msi install.log");
+    const uninstallLog = path.join("C:", "runner temp", "msi uninstall.log");
+    expect(buildMsiexecArguments("install", installer, installDirectory, installLog)).toEqual([
       "/i",
       installer,
       "/qn",
       "/norestart",
       `INSTALLDIR="${installDirectory}"`,
+      "/L*V!",
+      installLog,
     ]);
-    expect(buildMsiexecArguments("uninstall", installer)).toEqual([
+    expect(buildMsiexecArguments("uninstall", installer, undefined, uninstallLog)).toEqual([
       "/x",
       installer,
       "/qn",
       "/norestart",
+      "/L*V!",
+      uninstallLog,
     ]);
-    expect(() => buildMsiexecArguments("install", installer, "C:\\bad\"path")).toThrow("MSI install directory is invalid");
-    expect(() => buildMsiexecArguments("repair", installer)).toThrow("unsupported MSI action");
+    expect(() => buildMsiexecArguments("install", installer, "C:\\bad\"path", installLog)).toThrow("MSI install directory is invalid");
+    expect(() => buildMsiexecArguments("install", installer, installDirectory)).toThrow("MSI log path is invalid");
+    expect(() => buildMsiexecArguments("uninstall", installer, undefined, "C:\\bad\"log")).toThrow("MSI log path is invalid");
+    expect(() => buildMsiexecArguments("repair", installer, undefined, uninstallLog)).toThrow("unsupported MSI action");
   });
 
   it("classifies standard MSI success and teardown codes without accepting a reboot request", () => {

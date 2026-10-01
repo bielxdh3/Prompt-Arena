@@ -73,6 +73,53 @@ describe("historical regression comparison", () => {
     ] });
     expect(buildHistoricalRegressionExport(comparison, [single])).toBeNull();
   });
+
+  it("compares whole-Arena metrics independently of competitor and evidence order", () => {
+    const base: ArenaSummaryRecord = {
+      arenaId: "arena-base", benchmarkVersionId: "logic@1", taskId: "logic", caseId: "case-1", repetitions: 1, packId: null, materializationSeed: null,
+      arenaWallTimeMs: 900,
+      summary: { objectivePassRate: 0.5, objectiveUncertainty: 0.1 },
+      competitors: [
+        { competitorId: "alpha@1", runtime: "ollama", model: "alpha", objectivePassed: 1, objectiveChecked: 1 },
+        { competitorId: "beta@1", runtime: "ollama", model: "beta", objectivePassed: 0, objectiveChecked: 1 },
+      ],
+      evidence: [
+        { competitorId: "alpha@1", competitorLabel: "alpha", repetition: 1, runId: "a", attemptId: null, status: "completed", durationMs: 100, generationDurationMs: 1_000, ttftMs: 10, completionTokens: 10, objectivePassed: true },
+        { competitorId: "beta@1", competitorLabel: "beta", repetition: 1, runId: "b", attemptId: null, status: "completed", durationMs: 120, generationDurationMs: 2_000, ttftMs: 20, completionTokens: 40, objectivePassed: false },
+      ],
+      contentHash: "b".repeat(64), createdAt: "2026-09-12T00:00:00Z",
+    };
+    const reordered: ArenaSummaryRecord = {
+      ...base,
+      arenaId: "arena-reordered",
+      competitors: [...base.competitors].reverse(),
+      evidence: [...base.evidence].reverse(),
+      contentHash: "c".repeat(64),
+    };
+
+    const comparison = compareHistoricalRuns(base, reordered);
+    expect(comparison.compatibility).toMatchObject({ compatible: true, changedDimensions: [] });
+    expect(comparison.metrics.find((metric) => metric.metric === "wallClockMs")?.baseline).toBe(900);
+    expect(comparison.metrics.find((metric) => metric.metric === "generationTokensPerSecond")?.baseline).toBeCloseTo(50 / 3);
+    expect(comparison.metrics.find((metric) => metric.metric === "ttftMs")?.baseline).toBe(15);
+    expect(comparison.metrics.find((metric) => metric.metric === "quality")?.baseline).toBe(0.5);
+  });
+
+  it("surfaces added or removed Arena competitors as changed whole-run conditions", () => {
+    const baseline: ArenaSummaryRecord = {
+      arenaId: "arena-two", benchmarkVersionId: "logic@1", taskId: "logic", caseId: "case-1", repetitions: 1, packId: null, materializationSeed: null,
+      arenaWallTimeMs: 500, summary: { objectivePassRate: 1 },
+      competitors: [{ competitorId: "alpha@1", runtime: "ollama", model: "alpha", objectivePassed: 1, objectiveChecked: 1 }, { competitorId: "beta@1", runtime: "ollama", model: "beta", objectivePassed: 1, objectiveChecked: 1 }],
+      evidence: [], contentHash: "d".repeat(64), createdAt: "2026-09-12T00:00:00Z",
+    };
+    const candidate: ArenaSummaryRecord = { ...baseline, arenaId: "arena-three", arenaWallTimeMs: 250, competitors: [baseline.competitors[0]], contentHash: "e".repeat(64) };
+    const comparison = compareHistoricalRuns(baseline, candidate);
+
+    expect(comparison.compatibility.changedDimensions).toContain("competitors");
+    expect(comparison.compatibility.changedDimensions).not.toContain("profileRevisionId");
+    expect(comparison.metrics.find((metric) => metric.metric === "wallClockMs")).toMatchObject({ baseline: 500, candidate: 250, absoluteDelta: -250 });
+    expect(comparison.compatibility.warnings.join(" ")).toContain("competitors differs");
+  });
 });
 
 describe("repeated historical regression inference", () => {
