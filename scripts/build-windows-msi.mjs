@@ -160,6 +160,43 @@ export function putWorkerInMandatoryFeature(contents, retainedComponentId) {
     + withoutOptionalRef.slice(main[0].openEnd);
 }
 
+// Tauri also puts its executable component "Path" exclusively under optional
+// ShortcutsFeature and Environment. Both can be deselected while MainProgram is
+// required, yielding an MSI that installs the worker without the application.
+// Make the core executable a direct compulsory dependency, independent of
+// optional shortcut and PATH choices.
+export function putAppInMandatoryFeature(contents) {
+  const features = wixFeatures(contents);
+  const main = features.filter((feature) => feature.id === "MainProgram");
+  const optional = features.filter((feature) => ["ShortcutsFeature", "Environment"].includes(feature.id));
+  if (main.length !== 1 || main[0].absent !== "disallow" || optional.length !== 2
+      || optional.some((feature) => feature.parentId !== "MainProgram")) {
+    throw new Error("WiX application feature layout is unfamiliar; refusing to alter required components");
+  }
+  const components = [...contents.matchAll(/<Component\b[^>]*>[\s\S]*?<\/Component>/gu)]
+    .filter(([body]) => wixAttribute(/^<Component\b[^>]*>/u.exec(body)?.[0] ?? "", "Id") === "Path");
+  if (components.length !== 1) throw new Error("WiX core application component is not unique");
+  const files = [...components[0][0].matchAll(/<File\b[^>]*>/gu)];
+  if (files.length !== 1 || wixFileName(files[0][0]) !== "prompt-arena.exe") {
+    throw new Error("WiX core application executable is unfamiliar");
+  }
+  const refs = [...contents.matchAll(/<ComponentRef\b[^>]*\/>/gu)]
+    .filter(([tag]) => wixAttribute(tag, "Id") === "Path");
+  if (refs.length < 1 || refs.length > 2 || refs.some((ref) => !optional.some((feature) =>
+    ref.index >= feature.openEnd && ref.index < feature.closeStart))) {
+    throw new Error("WiX core application reference is not confined to expected optional features");
+  }
+  // Slice backwards so the offsets of earlier references remain stable.
+  let result = contents;
+  for (const ref of refs.reverse()) {
+    result = result.slice(0, ref.index) + result.slice(ref.index + ref[0].length);
+  }
+  const compulsory = wixFeatures(result).find((feature) => feature.id === "MainProgram");
+  return result.slice(0, compulsory.openEnd)
+    + '\n            <ComponentRef Id="Path"/>'
+    + result.slice(compulsory.openEnd);
+}
+
 function saveWixFailureDiagnostics() {
   const directory = process.env.PACKAGE_DIAGNOSTICS_DIR?.trim();
   if (!directory) return;
@@ -197,7 +234,7 @@ export function patchDuplicateWorkerComponentContents(contents) {
       + `(source worker files=${before.length}, retained worker files=${after.length}, retained referenced=${after[0]?.referenced === true})`,
     );
   }
-  return putWorkerInMandatoryFeature(patched, after[0].componentId);
+  return putAppInMandatoryFeature(putWorkerInMandatoryFeature(patched, after[0].componentId));
 }
 
 function patchDuplicateWorkerComponent(wxsPath) {
