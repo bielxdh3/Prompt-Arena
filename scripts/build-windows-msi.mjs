@@ -27,14 +27,78 @@ function wixToolsRoot() {
   return tools;
 }
 
-function patchDuplicateWorkerComponent(wxsPath) {
-  const contents = fs.readFileSync(wxsPath, "utf8");
-  const duplicate = /\r?\n\s*<Component Id="prompt_arena_worker"[\s\S]*?<\/Component>/u;
-  if (!duplicate.test(contents) || !contents.includes('<ComponentRef Id="prompt_arena_worker"/>')) {
-    throw new Error("WiX output did not contain the known duplicate worker component");
+function wixAttribute(tag, name) {
+  return new RegExp(`\\b${name}="([^"]*)"`, "u").exec(tag)?.[1];
+}
+
+const MSI_WORKER_FILENAMES = new Set([
+  "prompt-arena-worker.exe",
+  "prompt-arena-worker-x86_64-pc-windows-msvc.exe",
+]);
+
+// This is a narrow check for Tauri's generated WiX fragments, not an XML parser.
+// When a future Tauri version changes the shape, refuse to patch the MSI rather
+// than risk silently shipping an application without its one-shot worker.
+export function inspectWixWorkerPayload(wxs) {
+  const references = new Set(
+    [...wxs.matchAll(/<ComponentRef\b[^>]*>/gu)]
+      .map(([tag]) => wixAttribute(tag, "Id"))
+      .filter(Boolean),
+  );
+  const workers = [];
+  for (const component of wxs.matchAll(/<Component\b[^>]*>[\s\S]*?<\/Component>/gu)) {
+    const [body] = component;
+    const header = /^<Component\b[^>]*>/u.exec(body)?.[0];
+    const componentId = header && wixAttribute(header, "Id");
+    for (const [fileTag] of body.matchAll(/<File\b[^>]*>/gu)) {
+      const name = wixAttribute(fileTag, "Name");
+      if (name && MSI_WORKER_FILENAMES.has(name.toLowerCase())) {
+        workers.push({ componentId, referenced: references.has(componentId) });
+      }
+    }
   }
-  const patched = contents.replace(duplicate, "").replace(/\r?\n\s*<ComponentRef Id="prompt_arena_worker"\/>/u, "");
+  return workers;
+}
+
+export function patchDuplicateWorkerComponentContents(contents) {
+  const duplicate = /\r?\n\s*<Component\b[^>]*\bId="prompt_arena_worker"[^>]*>[\s\S]*?<\/Component>/gu;
+  const matches = [...contents.matchAll(duplicate)];
+  const reference = /\r?\n\s*<ComponentRef\b[^>]*\bId="prompt_arena_worker"\s*\/>/gu;
+  const refs = [...contents.matchAll(reference)];
+  if (matches.length !== 1 || refs.length !== 1) {
+    throw new Error("WiX generated worker component/ref is unfamiliar; refusing destructive fallback");
+  }
+  const removedComponent = matches[0][0];
+  const removedBody = /<Component\b[^>]*>([\s\S]*?)<\/Component>/u.exec(removedComponent)?.[1]?.trim();
+  const removedFileTag = removedBody && /^<File\b[^>]*\/>$/u.exec(removedBody)?.[0];
+  if (!removedFileTag || wixAttribute(removedFileTag, "Name")?.toLowerCase() !== "prompt-arena-worker.exe") {
+    throw new Error("WiX fallback would remove an unknown or multi-resource component; refusing to patch MSI");
+  }
+  const before = inspectWixWorkerPayload(contents);
+  const patched = contents.replace(duplicate, "").replace(reference, "");
+  const after = inspectWixWorkerPayload(patched);
+  if (before.length < 2 || after.length !== 1 || !after[0].referenced || after[0].componentId === "prompt_arena_worker") {
+    throw new Error(
+      `WiX fallback would remove the only or unreferenced worker sidecar; refusing to build incomplete MSI `
+      + `(source worker files=${before.length}, retained worker files=${after.length}, retained referenced=${after[0]?.referenced === true})`,
+    );
+  }
+  return patched;
+}
+
+function patchDuplicateWorkerComponent(wxsPath) {
+  const original = fs.readFileSync(wxsPath, "utf8");
+  const patched = patchDuplicateWorkerComponentContents(original);
   fs.writeFileSync(wxsPath, patched, "utf8");
+}
+
+export function verifyMsiWorkerPayload(msiPath) {
+  const verifier = path.join(REPOSITORY_ROOT, "scripts", "verify-windows-msi.ps1");
+  const status = run("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-File", verifier, "-MsiPath", msiPath,
+  ]);
+  if (status !== 0) throw new Error(`MSI worker inclusion verification failed with exit code ${status}`);
 }
 
 export function buildPatchedMsi(version, releaseDirectory = path.join(REPOSITORY_ROOT, "src-tauri", "target", "release")) {
@@ -58,6 +122,7 @@ export function buildPatchedMsi(version, releaseDirectory = path.join(REPOSITORY
   if (lightStatus !== 0) throw new Error(`WiX light.exe failed with exit code ${lightStatus}`);
   const metadata = fs.statSync(outputPath);
   if (!metadata.isFile() || metadata.size === 0) throw new Error(`WiX produced an empty MSI: ${outputPath}`);
+  verifyMsiWorkerPayload(outputPath);
   return outputPath;
 }
 
@@ -103,7 +168,10 @@ export function buildWindowsMsi() {
     "run", "tauri:build", "--", "--bundles", "msi", "--config", "src-tauri/tauri.msi.conf.json",
   ], { shell: true });
   const candidates = tauriMsiCandidates().filter((candidate) => fs.statSync(candidate).size > 0);
-  if (tauriStatus === 0 && candidates.length === 1) return candidates[0];
+  if (tauriStatus === 0 && candidates.length === 1) {
+    verifyMsiWorkerPayload(candidates[0]);
+    return candidates[0];
+  }
   return buildPatchedMsi(version);
 }
 
@@ -120,4 +188,3 @@ if (isMainModule()) {
     process.exitCode = 1;
   }
 }
-

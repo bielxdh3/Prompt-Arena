@@ -5,7 +5,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex, OnceLock,
+        mpsc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -72,10 +72,11 @@ use crate::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
         BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
         CalibrationBenchmarkPayload, CalibrationBenchmarkRecord, CalibrationResultPayload,
-        CalibrationResultRecord, ExternalGenerationEvidenceRecord, RoadmapRecord,
-        RoadmapRecordRequest, StorageError, StorageRetentionPreview, StorageRetentionRequest,
-        StorageRetentionResult, StorageService, TournamentResultPayload, TournamentResultRecord,
-        MAX_DRAFT_REQUEST_BYTES, MAX_METADATA_BYTES, MAX_PROFILE_REQUEST_BYTES,
+        CalibrationResultRecord, ExternalGenerationEvidenceRecord, ModelOperationsPage,
+        RoadmapRecord, RoadmapRecordRequest, StorageError, StorageRetentionPreview,
+        StorageRetentionRequest, StorageRetentionResult, StorageService, TournamentResultPayload,
+        TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES, MAX_METADATA_BYTES,
+        MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -314,6 +315,7 @@ impl From<StorageError> for CommandError {
             StorageError::RetentionTooBroad => "retention_too_broad",
             StorageError::RetentionConfirmationRequired => "retention_confirmation_required",
             StorageError::RetentionPreviewStale => "retention_preview_stale",
+            StorageError::OperationCancelled => "model_operation_cancelled",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
@@ -964,6 +966,38 @@ pub fn list_model_operations(app: AppHandle) -> Result<Vec<ModelOperation>, Comm
         .map_err(Into::into)
 }
 
+fn validate_model_operations_page(limit: u32, offset: u32) -> Result<(), CommandError> {
+    if !(1..=100).contains(&limit) || offset.checked_add(limit).is_none() {
+        return Err(CommandError {
+            code: "model_operations_page_invalid",
+            message: "model operation page limit must be 1–100 and offset must not overflow"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_model_operations_page(
+    app: AppHandle,
+    limit: u32,
+    offset: u32,
+) -> Result<ModelOperationsPage, CommandError> {
+    validate_model_operations_page(limit, offset)?;
+    // The UI polls this command during active generation; keep SQL off the
+    // dispatcher so a slow history query cannot stall cancellation requests.
+    tauri::async_runtime::spawn_blocking(move || {
+        storage_for(&app)?
+            .list_model_operations_page(limit, offset)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_operations_read_failed",
+        message: "the model operation history worker failed".to_owned(),
+    })?
+}
+
 #[tauri::command]
 pub fn get_model_operation(
     app: AppHandle,
@@ -1427,7 +1461,21 @@ fn invoke_worker_request(
         });
     }
 
-    let mut child = Command::new(worker_executable)
+    invoke_worker_request_bytes(
+        Command::new(worker_executable),
+        &request_bytes,
+        cancellation,
+    )
+}
+
+/// Separating spawning from request encoding makes the real worker lifecycle
+/// testable against a synthetic child that never stops writing stdout.
+fn invoke_worker_request_bytes(
+    mut command: Command,
+    request_bytes: &[u8],
+    cancellation: Option<&CancellationToken>,
+) -> Result<Option<WorkerResponse>, CommandError> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1440,30 +1488,65 @@ fn invoke_worker_request(
         code: "worker_protocol_failed",
         message: "the one-shot worker did not expose stdout".to_owned(),
     })?;
-    let reader =
-        thread::spawn(move || read_bounded(stdout, MAX_WORKER_RESPONSE_BYTES.saturating_add(1)));
+    let (reader_error_tx, reader_error_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let result = read_bounded(stdout, MAX_WORKER_RESPONSE_BYTES);
+        // The reader must alert the parent before it waits for child exit.
+        // Otherwise a worker that streams forever can hold the parent forever.
+        if let Err(error) = &result {
+            let _ = reader_error_tx.send(error.kind());
+        }
+        result
+    });
 
-    let write_result = child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "worker stdin unavailable"))
-        .and_then(|mut stdin| stdin.write_all(&request_bytes));
-    if write_result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = reader.join();
-        return Err(CommandError {
-            code: "worker_unavailable",
-            message: "the one-shot worker request could not be written".to_owned(),
-        });
-    }
+    // A bad worker may spam stdout without ever reading its request. Writing
+    // a valid (up to 1 MiB) request on this thread would then fill the pipe
+    // and prevent it from noticing the stdout overflow or a cancellation.
+    let mut stdin = child.stdin.take().ok_or_else(|| CommandError {
+        code: "worker_unavailable",
+        message: "the one-shot worker did not expose stdin".to_owned(),
+    })?;
+    let request_bytes = request_bytes.to_vec();
+    let (writer_error_tx, writer_error_rx) = mpsc::channel();
+    let writer = thread::spawn(move || {
+        let result = stdin.write_all(&request_bytes);
+        if result.is_err() {
+            let _ = writer_error_tx.send(());
+        }
+        result
+    });
 
     let (status, cancelled) = loop {
-        if let Some(status) = child.try_wait().map_err(|_| CommandError {
-            code: "worker_unavailable",
-            message: "the one-shot worker did not exit cleanly".to_owned(),
-        })? {
-            break (status, false);
+        if let Ok(kind) = reader_error_rx.try_recv() {
+            // Signal arrived while the worker may still be writing endlessly.
+            // Close it, reap it, then join the bounded stdout reader.
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            let _ = writer.join();
+            return Err(CommandError {
+                code: "worker_protocol_failed",
+                message: if kind == io::ErrorKind::InvalidData {
+                    "the one-shot worker response exceeded the size limit"
+                } else {
+                    "the one-shot worker output reader failed"
+                }
+                .to_owned(),
+            });
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                let _ = writer.join();
+                return Err(CommandError {
+                    code: "worker_unavailable",
+                    message: "the one-shot worker did not exit cleanly".to_owned(),
+                });
+            }
         }
         if cancellation.is_some_and(CancellationToken::is_cancelled) {
             let _ = child.kill();
@@ -1473,19 +1556,41 @@ fn invoke_worker_request(
             })?;
             break (status, true);
         }
+        if writer_error_rx.try_recv().is_ok() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            let _ = writer.join();
+            return Err(CommandError {
+                code: "worker_unavailable",
+                message: "the one-shot worker request could not be written".to_owned(),
+            });
+        }
         thread::sleep(Duration::from_millis(10));
     };
     let output = reader.join().map_err(|_| CommandError {
         code: "worker_protocol_failed",
         message: "the one-shot worker output reader failed".to_owned(),
     })?;
+    let write_result = writer.join().map_err(|_| CommandError {
+        code: "worker_unavailable",
+        message: "the one-shot worker request writer failed".to_owned(),
+    })?;
     if cancelled {
         return Ok(None);
     }
+    // Preserve the protocol overflow error even when closing the saturated
+    // child's pipes also caused its stdin writer to receive BrokenPipe.
     let output = output.map_err(|_| CommandError {
         code: "worker_protocol_failed",
         message: "the one-shot worker response exceeded the size limit".to_owned(),
     })?;
+    if write_result.is_err() {
+        return Err(CommandError {
+            code: "worker_unavailable",
+            message: "the one-shot worker request could not be written".to_owned(),
+        });
+    }
     if !status.success() {
         return Err(CommandError {
             code: "worker_failed",
@@ -1582,7 +1687,6 @@ fn resolve_worker_executable(
 fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
     let mut output = Vec::new();
     let mut buffer = [0_u8; 8192];
-    let mut oversized = false;
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
@@ -1590,19 +1694,14 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
         }
         let remaining = limit.saturating_sub(output.len());
         if read > remaining {
-            oversized = true;
-        } else {
-            output.extend_from_slice(&buffer[..read]);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "worker output exceeds the size limit",
+            ));
         }
+        output.extend_from_slice(&buffer[..read]);
     }
-    if oversized {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "worker output exceeds the size limit",
-        ))
-    } else {
-        Ok(output)
-    }
+    Ok(output)
 }
 
 fn worker_error_code(code: &WorkerErrorCode) -> &'static str {
@@ -1686,24 +1785,28 @@ fn supported_platform() -> SupportedPlatform {
 #[cfg(test)]
 mod tests {
     use std::{
+        env,
         ffi::OsStr,
         fs,
+        io::{self, Cursor, Write},
         path::{Path, PathBuf},
+        process::Command,
         sync::{
             atomic::{AtomicU64, Ordering},
             mpsc, Arc, Barrier, Mutex,
         },
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use super::{
-        app_status, cancel_run_once, docker_evaluation_score, ollama_server_command,
-        ollama_spawn_error, read_benchmark_version_from_storage, register_one_shot_run,
-        resolve_worker_executable, start_ollama_with, worker_executable_name,
-        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus,
-        OneShotCancellationRegistry, StorageState, MAX_ACTIVE_ONE_SHOT_RUNS, OLLAMA_START_RETRIES,
-        WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
+        app_status, cancel_run_once, docker_evaluation_score, invoke_worker_request_bytes,
+        ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
+        read_bounded, register_one_shot_run, resolve_worker_executable, start_ollama_with,
+        validate_model_operations_page, worker_executable_name, worker_executable_path,
+        worker_sidecar_resource_path, OllamaStartStatus, OneShotCancellationRegistry, StorageState,
+        MAX_ACTIVE_ONE_SHOT_RUNS, OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH,
+        WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
     use crate::{
@@ -1712,6 +1815,107 @@ mod tests {
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn read_bounded_rejects_immediately_after_first_excess_byte() {
+        assert_eq!(read_bounded(Cursor::new(b"1234"), 4).unwrap(), b"1234");
+        let error = read_bounded(Cursor::new(b"12345"), 4).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // This test executable is the fake app-owned worker in the two process
+    // tests below. Its long-running mode intentionally never reads stdin.
+    #[test]
+    fn fake_worker_stdout_fixture() {
+        match env::var("PROMPT_ARENA_TEST_FAKE_WORKER_STDOUT").as_deref() {
+            Ok("endless") => {
+                let mut stdout = io::stdout().lock();
+                let chunk = [b'x'; 64 * 1024];
+                loop {
+                    if stdout.write_all(&chunk).is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok("idle") => thread::sleep(Duration::from_secs(15)),
+            _ => {}
+        }
+    }
+
+    fn fake_worker_command(mode: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "commands::tests::fake_worker_stdout_fixture",
+                "--nocapture",
+            ])
+            .env("PROMPT_ARENA_TEST_FAKE_WORKER_STDOUT", mode);
+        command
+    }
+
+    #[test]
+    fn endless_stdout_worker_is_killed_reaped_and_returns_protocol_error() {
+        let token = crate::runtime::CancellationToken::new();
+        let watchdog_token = token.clone();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        // A broken implementation must fail, not hang the entire CI runner.
+        let watchdog = thread::spawn(move || {
+            if finished_rx.recv_timeout(Duration::from_secs(12)).is_err() {
+                watchdog_token.cancel();
+            }
+        });
+
+        let started = Instant::now();
+        // A 1 MiB input intentionally fills the worker's stdin pipe: the
+        // fake child never reads it while continuously streaming stdout.
+        let request = vec![b'x'; crate::protocol::MAX_WORKER_REQUEST_BYTES];
+        let result =
+            invoke_worker_request_bytes(fake_worker_command("endless"), &request, Some(&token));
+        let elapsed = started.elapsed();
+        let _ = finished_tx.send(());
+        watchdog.join().unwrap();
+
+        let error = result.expect_err("unending output must be killed after the size cap");
+        assert_eq!(error.code, "worker_protocol_failed");
+        assert!(error.message.contains("size limit"));
+        assert!(
+            elapsed < Duration::from_secs(12),
+            "overflow waited for cancellation watchdog"
+        );
+    }
+
+    #[test]
+    fn cancellation_still_kills_and_reaps_worker_while_stdout_is_open() {
+        let token = crate::runtime::CancellationToken::new();
+        let cancel_token = token.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(125));
+            cancel_token.cancel();
+        });
+        let started = Instant::now();
+        let result = invoke_worker_request_bytes(fake_worker_command("idle"), b"{}", Some(&token));
+        canceller.join().unwrap();
+
+        assert!(
+            result.unwrap().is_none(),
+            "cancellation must return the cancel path"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "cancellation waited for child exit"
+        );
+    }
+
+    #[test]
+    fn model_operations_page_ipc_validates_bounded_limits_and_offsets() {
+        assert!(validate_model_operations_page(1, 0).is_ok());
+        assert!(validate_model_operations_page(100, 1_000).is_ok());
+        for (limit, offset) in [(0, 0), (101, 0), (100, u32::MAX)] {
+            let error = validate_model_operations_page(limit, offset).unwrap_err();
+            assert_eq!(error.code, "model_operations_page_invalid");
+        }
+    }
 
     #[test]
     fn docker_infrastructure_outcomes_never_become_candidate_scores() {

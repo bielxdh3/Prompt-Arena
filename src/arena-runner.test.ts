@@ -202,6 +202,60 @@ describe("arena runner", () => {
     expect(rankArenaCompetitors(results)[0].metric).toBe("objective_pass_rate");
   });
 
+  it("uses a single objective metric when only part of the population has human scores", () => {
+    const results = [
+      { competitorId: "one@1", competitorLabel: "one", repetition: 1, runId: "arena-1-1", plan: {} as never, execution: execution("arena-1-1", "one@1", "completed"), error: null, cancelled: false },
+      { competitorId: "two@1", competitorLabel: "two", repetition: 1, runId: "arena-2-1", plan: {} as never, execution: execution("arena-2-1", "two@1", "completed"), error: null, cancelled: false },
+    ];
+    results[0].execution.attempt.result!.score = { passed: false };
+    results[1].execution.attempt.result!.score = { passed: true };
+    const onlyFirstReviewed = new Map([["arena-1-1:arena-1-1-attempt", 5]]);
+
+    const partialRanking = rankArenaCompetitors(results, onlyFirstReviewed);
+    expect(partialRanking.map(({ rank, competitorId, metric, value, sampleSize }) => ({ rank, competitorId, metric, value, sampleSize }))).toEqual([
+      { rank: 1, competitorId: "two@1", metric: "objective_pass_rate", value: 1, sampleSize: 1 },
+      { rank: 2, competitorId: "one@1", metric: "objective_pass_rate", value: 0, sampleSize: 1 },
+    ]);
+    expect(rankArenaCompetitors([...results].reverse(), onlyFirstReviewed)).toEqual(partialRanking);
+
+    const completeReview = new Map([...onlyFirstReviewed, ["arena-2-1:arena-2-1-attempt", 1]]);
+    const humanRanking = rankArenaCompetitors(results, completeReview);
+    expect(humanRanking.map(({ rank, competitorId, metric, value }) => ({ rank, competitorId, metric, value }))).toEqual([
+      { rank: 1, competitorId: "one@1", metric: "human_average_score", value: 5 },
+      { rank: 2, competitorId: "two@1", metric: "human_average_score", value: 1 },
+    ]);
+  });
+
+  it("does not let invalid or failed-attempt human scores trigger human ranking", () => {
+    const results = [
+      { competitorId: "one@1", competitorLabel: "one", repetition: 1, runId: "arena-1-1", plan: {} as never, execution: execution("arena-1-1", "one@1", "completed"), error: null, cancelled: false },
+      { competitorId: "two@1", competitorLabel: "two", repetition: 1, runId: "arena-2-1", plan: {} as never, execution: execution("arena-2-1", "two@1", "failed"), error: null, cancelled: false },
+    ];
+    const attemptsWithInvalidHumanScores = new Map([
+      ["arena-1-1:arena-1-1-attempt", 5],
+      ["arena-2-1:arena-2-1-attempt", 4],
+    ]);
+    // The failed competitor has neither verified human scores nor an objective
+    // measurement: zero evidence must not become a fabricated 0% rank.
+    expect(rankArenaCompetitors(results, attemptsWithInvalidHumanScores)).toEqual([]);
+    results[1].execution = execution("arena-2-1", "two@1", "completed");
+    results[1].execution.attempt.result!.score = { passed: false };
+    const completeObjectiveFallback = rankArenaCompetitors(results, new Map([
+      ["arena-1-1:arena-1-1-attempt", Number.POSITIVE_INFINITY],
+      ["arena-2-1:arena-2-1-attempt", 4],
+    ]));
+    expect(completeObjectiveFallback.map((entry) => entry.metric)).toEqual(["objective_pass_rate", "objective_pass_rate"]);
+    expect(completeObjectiveFallback.map(({ rank, competitorId, value }) => ({ rank, competitorId, value }))).toEqual([
+      { rank: 1, competitorId: "one@1", value: 1 },
+      { rank: 2, competitorId: "two@1", value: 0 },
+    ]);
+    results[1].execution.attempt.result!.score = { reason: "no validated objective outcome" };
+    expect(rankArenaCompetitors(results, new Map([
+      ["arena-1-1:arena-1-1-attempt", Number.POSITIVE_INFINITY],
+      ["arena-2-1:arena-2-1-attempt", 4],
+    ]))).toEqual([]);
+  });
+
   it("tracks progress transitions, measured accumulation, token rate, and deterministic ETA", () => {
     const request = { arenaId: "arena", version, taskId: "task", caseId: "case", profiles: [profile("one"), profile("two")], repetitions: 3 };
     let clock = 1000;
@@ -297,4 +351,3 @@ describe("arena runner", () => {
     expect(results[1].execution?.attempt.status).toBe("completed");
   });
 });
-

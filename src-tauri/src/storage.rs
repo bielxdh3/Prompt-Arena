@@ -29,7 +29,7 @@ use crate::runtime::{GenerationResponse, MAX_CONTEXT_WINDOW_TOKENS, MAX_OUTPUT_T
 
 pub use crate::domain::ArtifactRef;
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 9;
+pub const STORAGE_SCHEMA_VERSION: u32 = 10;
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub const FOUNDATION_MIGRATION: &str = include_str!("storage/migrations/0001_foundation.sql");
 pub const CORE_ARENA_MIGRATION: &str = include_str!("storage/migrations/0002_core_arena.sql");
@@ -45,6 +45,17 @@ pub const EXTERNAL_GENERATION_EVIDENCE_MIGRATION: &str =
     include_str!("storage/migrations/0008_external_generation_evidence.sql");
 pub const ROADMAP_RECORDS_MIGRATION: &str =
     include_str!("storage/migrations/0009_roadmap_records.sql");
+// Read-only listing now pins active work and pages only terminal history.
+// Partial indexes keep both queries proportional to their result sets even
+// after many years of immutable operation history.
+pub const MODEL_OPERATION_PAGING_MIGRATION: &str = "
+CREATE INDEX IF NOT EXISTS idx_model_operations_active_recent
+ON model_operations(updated_at DESC, record_id DESC)
+WHERE json_extract(document_json, '$.status') IN ('queued', 'running');
+CREATE INDEX IF NOT EXISTS idx_model_operations_terminal_recent
+ON model_operations(updated_at DESC, record_id DESC)
+WHERE json_extract(document_json, '$.status') IN ('completed', 'cancelled', 'failed');
+";
 pub const MAX_METADATA_BYTES: usize = 1_048_576;
 const MAX_BENCHMARK_VERSION_ID_BYTES: usize = 128 + 1 + 10;
 pub const MAX_DRAFT_DOCUMENT_BYTES: usize = MAX_BENCHMARK_DOCUMENT_BYTES;
@@ -537,6 +548,14 @@ pub struct StorageRetentionResult {
     pub deleted_records: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOperationsPage {
+    pub active: Vec<ModelOperation>,
+    pub history: Vec<ModelOperation>,
+    pub next_offset: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageError {
     IoFailure,
@@ -552,6 +571,7 @@ pub enum StorageError {
     ArtifactNotFound,
     ArtifactKindMismatch,
     ArtifactHashMismatch,
+    OperationCancelled,
     ArtifactTooLarge,
     ImmutableConflict,
     MetadataTooLarge,
@@ -593,6 +613,7 @@ impl std::fmt::Display for StorageError {
             Self::ArtifactNotFound => "artifact was not found in the app-owned store",
             Self::ArtifactKindMismatch => "artifact kind does not match the requested reader",
             Self::ArtifactHashMismatch => "artifact content hash does not match its reference",
+            Self::OperationCancelled => "model operation was cancelled",
             Self::ArtifactTooLarge => "artifact exceeds the local size limit",
             Self::ImmutableConflict => "immutable metadata already exists with different content",
             Self::MetadataTooLarge => "metadata exceeds the local storage limit",
@@ -684,6 +705,7 @@ impl StorageService {
         apply_migration(&mut connection, 7, ADVANCED_ARENA_MIGRATION)?;
         apply_migration(&mut connection, 8, EXTERNAL_GENERATION_EVIDENCE_MIGRATION)?;
         apply_migration(&mut connection, 9, ROADMAP_RECORDS_MIGRATION)?;
+        apply_migration(&mut connection, 10, MODEL_OPERATION_PAGING_MIGRATION)?;
         Ok(())
     }
 
@@ -1503,7 +1525,24 @@ impl StorageService {
         relative_path: &str,
         max_prefix_bytes: usize,
     ) -> Result<(u64, Vec<u8>, String), StorageError> {
+        self.read_managed_model_prefix_and_hash_cancellable(relative_path, max_prefix_bytes, |_| {
+            true
+        })
+    }
+
+    /// Reports bytes hashed after each 64 KiB block. Returning false stops
+    /// immediately before hashing additional data, including before the
+    /// initial read (progress = 0).
+    pub fn read_managed_model_prefix_and_hash_cancellable(
+        &self,
+        relative_path: &str,
+        max_prefix_bytes: usize,
+        mut on_progress: impl FnMut(u64) -> bool,
+    ) -> Result<(u64, Vec<u8>, String), StorageError> {
         validate_managed_model_path(relative_path)?;
+        if !on_progress(0) {
+            return Err(StorageError::OperationCancelled);
+        }
         let target =
             safe_existing_managed_model_path(&self.layout.managed_model_root(), relative_path)?;
         let metadata = fs::symlink_metadata(&target).map_err(|error| {
@@ -1544,6 +1583,9 @@ impl StorageService {
                 let prefix_bytes = (prefix_limit - prefix.len()).min(read);
                 prefix.extend_from_slice(&buffer[..prefix_bytes]);
             }
+            if !on_progress(size) {
+                return Err(StorageError::OperationCancelled);
+            }
         }
         let final_metadata = file.metadata().map_err(StorageError::from_io)?;
         let modified_during_read = opened_metadata
@@ -1565,12 +1607,25 @@ impl StorageService {
         relative_path: &str,
         expected_content_hash: Option<&str>,
     ) -> Result<(u64, String), StorageError> {
+        self.remove_managed_model_cancellable(relative_path, expected_content_hash, |_| true)
+    }
+
+    pub fn remove_managed_model_cancellable(
+        &self,
+        relative_path: &str,
+        expected_content_hash: Option<&str>,
+        mut on_progress: impl FnMut(u64) -> bool,
+    ) -> Result<(u64, String), StorageError> {
         validate_managed_model_path(relative_path)?;
         if let Some(expected_content_hash) = expected_content_hash {
             validate_sha256(expected_content_hash)?;
         }
 
-        let (size, content_hash) = self.hash_managed_model(relative_path)?;
+        let (size, _, content_hash) = self.read_managed_model_prefix_and_hash_cancellable(
+            relative_path,
+            0,
+            &mut on_progress,
+        )?;
         if expected_content_hash
             .is_some_and(|expected| !expected.eq_ignore_ascii_case(&content_hash))
         {
@@ -1588,6 +1643,9 @@ impl StorageService {
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != size {
             return Err(StorageError::InvalidRecordId);
+        }
+        if !on_progress(size) {
+            return Err(StorageError::OperationCancelled);
         }
         fs::remove_file(&target).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -1607,8 +1665,11 @@ impl StorageService {
         let json = serde_json::to_value(operation).map_err(|_| StorageError::DatabaseFailure)?;
         let (document_json, content_hash) = canonical_json_and_hash(&json)?;
         ensure_metadata_size(&document_json)?;
-        let connection = self.connection()?;
-        let existing: Option<String> = connection
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let existing: Option<String> = transaction
             .query_row(
                 "SELECT content_hash FROM model_operations WHERE record_id = ?1",
                 params![operation.operation_id],
@@ -1620,7 +1681,7 @@ impl StorageService {
             return Ok(SaveOutcome::AlreadyPresent);
         }
         if existing.is_some() {
-            connection
+            transaction
                 .execute(
                     "UPDATE model_operations
                      SET content_hash = ?2, document_json = ?3, updated_at = ?4
@@ -1634,7 +1695,7 @@ impl StorageService {
                 )
                 .map_err(|_| StorageError::DatabaseFailure)?;
         } else {
-            connection
+            transaction
                 .execute(
                     "INSERT INTO model_operations
                      (record_id, content_hash, document_json, created_at, updated_at)
@@ -1650,7 +1711,7 @@ impl StorageService {
                 .map_err(|_| StorageError::DatabaseFailure)?;
         }
         let event_id = format!("{}-{}", operation.operation_id, &content_hash[..16]);
-        connection
+        transaction
             .execute(
                 "INSERT OR IGNORE INTO model_operation_events
                  (event_id, operation_id, content_hash, document_json, created_at)
@@ -1663,6 +1724,9 @@ impl StorageService {
                     operation.updated_at
                 ],
             )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        transaction
+            .commit()
             .map_err(|_| StorageError::DatabaseFailure)?;
         Ok(if existing.is_some() {
             SaveOutcome::AlreadyPresent
@@ -1703,6 +1767,86 @@ impl StorageService {
             serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure)
         })
         .collect()
+    }
+
+    /// The desktop model catalog needs current work plus a bounded window of
+    /// completed history; full audit history is still available above and in
+    /// the immutable model_operation_events table.
+    pub fn list_recent_model_operations(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<ModelOperation>, StorageError> {
+        let page = self.list_model_operations_page(limit, 0)?;
+        let mut operations = page.active;
+        operations.extend(page.history);
+        operations.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.operation_id.cmp(&left.operation_id))
+        });
+        Ok(operations)
+    }
+
+    /// Offset applies only to terminal history. Every page includes active
+    /// work, even if its updated_at predates all terminal history. A single
+    /// SQL statement takes a consistent snapshot while LIMIT bounds the
+    /// terminal rows loaded/deserialized on every UI poll.
+    pub fn list_model_operations_page(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<ModelOperationsPage, StorageError> {
+        const MAX_MODEL_OPERATION_PAGE_SIZE: u32 = 100;
+        if !(1..=MAX_MODEL_OPERATION_PAGE_SIZE).contains(&limit)
+            || offset.checked_add(limit).is_none()
+        {
+            return Err(StorageError::InvalidRecordId);
+        }
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT document_json, is_active FROM (
+                    SELECT updated_at, record_id, document_json, 1 AS is_active FROM model_operations
+                    WHERE json_extract(document_json, '$.status') IN ('queued', 'running')
+                    UNION ALL
+                    SELECT updated_at, record_id, document_json, 0 AS is_active FROM (
+                        SELECT updated_at, record_id, document_json FROM model_operations
+                        WHERE json_extract(document_json, '$.status') IN ('completed', 'cancelled', 'failed')
+                        ORDER BY updated_at DESC, record_id DESC
+                        LIMIT ?1 OFFSET ?2
+                    )
+                ) ORDER BY is_active DESC, updated_at DESC, record_id DESC",
+            )
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let rows = statement
+            .query_map(params![i64::from(limit) + 1, i64::from(offset)], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|_| StorageError::DatabaseFailure)?;
+        let mut active = Vec::new();
+        let mut history = Vec::new();
+        for row in rows {
+            let (document, is_active) = row.map_err(|_| StorageError::DatabaseFailure)?;
+            let operation =
+                serde_json::from_str(&document).map_err(|_| StorageError::DatabaseFailure)?;
+            if is_active != 0 {
+                active.push(operation);
+            } else {
+                history.push(operation);
+            }
+        }
+        let next_offset = if history.len() > limit as usize {
+            history.truncate(limit as usize);
+            offset.checked_add(limit)
+        } else {
+            None
+        };
+        Ok(ModelOperationsPage {
+            active,
+            history,
+            next_offset,
+        })
     }
 
     pub fn list_model_operation_events(
@@ -4692,10 +4836,31 @@ fn validate_managed_model_path(path: &str) -> Result<(), StorageError> {
     validate_model_text(path, MAX_MODEL_PATH_BYTES)?;
     if path.contains('\\')
         || path.starts_with('/')
-        || path.as_bytes().get(1) == Some(&b':')
-        || path
-            .split('/')
-            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+        || path.split('/').any(|segment| {
+            if segment.is_empty()
+                || matches!(segment, "." | "..")
+                || segment.ends_with(&['.', ' '][..])
+                || segment
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+            {
+                return true;
+            }
+            // Windows reserves device basenames even when followed by
+            // extensions, and NTFS alternate streams accept embedded ':'.
+            let stem = segment
+                .split('.')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            matches!(
+                stem.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+            ) || (stem.len() == 4
+                && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.as_bytes()[3].is_ascii_digit()
+                && stem.as_bytes()[3] != b'0')
+        })
     {
         return Err(StorageError::InvalidRecordId);
     }
@@ -4885,6 +5050,36 @@ fn apply_migration(
         .map_err(|_| StorageError::MigrationFailure)?;
     if !has_migrations_table && version != 1 {
         return Err(StorageError::MigrationFailure);
+    }
+    if version == 10 {
+        // The paging indexes and their migration marker must commit together.
+        // A crash cannot leave a partially indexed v9 database mislabeled v10.
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StorageError::MigrationFailure)?;
+        let already_applied: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 10)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| StorageError::MigrationFailure)?;
+        if already_applied {
+            return Ok(());
+        }
+        transaction
+            .execute_batch(sql)
+            .map_err(|_| StorageError::MigrationFailure)?;
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                params![version, now_marker()],
+            )
+            .map_err(|_| StorageError::MigrationFailure)?;
+        transaction
+            .commit()
+            .map_err(|_| StorageError::MigrationFailure)?;
+        return Ok(());
     }
 
     if !has_migrations_table {
@@ -5404,12 +5599,12 @@ mod tests {
         let service = StorageService::open(&root).expect("storage opens");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         service.initialize().expect("second migration pass");
         assert_eq!(
             service.migration_versions().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         assert!(FOUNDATION_MIGRATION.contains("CREATE TABLE"));
         assert!(!FOUNDATION_MIGRATION
@@ -5426,6 +5621,77 @@ mod tests {
         assert!(ADVANCED_ARENA_MIGRATION.contains("calibration_results"));
         assert!(EXTERNAL_GENERATION_EVIDENCE_MIGRATION.contains("external_generation_evidence"));
         assert!(ROADMAP_RECORDS_MIGRATION.contains("roadmap_records"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_operation_paging_migrates_v9_in_place_with_atomic_index_install() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let connection = Connection::open(storage.layout().database_path()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO model_operations (record_id, content_hash, document_json, created_at, updated_at)
+                 VALUES ('saved-before-upgrade', 'hash', '{\"operationId\":\"saved-before-upgrade\"}', '100', '100')",
+                [],
+            )
+            .unwrap();
+        // Recreate the schema state of an existing installation at version 9.
+        connection
+            .execute_batch(
+                "DROP INDEX idx_model_operations_active_recent;
+                 DROP INDEX idx_model_operations_terminal_recent;
+                 DELETE FROM schema_migrations WHERE version = 10;",
+            )
+            .unwrap();
+        // Force the migration marker write to fail after index creation. Both
+        // index changes must roll back with the marker in the same transaction.
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_paging_migration BEFORE INSERT ON schema_migrations
+                 WHEN NEW.version = 10
+                 BEGIN SELECT RAISE(ABORT, 'intentional migration failure'); END;",
+            )
+            .unwrap();
+        assert_eq!(
+            StorageService::open(&root),
+            Err(StorageError::MigrationFailure)
+        );
+        let index_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name IN (
+                   'idx_model_operations_active_recent', 'idx_model_operations_terminal_recent')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 0);
+        connection
+            .execute_batch("DROP TRIGGER reject_paging_migration")
+            .unwrap();
+        let upgraded = StorageService::open(&root).unwrap();
+        assert_eq!(upgraded.migration_versions().unwrap().last(), Some(&10));
+        let persisted: String = connection
+            .query_row(
+                "SELECT document_json FROM model_operations WHERE record_id = 'saved-before-upgrade'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(persisted.contains("saved-before-upgrade"));
+        let index_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name IN (
+                   'idx_model_operations_active_recent', 'idx_model_operations_terminal_recent')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 2);
+        upgraded.initialize().unwrap();
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -7498,6 +7764,16 @@ mod tests {
             "../outside.gguf",
             "nested/../outside.gguf",
             "C:/outside.gguf",
+            "nested/model:stream.gguf",
+            "nested/model.gguf:stream",
+            "nested/CON.gguf",
+            "PRN/test.gguf",
+            "nested/LPT1.txt",
+            "nested/COM9.gguf",
+            "nested/trailing./model.gguf",
+            "nested/trailing /model.gguf",
+            "nested/invalid?.gguf",
+            "nested/invalid|pipe.gguf",
         ] {
             assert_eq!(
                 service.remove_managed_model(path, None),
@@ -7532,6 +7808,246 @@ mod tests {
         );
         assert!(directory.is_dir());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cancellation_is_checked_during_hash_and_before_managed_file_removal() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).unwrap();
+        let relative_path = "model.gguf";
+        let path = service.layout().managed_model_root().join(relative_path);
+        let bytes = vec![b'x'; 3 * 64 * 1024 + 1];
+        fs::write(&path, &bytes).unwrap();
+        let mut progress = Vec::new();
+        assert_eq!(
+            service.read_managed_model_prefix_and_hash_cancellable(relative_path, 8, |completed| {
+                progress.push(completed);
+                completed < 64 * 1024
+            },),
+            Err(StorageError::OperationCancelled)
+        );
+        assert_eq!(progress, [0, 64 * 1024]);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        let mut calls = 0;
+        let digest = sha256_hex(&bytes);
+        assert_eq!(
+            service.remove_managed_model_cancellable(relative_path, Some(&digest), |_| {
+                calls += 1;
+                calls <= 5 // initial + four 64 KiB reads; stop just before deletion
+            }),
+            Err(StorageError::OperationCancelled)
+        );
+        assert_eq!(calls, 6);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_operation_pages_pin_active_and_preserve_unbounded_audit_history() {
+        use crate::domain::{ModelOperation, ModelOperationKind, ModelOperationStatus};
+
+        let root = temporary_root();
+        let service = StorageService::open(&root).unwrap();
+        let mut connection = Connection::open(service.layout().database_path()).unwrap();
+        let transaction = connection.transaction().unwrap();
+        let operation =
+            |id: String, status: ModelOperationStatus, updated: String| ModelOperation {
+                operation_id: id,
+                kind: ModelOperationKind::Download,
+                backend: ModelBackend::Ollama,
+                source_id: None,
+                model_name: Some("test".to_owned()),
+                model_id: None,
+                managed_path: None,
+                status,
+                bytes_total: None,
+                bytes_completed: 0,
+                progress_percent: Some(0),
+                content_hash: None,
+                message: None,
+                created_at: updated.clone(),
+                updated_at: updated,
+            };
+        for index in 0..1_200u32 {
+            let item = operation(
+                format!("terminal-{index:04}"),
+                match index % 3 {
+                    0 => ModelOperationStatus::Completed,
+                    1 => ModelOperationStatus::Cancelled,
+                    _ => ModelOperationStatus::Failed,
+                },
+                format!("{:05}", index / 2),
+            );
+            transaction
+                .execute(
+                    "INSERT INTO model_operations (record_id, content_hash, document_json, created_at, updated_at)
+                     VALUES (?1, 'test-hash', ?2, ?3, ?4)",
+                    rusqlite::params![
+                        item.operation_id,
+                        serde_json::to_string(&item).unwrap(),
+                        item.created_at,
+                        item.updated_at,
+                    ],
+                )
+                .unwrap();
+        }
+        for (name, timestamp, status) in [
+            ("active-old", "00000", ModelOperationStatus::Running),
+            ("active-new", "99999", ModelOperationStatus::Queued),
+        ] {
+            let item = operation(name.to_owned(), status, timestamp.to_owned());
+            transaction
+                .execute(
+                    "INSERT INTO model_operations (record_id, content_hash, document_json, created_at, updated_at)
+                     VALUES (?1, 'test-hash', ?2, ?3, ?4)",
+                    rusqlite::params![
+                        item.operation_id,
+                        serde_json::to_string(&item).unwrap(),
+                        item.created_at,
+                        item.updated_at,
+                    ],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+
+        for (offset, expected_first, expected_next) in [
+            (0, "terminal-1199", Some(100)),
+            (100, "terminal-1099", Some(200)),
+            (1_100, "terminal-0099", None),
+        ] {
+            let page = service.list_model_operations_page(100, offset).unwrap();
+            assert_eq!(page.active.len(), 2, "active work pinned on every page");
+            assert_eq!(page.active[0].operation_id, "active-new");
+            assert_eq!(page.active[1].operation_id, "active-old");
+            assert_eq!(page.history.len(), 100);
+            assert_eq!(page.history[0].operation_id, expected_first);
+            assert_eq!(page.next_offset, expected_next);
+            assert!(page.history.windows(2).all(|pair| {
+                pair[0].updated_at > pair[1].updated_at
+                    || (pair[0].updated_at == pair[1].updated_at
+                        && pair[0].operation_id > pair[1].operation_id)
+            }));
+        }
+        let final_page = service.list_model_operations_page(100, 1_200).unwrap();
+        assert!(final_page.history.is_empty());
+        assert_eq!(final_page.active.len(), 2);
+        assert_eq!(final_page.next_offset, None);
+        let recent = service.list_recent_model_operations(100).unwrap();
+        assert_eq!(recent.len(), 102);
+        assert_eq!(recent[0].operation_id, "active-new");
+        assert_eq!(recent.last().unwrap().operation_id, "active-old");
+        assert_eq!(service.list_model_operations().unwrap().len(), 1_202);
+        for (predicate, index_name) in [
+            (
+                "json_extract(document_json, '$.status') IN ('queued', 'running')",
+                "idx_model_operations_active_recent",
+            ),
+            (
+                "json_extract(document_json, '$.status') IN ('completed', 'cancelled', 'failed')",
+                "idx_model_operations_terminal_recent",
+            ),
+        ] {
+            let query = format!(
+                "EXPLAIN QUERY PLAN SELECT record_id FROM model_operations
+                 WHERE {predicate} ORDER BY updated_at DESC, record_id DESC LIMIT 100"
+            );
+            let plans: Vec<String> = connection
+                .prepare(&query)
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert!(
+                plans.iter().any(|plan| plan.contains(index_name)),
+                "{index_name} should serve recent-window paging: {plans:?}"
+            );
+        }
+        assert_eq!(
+            service.list_model_operations_page(101, 0),
+            Err(StorageError::InvalidRecordId)
+        );
+        assert_eq!(
+            service.list_model_operations_page(1, u32::MAX),
+            Err(StorageError::InvalidRecordId)
+        );
+        assert_eq!(
+            service.get_model_operation("../bad"),
+            Err(StorageError::InvalidRecordId)
+        );
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_model_operation_audit_insert_rolls_back_current_state() {
+        use crate::domain::{ModelOperation, ModelOperationKind, ModelOperationStatus};
+        let root = temporary_root();
+        let service = StorageService::open(&root).unwrap();
+        let mut item = ModelOperation {
+            operation_id: "atomic-model".to_owned(),
+            kind: ModelOperationKind::Download,
+            backend: ModelBackend::Ollama,
+            source_id: None,
+            model_name: Some("test".to_owned()),
+            model_id: None,
+            managed_path: None,
+            status: ModelOperationStatus::Queued,
+            bytes_total: None,
+            bytes_completed: 0,
+            progress_percent: Some(0),
+            content_hash: None,
+            message: None,
+            created_at: "100".to_owned(),
+            updated_at: "100".to_owned(),
+        };
+        let connection = Connection::open(service.layout().database_path()).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_model_audit BEFORE INSERT ON model_operation_events
+                 BEGIN SELECT RAISE(ABORT, 'intentional audit write failure'); END;",
+            )
+            .unwrap();
+        assert_eq!(
+            service.save_model_operation(&item),
+            Err(StorageError::DatabaseFailure)
+        );
+        assert!(service
+            .get_model_operation(&item.operation_id)
+            .unwrap()
+            .is_none());
+        connection
+            .execute_batch("DROP TRIGGER reject_model_audit")
+            .unwrap();
+        service.save_model_operation(&item).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_model_audit BEFORE INSERT ON model_operation_events
+                 BEGIN SELECT RAISE(ABORT, 'intentional audit write failure'); END;",
+            )
+            .unwrap();
+        item.status = ModelOperationStatus::Running;
+        item.updated_at = "200".to_owned();
+        assert_eq!(
+            service.save_model_operation(&item),
+            Err(StorageError::DatabaseFailure)
+        );
+        let persisted = service
+            .get_model_operation(&item.operation_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.status, ModelOperationStatus::Queued);
+        assert_eq!(
+            service
+                .list_model_operation_events(&item.operation_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 }

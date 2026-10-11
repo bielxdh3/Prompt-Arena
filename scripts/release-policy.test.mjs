@@ -49,7 +49,8 @@ describe("release publication boundary", () => {
     const diagnosticsStep = workflow.slice(uploadDiagnostics, uploadFailedPackages);
     expect(diagnosticsStep).toContain("if: failure() && runner.os == 'Windows'");
     expect(diagnosticsStep).not.toContain("github.event_name == 'workflow_dispatch'");
-    expect(diagnosticsStep).toContain("prompt-arena-msi-diagnostics/");
+    expect(diagnosticsStep).toContain("prompt-arena-msi-diagnostics/*.txt");
+    expect(diagnosticsStep).not.toMatch(/^\s*path:\s*\$\{\{ runner.temp \}\}\/prompt-arena-msi-diagnostics\/\s*$/mu);
     const failedPackageStep = workflow.slice(uploadFailedPackages, workflow.indexOf("- name: Verify Linux packages"));
     expect(failedPackageStep).toContain("if: failure() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.ref == 'main'");
     expect(failedPackageStep).toContain("package-artifacts/");

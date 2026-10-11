@@ -7,6 +7,33 @@ export type ModelRating = { competitorId: string; category: string | null; categ
 export type RatingSourceReference = { arenaId: string; contentHash: string };
 export type RatingSet = { schemaVersion: 1; kind: "model_ratings"; ruleVersion: RatingRuleVersion; uncertaintyMethod?: RatingUncertaintyMethod; ratings: ModelRating[]; sourcePopulation?: RatingSourceReference[]; verificationStatus?: "unverified"; createdAt: string };
 
+// An encoded tuple keeps null, an empty category, and embedded NULs distinct.
+// Concatenating with a delimiter can merge unrelated imported model identities.
+function ratingKey(category: string | null, competitorId: string): string {
+  return JSON.stringify([category, competitorId]);
+}
+
+// Code-unit ordering is independent of host locale and input insertion order.
+function compareText(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+function compareOptionalText(left: string | null | undefined, right: string | null | undefined): number {
+  if (left == null) return right == null ? 0 : -1;
+  if (right == null) return 1;
+  return compareText(left, right);
+}
+
+function compareRatingOutcomes(left: RatingOutcome, right: RatingOutcome): number {
+  return compareText(left.matchId, right.matchId)
+    || compareText(left.competitorAId, right.competitorAId)
+    || compareText(left.competitorBId, right.competitorBId)
+    || compareOptionalText(left.winnerId, right.winnerId)
+    || compareOptionalText(left.category, right.category)
+    || compareOptionalText(left.categoryName, right.categoryName)
+    || compareOptionalText(left.clusterId, right.clusterId);
+}
+
 const RATING_UNCERTAINTY_METHODS: readonly RatingUncertaintyMethod[] = [
   "sample_count_heuristic",
   "laplace_standard_error",
@@ -76,18 +103,12 @@ export function computeEloRatings(outcomes: readonly RatingOutcome[], options: {
     && (o.category == null || typeof o.category === "string")
     && (o.categoryName == null || typeof o.categoryName === "string")
     && (o.winnerId === null || o.winnerId === o.competitorAId || o.winnerId === o.competitorBId))
-    .sort((a, b) => a.matchId.localeCompare(b.matchId)
-      || a.competitorAId.localeCompare(b.competitorAId)
-      || a.competitorBId.localeCompare(b.competitorBId)
-      || (a.winnerId ?? "").localeCompare(b.winnerId ?? "")
-      || (a.category ?? "").localeCompare(b.category ?? "")
-      || (a.categoryName ?? "").localeCompare(b.categoryName ?? ""));
+    .sort(compareRatingOutcomes);
   for (const outcome of ordered) {
     const category = categoryOverride ? options.category ?? null : outcome.category ?? null;
     const categoryName = category === null ? null : outcome.categoryName ?? category;
-    const categoryKey = category ?? "";
-    const aKey = `${categoryKey}\u0000${outcome.competitorAId}`;
-    const bKey = `${categoryKey}\u0000${outcome.competitorBId}`;
+    const aKey = ratingKey(category, outcome.competitorAId);
+    const bKey = ratingKey(category, outcome.competitorBId);
     categories.set(aKey, category); categories.set(bKey, category);
     categoryNames.set(aKey, categoryName); categoryNames.set(bKey, categoryName);
     const a = ratings.get(aKey) ?? initialRating;
@@ -100,8 +121,7 @@ export function computeEloRatings(outcomes: readonly RatingOutcome[], options: {
     stats.set(aKey, aStats); stats.set(bKey, bStats);
   }
   const result = [...ratings.entries()].map(([key, rating]) => {
-    const separator = key.indexOf("\u0000");
-    const competitorId = separator < 0 ? key : key.slice(separator + 1);
+    const [, competitorId] = JSON.parse(key) as [string | null, string];
     const s = stats.get(key) ?? { wins: 0, losses: 0, ties: 0 };
     const sampleCount = s.wins + s.losses + s.ties;
     const category = categories.get(key) ?? null;
@@ -115,7 +135,7 @@ export function computeEloRatings(outcomes: readonly RatingOutcome[], options: {
       uncertaintyMethod: "sample_count_heuristic" as const,
       ...s,
     };
-  }).sort((a, b) => b.rating - a.rating || (a.category ?? "").localeCompare(b.category ?? "") || a.competitorId.localeCompare(b.competitorId));
+  }).sort((a, b) => b.rating - a.rating || compareOptionalText(a.category, b.category) || compareText(a.competitorId, b.competitorId));
   return { schemaVersion: 1, kind: "model_ratings", ruleVersion: "elo-v1", uncertaintyMethod: "sample_count_heuristic", ratings: result, createdAt: options.createdAt ?? new Date().toISOString() };
 }
 
@@ -200,7 +220,8 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
     clusterId: outcome.clusterId,
   }));
   const basis = Array.from({ length: competitorIds.length }, (_, row) => Array.from({ length: parameterCount }, (_, column) => (row === column + 1 ? 1 : 0) - 1 / competitorIds.length));
-  const priorGram = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) => basis.reduce((sum, vector) => sum + vector[row] * vector[column], 0)));
+  // Centered basis Gram matrix is identity minus the all-ones matrix / N.
+  const priorGram = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) => Number(row === column) - 1 / competitorIds.length));
   const evaluate = (parameters: number[]) => {
     const theta = basis.map((row) => row.reduce((sum, coefficient, index) => sum + coefficient * parameters[index], 0));
     let logPosterior = -BRADLEY_TERRY_PRIOR_PRECISION * theta.reduce((sum, value) => sum + value ** 2, 0) / 2;
@@ -230,7 +251,7 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
       }
     }
     for (let row = 0; row < parameterCount; row += 1) {
-      for (let component = 0; component < competitorIds.length; component += 1) gradient[row] -= BRADLEY_TERRY_PRIOR_PRECISION * basis[component][row] * theta[component];
+      gradient[row] -= BRADLEY_TERRY_PRIOR_PRECISION * theta[row + 1];
       for (let column = 0; column < parameterCount; column += 1) hessian[row][column] += BRADLEY_TERRY_PRIOR_PRECISION * priorGram[row][column];
     }
     return { theta, logPosterior, gradient, hessian };
@@ -259,11 +280,15 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
   const fitted = evaluate(parameters);
   const covariance = invertMatrix(fitted.hessian);
   if (!covariance) return null;
-  const standardErrorsFromCovariance = (matrix: number[][]) => basis.map((row) => {
-    let variance = 0;
-    for (let left = 0; left < parameterCount; left += 1) for (let right = 0; right < parameterCount; right += 1) variance += row[left] * matrix[left][right] * row[right];
-    return Math.sqrt(Math.max(0, variance));
-  });
+  // Only covariance row sums and diagonals are needed for centered abilities.
+  const standardErrorsFromCovariance = (matrix: number[][]) => {
+    const rowSums = matrix.map((row) => row.reduce((sum, value) => sum + value, 0));
+    const centeredCommon = rowSums.reduce((sum, value) => sum + value, 0) / (competitorIds.length ** 2);
+    return competitorIds.map((_, index) => {
+      const variance = index === 0 ? centeredCommon : matrix[index - 1][index - 1] - 2 * rowSums[index - 1] / competitorIds.length + centeredCommon;
+      return Math.sqrt(Math.max(0, variance));
+    });
+  };
   const hasCompleteClusterIds = observations.every((observation) => typeof observation.clusterId === "string" && observation.clusterId.trim().length > 0);
   let uncertaintyMethod: BradleyTerryUncertaintyMethod = "laplace_standard_error";
   let standardErrors: number[];
@@ -287,16 +312,19 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
         if (observation.a > 0) score[observation.a - 1] += residual;
         if (observation.b > 0) score[observation.b - 1] -= residual;
       }
-      const meat = Array.from({ length: parameterCount }, () => Array(parameterCount).fill(0) as number[]);
-      for (const score of clusterScores.values()) for (let row = 0; row < parameterCount; row += 1) for (let column = 0; column < parameterCount; column += 1) meat[row][column] += score[row] * score[column];
       const correction = clusterIds.length / (clusterIds.length - 1);
-      // (covariance * meat) * covariance avoids redoing both inner sums for
-      // every output cell, reducing robust uncertainty from O(N^4) to O(N^3).
-      const leftProduct = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) =>
-        covariance[row].reduce((sum, value, index) => sum + value * meat[index][column], 0)));
-      const robustCovariance = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) =>
-        correction * leftProduct[row].reduce((sum, value, index) => sum + value * covariance[index][column], 0)));
-      standardErrors = standardErrorsFromCovariance(robustCovariance);
+      // The sandwich diagonal equals the sum of squared cluster influences.
+      // This avoids materializing the meat and full robust covariance matrices.
+      const variances = Array(competitorIds.length).fill(0) as number[];
+      for (const score of clusterScores.values()) {
+        const influence = covariance.map((row) => row.reduce((sum, value, index) => sum + value * score[index], 0));
+        const meanInfluence = influence.reduce((sum, value) => sum + value, 0) / competitorIds.length;
+        for (let index = 0; index < competitorIds.length; index += 1) {
+          const centered = (index === 0 ? 0 : influence[index - 1]) - meanInfluence;
+          variances[index] += centered * centered;
+        }
+      }
+      standardErrors = variances.map((variance) => Math.sqrt(correction * variance));
       uncertaintyMethod = "cluster_robust_standard_error_v1";
     }
   }
@@ -316,19 +344,19 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
     && (outcome.category == null || typeof outcome.category === "string")
     && (outcome.categoryName == null || typeof outcome.categoryName === "string")
     && (outcome.winnerId === null || outcome.winnerId === outcome.competitorAId || outcome.winnerId === outcome.competitorBId))
-    .sort((left, right) => left.matchId.localeCompare(right.matchId) || left.competitorAId.localeCompare(right.competitorAId) || left.competitorBId.localeCompare(right.competitorBId));
-  const matchesByCategory = new Map<string, { category: string | null; categoryName: string | null; outcomes: RatingOutcome[] }>();
+    .sort(compareRatingOutcomes);
+  const matchesByCategory = new Map<string | null, { category: string | null; categoryName: string | null; outcomes: RatingOutcome[] }>();
   const statistics = new Map<string, { wins: number; losses: number; ties: number }>();
   const uncertaintyMethods = new Set<RatingUncertaintyMethod>();
   for (const original of ordered) {
     const category = categoryOverride ? options.category ?? null : original.category ?? null;
     const categoryName = category === null ? null : original.categoryName ?? category;
-    const key = category ?? "";
+    const key = category;
     const group = matchesByCategory.get(key) ?? { category, categoryName, outcomes: [] };
     group.outcomes.push({ ...original, category, categoryName });
     matchesByCategory.set(key, group);
-    const aKey = `${key}\u0000${original.competitorAId}`;
-    const bKey = `${key}\u0000${original.competitorBId}`;
+    const aKey = ratingKey(category, original.competitorAId);
+    const bKey = ratingKey(category, original.competitorBId);
     const a = statistics.get(aKey) ?? { wins: 0, losses: 0, ties: 0 };
     const b = statistics.get(bKey) ?? { wins: 0, losses: 0, ties: 0 };
     if (original.winnerId === null) { a.ties += 1; b.ties += 1; }
@@ -338,7 +366,7 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
   }
 
   const result: ModelRating[] = [];
-  for (const [, group] of [...matchesByCategory.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [, group] of [...matchesByCategory.entries()].sort(([left], [right]) => compareOptionalText(left, right))) {
     const adjacency = new Map<string, Set<string>>();
     for (const outcome of group.outcomes) {
       const a = adjacency.get(outcome.competitorAId) ?? new Set<string>();
@@ -348,8 +376,10 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
     }
     const remaining = new Set(adjacency.keys());
     const components: string[][] = [];
-    while (remaining.size > 0) {
-      const seed = [...remaining].sort((left, right) => left.localeCompare(right))[0];
+    // Sort once; re-sorting the shrinking set for every disconnected component
+    // turns a large collection of independent pairs into quadratic work.
+    for (const seed of [...remaining].sort(compareText)) {
+      if (!remaining.has(seed)) continue;
       const component = new Set<string>([seed]);
       const pending = [seed];
       remaining.delete(seed);
@@ -357,18 +387,28 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
         const current = pending.pop()!;
         for (const neighbor of adjacency.get(current) ?? []) if (remaining.delete(neighbor)) { component.add(neighbor); pending.push(neighbor); }
       }
-      components.push([...component].sort((left, right) => left.localeCompare(right)));
+      components.push([...component].sort(compareText));
     }
-    components.sort((left, right) => left[0].localeCompare(right[0]));
+    components.sort((left, right) => compareText(left[0], right[0]));
+    const componentIndexById = new Map<string, number>();
+    const matchesByComponent = components.map(() => [] as RatingOutcome[]);
+    components.forEach((ids, componentIndex) => ids.forEach((id) => componentIndexById.set(id, componentIndex)));
+    for (const outcome of group.outcomes) {
+      matchesByComponent[componentIndexById.get(outcome.competitorAId)!].push(outcome);
+    }
     components.forEach((competitorIds, componentIndex) => {
-      const idSet = new Set(competitorIds);
-      const componentOutcomes = group.outcomes.filter((outcome) => idSet.has(outcome.competitorAId) && idSet.has(outcome.competitorBId));
-      const fit = fitBradleyTerryComponent(competitorIds, componentOutcomes);
+      const fit = fitBradleyTerryComponent(competitorIds, matchesByComponent[componentIndex]);
       if (!fit) return;
       uncertaintyMethods.add(fit.uncertaintyMethod);
-      const comparisonGroupId = `${group.category ?? "global"}:component-${componentIndex + 1}`;
+      // Preserve ordinary historical group labels; encode reserved/imported
+      // category strings so global and category-specific groups cannot alias.
+      const groupLabel = group.category === null ? "global"
+        : group.category !== "global" && /^[A-Za-z0-9._@-]+$/u.test(group.category)
+          ? group.category
+          : `category:${JSON.stringify(group.category)}`;
+      const comparisonGroupId = `${groupLabel}:component-${componentIndex + 1}`;
       competitorIds.forEach((competitorId, index) => {
-        const key = `${group.category ?? ""}\u0000${competitorId}`;
+        const key = ratingKey(group.category, competitorId);
         const stats = statistics.get(key) ?? { wins: 0, losses: 0, ties: 0 };
         result.push({
           competitorId,
@@ -385,10 +425,10 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
       });
     });
   }
-  result.sort((left, right) => (left.category ?? "").localeCompare(right.category ?? "")
-    || (left.comparisonGroupId ?? "").localeCompare(right.comparisonGroupId ?? "")
+  result.sort((left, right) => compareOptionalText(left.category, right.category)
+    || compareOptionalText(left.comparisonGroupId, right.comparisonGroupId)
     || right.rating - left.rating
-    || left.competitorId.localeCompare(right.competitorId));
+    || compareText(left.competitorId, right.competitorId));
   return { schemaVersion: 1, kind: "model_ratings", ruleVersion: "bradley-terry-v1", uncertaintyMethod: aggregateUncertaintyMethod([...uncertaintyMethods]), ratings: result, createdAt: options.createdAt ?? new Date().toISOString() };
 }
 
@@ -398,7 +438,7 @@ export function computeGlobalAndCategoryRatings(outcomes: readonly RatingOutcome
   const categoryIds = [...new Set(outcomes
     .filter((outcome) => outcome.valid !== false && outcome.category)
     .map((outcome) => outcome.category as string))]
-    .sort((left, right) => left.localeCompare(right));
+    .sort(compareText);
   const categorySets = categoryIds.map((category) => compute(
     outcomes.filter((outcome) => outcome.category === category),
     { category, createdAt },
@@ -436,5 +476,5 @@ export function ratingOutcomesFromArenaSummaries(summaries: readonly ArenaSummar
       });
     }
   }
-  return outcomes.sort((a, b) => a.matchId.localeCompare(b.matchId));
+  return outcomes.sort(compareRatingOutcomes);
 }

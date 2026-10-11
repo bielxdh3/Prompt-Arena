@@ -666,6 +666,8 @@ fn normalize_base_path(path: &str) -> Result<String, RuntimeError> {
     }
     if !path.starts_with('/')
         || path.contains('\\')
+        // Avoid a proxy decoding %2e%2e or %2f after the local traversal check.
+        || path.contains('%')
         || path.contains('?')
         || path.contains('#')
         || path.chars().any(|character| character.is_control())
@@ -1639,6 +1641,8 @@ mod tests {
             "http://user@127.0.0.1:11434",
             "http://127.0.0.1:11434?remote=true",
             "http://127.0.0.1:11434#remote",
+            "http://127.0.0.1:11434/%2e%2e/proxy",
+            "http://127.0.0.1:11434/models%2f..%2fadmin",
         ] {
             assert!(matches!(
                 OllamaEndpoint::parse(endpoint),

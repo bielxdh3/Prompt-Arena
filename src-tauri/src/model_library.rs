@@ -1,6 +1,6 @@
 use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -27,6 +27,8 @@ pub const MAX_MODEL_SOURCE_COUNT: usize = 8;
 pub const MAX_MODEL_QUERY_BYTES: usize = 256;
 pub const MAX_GGUF_HEADER_BYTES: usize = 256 * 1024;
 pub const MAX_MODEL_OPERATION_COUNT: usize = 512;
+/// Bound simultaneously running model transfers and multi-GB disk scans.
+pub const MAX_ACTIVE_MODEL_OPERATIONS: usize = 8;
 /// Maximum number of persisted snapshots for one operation, including initial and terminal states.
 pub const MAX_MODEL_OPERATION_EVENTS: usize = 512;
 const MODEL_PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
@@ -34,6 +36,49 @@ const MAX_GGUF_STRING_BYTES: usize = 64 * 1024;
 const MAX_GGUF_METADATA_ENTRIES: usize = 4_096;
 const MAX_GGUF_VALUE_DEPTH: usize = 8;
 const MAX_MODEL_OPERATION_REQUEST_BYTES: usize = 16 * 1024;
+
+// This is shared by controller-driven operations, direct model imports, and
+// test entry points. Holding the reservation across the terminal DB update
+// avoids the gap between checking a path and actually hashing/deleting it.
+static ACTIVE_MANAGED_MODEL_PATHS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+
+struct ManagedPathReservation {
+    identity: String,
+}
+
+impl ManagedPathReservation {
+    fn acquire(storage: &StorageService, relative_path: &str) -> Result<Self, ModelLibraryError> {
+        validate_gguf_path(relative_path)?;
+        let root = storage.layout().managed_model_root();
+        // Windows file paths are case-insensitive, even when model IDs are not.
+        let path = root.join(relative_path).to_string_lossy().into_owned();
+        let identity = if cfg!(windows) {
+            path.to_lowercase()
+        } else {
+            path
+        };
+        let registry = ACTIVE_MANAGED_MODEL_PATHS.get_or_init(|| Mutex::new(BTreeSet::new()));
+        let mut active = registry.lock().map_err(|_| {
+            ModelLibraryError::InvalidRequest("model path reservation is unavailable".to_owned())
+        })?;
+        if !active.insert(identity.clone()) {
+            return Err(ModelLibraryError::InvalidRequest(
+                "another model operation is already active for this managed GGUF path".to_owned(),
+            ));
+        }
+        Ok(Self { identity })
+    }
+}
+
+impl Drop for ManagedPathReservation {
+    fn drop(&mut self) {
+        if let Some(registry) = ACTIVE_MANAGED_MODEL_PATHS.get() {
+            if let Ok(mut active) = registry.lock() {
+                active.remove(&self.identity);
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ModelLibraryError {
@@ -134,7 +179,7 @@ impl ModelOperationController {
                     "model operation is already running".to_owned(),
                 ));
             }
-            if active.len() >= MAX_MODEL_OPERATION_COUNT {
+            if active.len() >= MAX_ACTIVE_MODEL_OPERATIONS {
                 return Err(ModelLibraryError::InvalidRequest(
                     "active model operation count exceeds the local item limit".to_owned(),
                 ));
@@ -393,6 +438,7 @@ pub fn import_managed_gguf_model(
     request: &ModelImportRequest,
 ) -> Result<ModelRecord, ModelLibraryError> {
     validate_gguf_path(&request.source_path)?;
+    let _reservation = ManagedPathReservation::acquire(storage, &request.source_path)?;
     let config = ModelSourceConfig {
         backend: ModelBackend::LlamaCpp,
         label: Some("Managed GGUF".to_owned()),
@@ -414,6 +460,11 @@ pub fn run_model_operation(
         mut operation,
         action,
     } = prepare_operation(storage, request)?;
+    let _managed_path_reservation = operation
+        .managed_path
+        .as_deref()
+        .map(|path| ManagedPathReservation::acquire(storage, path))
+        .transpose()?;
     reserve_operation(storage, &operation.operation_id)?;
     persist_operation(storage, &operation)?;
 
@@ -752,10 +803,26 @@ fn execute_import(
         return Err(RuntimeError::Cancelled.into());
     }
 
-    let source_id = operation.source_id.as_deref().ok_or_else(|| {
+    let source_id = operation.source_id.clone().ok_or_else(|| {
         ModelLibraryError::InvalidRequest("managed import source identity is missing".to_owned())
     })?;
-    let record = parse_managed_gguf_record(storage, source_id, source_path, true)?;
+    let mut saved_percent = 0;
+    let mut progress_error = None;
+    let result =
+        parse_managed_gguf_record_with_progress(storage, &source_id, source_path, true, |bytes| {
+            persist_hash_progress(
+                storage,
+                operation,
+                bytes,
+                cancellation,
+                &mut saved_percent,
+                &mut progress_error,
+            )
+        });
+    if let Some(error) = progress_error {
+        return Err(error);
+    }
+    let record = result?;
     if cancellation.is_cancelled() {
         return Err(RuntimeError::Cancelled.into());
     }
@@ -789,8 +856,26 @@ fn execute_remove(
         return Err(RuntimeError::Cancelled.into());
     }
 
-    let (size, content_hash) =
-        storage.remove_managed_model(managed_path, record.content_hash.as_deref())?;
+    let mut saved_percent = 0;
+    let mut progress_error = None;
+    let result = storage.remove_managed_model_cancellable(
+        managed_path,
+        record.content_hash.as_deref(),
+        |bytes| {
+            persist_hash_progress(
+                storage,
+                operation,
+                bytes,
+                cancellation,
+                &mut saved_percent,
+                &mut progress_error,
+            )
+        },
+    );
+    if let Some(error) = progress_error {
+        return Err(error);
+    }
+    let (size, content_hash) = result.map_err(map_cancelled_storage)?;
     let removal = ModelRemovalEvidence {
         removal_id: format!(
             "removal-{}",
@@ -805,6 +890,53 @@ fn execute_remove(
     };
     storage.save_model_removal(&removal)?;
     Ok(CompletedOperation::Remove { size, content_hash })
+}
+
+fn map_cancelled_storage(error: StorageError) -> ModelLibraryError {
+    if error == StorageError::OperationCancelled {
+        ModelLibraryError::Runtime(RuntimeError::Cancelled)
+    } else {
+        ModelLibraryError::Storage(error)
+    }
+}
+
+/// Hashing a large GGUF can run for minutes. Persist coarse progress without
+/// turning each 64 KiB disk read into a SQLite write, while checking every read
+/// for cancellation. Keep 100% for the successfully persisted terminal state.
+fn persist_hash_progress(
+    storage: &StorageService,
+    operation: &mut ModelOperation,
+    hashed_bytes: u64,
+    cancellation: &CancellationToken,
+    saved_percent: &mut u8,
+    progress_error: &mut Option<ModelLibraryError>,
+) -> bool {
+    if cancellation.is_cancelled() || progress_error.is_some() {
+        return false;
+    }
+    let Some(total) = operation.bytes_total else {
+        return true;
+    };
+    if hashed_bytes > total {
+        // Storage verifies the file's final length and detects concurrent edits.
+        return true;
+    }
+    operation.bytes_completed = hashed_bytes;
+    let percent = if total == 0 {
+        0
+    } else {
+        (hashed_bytes.saturating_mul(100) / total).min(99) as u8
+    };
+    operation.progress_percent = Some(percent);
+    if percent > *saved_percent {
+        operation.updated_at = now_marker();
+        if let Err(error) = persist_operation(storage, operation) {
+            *progress_error = Some(error);
+            return false;
+        }
+        *saved_percent = percent;
+    }
+    !cancellation.is_cancelled()
 }
 
 fn persist_operation(
@@ -1273,11 +1405,37 @@ fn parse_managed_gguf_record(
     relative_path: &str,
     hash_contents: bool,
 ) -> Result<ModelRecord, ModelLibraryError> {
+    parse_managed_gguf_record_with_progress(
+        storage,
+        source_id,
+        relative_path,
+        hash_contents,
+        |_| true,
+    )
+}
+
+fn parse_managed_gguf_record_with_progress(
+    storage: &StorageService,
+    source_id: &str,
+    relative_path: &str,
+    hash_contents: bool,
+    mut on_progress: impl FnMut(u64) -> bool,
+) -> Result<ModelRecord, ModelLibraryError> {
     validate_gguf_path(relative_path)?;
     let (size, bytes, content_hash) = if hash_contents {
         let (size, bytes, hash) = storage
-            .read_managed_model_prefix_and_hash(relative_path, MAX_GGUF_HEADER_BYTES)
-            .map_err(|error| ModelLibraryError::GgufImport(error.to_string()))?;
+            .read_managed_model_prefix_and_hash_cancellable(
+                relative_path,
+                MAX_GGUF_HEADER_BYTES,
+                &mut on_progress,
+            )
+            .map_err(|error| {
+                if error == StorageError::OperationCancelled {
+                    map_cancelled_storage(error)
+                } else {
+                    ModelLibraryError::GgufImport(error.to_string())
+                }
+            })?;
         (size, bytes, Some(hash))
     } else {
         let (size, bytes) = storage
@@ -1619,12 +1777,41 @@ fn gguf_file_type(value: u64) -> String {
 fn validate_gguf_path(path: &str) -> Result<(), ModelLibraryError> {
     if path.is_empty()
         || path.len() > MAX_MODEL_PATH_BYTES
-        || path.contains('\\')
-        || path.starts_with('/')
-        || path.as_bytes().get(1) == Some(&b':')
         || path
-            .split('/')
-            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+            .chars()
+            .any(|character| character.is_control() || "\\:<>\"|?*".contains(character))
+        || path.starts_with('/')
+        || path.split('/').any(|segment| {
+            let basename = segment.split('.').next().unwrap_or_default();
+            segment.is_empty()
+                || matches!(segment, "." | "..")
+                || segment.ends_with([' ', '.'])
+                || matches!(
+                    basename.to_ascii_lowercase().as_str(),
+                    "con"
+                        | "prn"
+                        | "aux"
+                        | "nul"
+                        | "com1"
+                        | "com2"
+                        | "com3"
+                        | "com4"
+                        | "com5"
+                        | "com6"
+                        | "com7"
+                        | "com8"
+                        | "com9"
+                        | "lpt1"
+                        | "lpt2"
+                        | "lpt3"
+                        | "lpt4"
+                        | "lpt5"
+                        | "lpt6"
+                        | "lpt7"
+                        | "lpt8"
+                        | "lpt9"
+                )
+        })
         || !path.to_ascii_lowercase().ends_with(".gguf")
     {
         return Err(ModelLibraryError::InvalidRequest(
@@ -2415,6 +2602,44 @@ mod tests {
     }
 
     #[test]
+    fn active_operation_cap_is_independent_of_the_immutable_history_limit() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let controller = ModelOperationController::default();
+        {
+            let mut active = controller.active.lock().unwrap();
+            for index in 0..MAX_ACTIVE_MODEL_OPERATIONS {
+                active.insert(format!("active-{index}"), CancellationToken::new());
+            }
+        }
+        let new_request = ModelOperationRequest::Import {
+            operation_id: "extra-operation".to_owned(),
+            source_path: "new.gguf".to_owned(),
+        };
+        let error = controller.execute(&storage, &new_request).unwrap_err();
+        assert!(error.to_string().contains("active model operation count"));
+        assert!(storage
+            .get_model_operation("extra-operation")
+            .unwrap()
+            .is_none());
+
+        controller.active.lock().unwrap().remove("active-0");
+        let attempt = ModelOperationRequest::Import {
+            operation_id: "extra-operation".to_owned(),
+            source_path: "new.gguf".to_owned(),
+        };
+        // One freed slot permits new work immediately; missing input is
+        // recorded as a normal terminal failure rather than a capacity error.
+        let result = controller.execute(&storage, &attempt).unwrap();
+        assert_eq!(result.status, ModelOperationStatus::Failed);
+        assert_eq!(
+            controller.active.lock().unwrap().len(),
+            MAX_ACTIVE_MODEL_OPERATIONS - 1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn import_and_remove_operations_persist_progress_and_audit_hash() {
         let root = temporary_root();
         let storage = StorageService::open(&root).unwrap();
@@ -2642,11 +2867,251 @@ mod tests {
     }
 
     #[test]
+    fn simultaneous_distinct_ids_cannot_import_or_remove_the_same_managed_path() {
+        use std::sync::{mpsc, Barrier};
+
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let path = "nested/guarded.gguf";
+        let destination = storage.layout().managed_model_root().join(path);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, minimal_gguf("guarded")).unwrap();
+        let existing = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "before-race".to_owned(),
+                source_path: path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let model_id = existing.model_id.unwrap();
+
+        let holder = ManagedPathReservation::acquire(&storage, path).unwrap();
+        const CONTENDERS: usize = 24;
+        let barrier = Arc::new(Barrier::new(CONTENDERS + 1));
+        let (tx, rx) = mpsc::channel();
+        let mut threads = Vec::new();
+        for index in 0..CONTENDERS {
+            let storage = storage.clone();
+            let barrier = Arc::clone(&barrier);
+            let tx = tx.clone();
+            let model_id = model_id.clone();
+            threads.push(thread::spawn(move || {
+                let request = if index % 2 == 0 {
+                    ModelOperationRequest::Import {
+                        operation_id: format!("simultaneous-import-{index}"),
+                        source_path: "nested/guarded.gguf".to_owned(),
+                    }
+                } else {
+                    ModelOperationRequest::Remove {
+                        operation_id: format!("simultaneous-remove-{index}"),
+                        model_id,
+                    }
+                };
+                barrier.wait();
+                tx.send(run_model_operation(
+                    &storage,
+                    &request,
+                    &CancellationToken::new(),
+                ))
+                .unwrap();
+            }));
+        }
+        barrier.wait();
+        for _ in 0..CONTENDERS {
+            let outcome = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(
+                matches!(outcome, Err(ModelLibraryError::InvalidRequest(message)) if message.contains("active"))
+            );
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert!(destination.exists());
+        assert_eq!(storage.list_model_operations().unwrap().len(), 1);
+        drop(holder);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let recovered = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "after-race".to_owned(),
+                source_path: path.to_owned(),
+            },
+            &cancellation,
+        )
+        .unwrap();
+        assert_eq!(recovered.status, ModelOperationStatus::Cancelled);
+        assert_eq!(storage.list_model_operations().unwrap().len(), 2);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn direct_gguf_import_cannot_bypass_the_managed_path_reservation() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let path = "direct.gguf";
+        let file = storage.layout().managed_model_root().join(path);
+        fs::write(&file, minimal_gguf("direct")).unwrap();
+        let reservation = ManagedPathReservation::acquire(&storage, path).unwrap();
+        let request = ModelImportRequest {
+            source_path: path.to_owned(),
+        };
+        let error = import_managed_gguf_model(&storage, &request).unwrap_err();
+        assert!(error.to_string().contains("active"));
+        drop(reservation);
+        assert!(import_managed_gguf_model(&storage, &request).is_ok());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn streaming_gguf_hash_stops_on_mid_file_cancellation_before_saving_model() {
+        use std::fs::OpenOptions;
+
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/cancellable.gguf";
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, minimal_gguf("cancellable")).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(8 * 1024 * 1024)
+            .unwrap();
+
+        let mut progress = Vec::new();
+        let outcome = parse_managed_gguf_record_with_progress(
+            &storage,
+            "llama-cpp-local",
+            relative_path,
+            true,
+            |bytes| {
+                progress.push(bytes);
+                bytes < 2 * 1024 * 1024
+            },
+        );
+        assert!(matches!(
+            outcome,
+            Err(ModelLibraryError::Runtime(RuntimeError::Cancelled))
+        ));
+        assert!(progress.iter().any(|bytes| *bytes > 0));
+        assert!(progress.last().copied().unwrap() < 8 * 1024 * 1024);
+        assert_eq!(fs::metadata(&path).unwrap().len(), 8 * 1024 * 1024);
+        assert!(storage.list_model_records().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_gguf_import_persists_bounded_progress_during_large_hash() {
+        use std::fs::OpenOptions;
+
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/progress.gguf";
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, minimal_gguf("progress")).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(4 * 1024 * 1024)
+            .unwrap();
+
+        let result = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "progress-import".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(result.status, ModelOperationStatus::Completed);
+        let events = storage
+            .list_model_operation_events("progress-import")
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.status == ModelOperationStatus::Running
+                && event.bytes_completed > 0
+                && event.progress_percent.is_some_and(|percent| percent < 100)
+        }));
+        assert!(events.len() <= MAX_MODEL_OPERATION_EVENTS);
+        assert_eq!(events.last().unwrap(), &result);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_hash_progress_is_bounded_and_preserves_terminal_state() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let cancellation = CancellationToken::new();
+        let mut operation = queued_operation(
+            "hash-progress",
+            ModelOperationKind::Import,
+            ModelBackend::LlamaCpp,
+            None,
+            None,
+            None,
+            Some("sample.gguf".to_owned()),
+            "100".to_owned(),
+        );
+        operation.status = ModelOperationStatus::Running;
+        operation.bytes_total = Some(1_000);
+        storage.save_model_operation(&operation).unwrap();
+        let mut saved_percent = 0;
+        let mut error = None;
+        for bytes in [0, 10, 250, 1_000] {
+            assert!(persist_hash_progress(
+                &storage,
+                &mut operation,
+                bytes,
+                &cancellation,
+                &mut saved_percent,
+                &mut error,
+            ));
+        }
+        assert!(error.is_none());
+        assert_eq!(operation.bytes_completed, 1_000);
+        assert_eq!(operation.progress_percent, Some(99));
+        assert!(saved_percent <= 99);
+        cancellation.cancel();
+        assert!(!persist_hash_progress(
+            &storage,
+            &mut operation,
+            1_000,
+            &cancellation,
+            &mut saved_percent,
+            &mut error,
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn source_validation_rejects_non_loopback_endpoints_and_unsafe_paths() {
         for endpoint in ["https://127.0.0.1:1234", "http://192.168.1.10:1234"] {
             assert!(validated_source_parts(&source(ModelBackend::LmStudio, endpoint)).is_err());
         }
-        for path in ["../model.gguf", "C:/model.gguf", "nested\\model.gguf"] {
+        for path in [
+            "../model.gguf",
+            "C:/model.gguf",
+            "nested\\model.gguf",
+            "nested/model:stream.gguf",
+            "CON.gguf",
+            "aux/model.gguf",
+            "nested/model?.gguf",
+            "nested/model .gguf\t",
+            "nested/model.gguf\n",
+        ] {
             assert!(validated_source_parts(&ModelSourceConfig {
                 backend: ModelBackend::LlamaCpp,
                 label: None,

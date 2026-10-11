@@ -17,7 +17,8 @@ import {
   readHardwareSnapshot,
   readLocalOllamaModels,
   readModelCatalog,
-  readModelOperations,
+  readModelOperationsPage,
+  MODEL_OPERATION_PAGE_SIZE,
   readModelRemovals,
   startLocalOllama,
   startModelOperation,
@@ -72,6 +73,7 @@ import {
   type ModelCatalog,
   type ModelDiscoveryRequest,
   type ModelOperation,
+  type ModelOperationsPage,
   type ModelOperationRequest,
   type ModelInfo,
   type ModelRecord,
@@ -155,6 +157,7 @@ import {
   type ArenaTelemetry,
   type ArenaExecution,
   type ArenaProgress,
+  type ArenaRankingEntry,
 } from "./arena-runner";
 import {
   documentJsonForDraft,
@@ -237,7 +240,10 @@ import {
 } from "./model-library";
 import {
   deriveModelAvailability,
-  findModelOperation,
+  indexedModelOperation,
+  indexRecentModelOperations,
+  nextModelHistoryOffset,
+  visibleModelOperationPage,
   modelOperationMessage,
 } from "./model-library-roadmap";
 import { FONT_OPTIONS } from "./font-options";
@@ -1401,7 +1407,7 @@ type ProfileState =
 
 type ModelsState =
   | { status: "loading" }
-  | { status: "ready"; catalog: ModelCatalog; operations: ModelOperation[]; removals: ModelRemovalEvidence[] }
+  | { status: "ready"; catalog: ModelCatalog; operations: ModelOperation[]; active: ModelOperation[]; history: ModelOperation[]; nextOffset: number | null; removals: ModelRemovalEvidence[] }
   | { status: "error"; message: string }
   | { status: "preview" };
 
@@ -1439,9 +1445,16 @@ export function ModelsView() {
   const [operationStarting, setOperationStarting] = useState(false);
   const [operationAction, setOperationAction] = useState<string | null>(null);
   const [cancellingOperation, setCancellingOperation] = useState<string | null>(null);
+  const [olderHistoryPage, setOlderHistoryPage] = useState<{ offset: number; page: ModelOperationsPage } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [ollamaStartState, setOllamaStartState] = useState<OllamaStartState>({ status: "idle" });
   const ollamaStartInFlight = useRef(false);
   const operationCounter = useRef(0);
+  const operationRequestVersion = useRef(0);
+  const operationPollInFlight = useRef(false);
+  const refreshingModels = useRef(false);
+  const historyPageInFlight = useRef(false);
 
   async function refreshProfiles() {
     if (!isDesktopEnvironment()) {
@@ -1481,29 +1494,73 @@ export function ModelsView() {
       setModelState({ status: "preview" });
       return;
     }
-    setModelState({ status: "loading" });
+    const requestVersion = ++operationRequestVersion.current;
+    refreshingModels.current = true;
+    // Keep running downloads and their Cancel buttons visible while refreshing.
+    setModelState((current) => current.status === "ready" ? current : { status: "loading" });
     try {
-      const [catalog, operations, removals] = await Promise.all([
+      const [catalog, page, removals] = await Promise.all([
         readModelCatalog(discoveryRequest()),
-        readModelOperations(),
+        readModelOperationsPage(),
         readModelRemovals(),
       ]);
-      setModelState({ status: "ready", catalog, operations, removals });
-    } catch (error: unknown) {
+      if (requestVersion !== operationRequestVersion.current) return;
       setModelState({
-        status: "error",
-        message: error instanceof Error ? error.message : "The local model catalog is unavailable.",
+        status: "ready", catalog,
+        operations: visibleModelOperationPage(page.active, page.history),
+        active: page.active, history: page.history, nextOffset: page.nextOffset,
+        removals,
       });
+    } catch (error: unknown) {
+      if (requestVersion === operationRequestVersion.current) {
+        setModelState((current) => current.status === "ready" ? current : {
+          status: "error",
+          message: error instanceof Error ? error.message : "The local model catalog is unavailable.",
+        });
+        setFeedback({ kind: "error", message: error instanceof Error ? error.message : "The local model catalog is unavailable." });
+      }
+    } finally {
+      if (requestVersion === operationRequestVersion.current) refreshingModels.current = false;
     }
   }
 
   async function refreshOperationData() {
-    if (!desktop) return;
+    if (!desktop || refreshingModels.current || operationPollInFlight.current) return;
+    operationPollInFlight.current = true;
+    const requestVersion = ++operationRequestVersion.current;
     try {
-      const [operations, removals] = await Promise.all([readModelOperations(), readModelRemovals()]);
-      setModelState((current) => current.status === "ready" ? { ...current, operations, removals } : current);
+      const page = await readModelOperationsPage();
+      if (requestVersion !== operationRequestVersion.current) return;
+      setModelState((current) => current.status === "ready" ? {
+        ...current,
+        operations: visibleModelOperationPage(page.active, page.history),
+        active: page.active, history: page.history, nextOffset: page.nextOffset,
+      } : current);
     } catch {
       // Keep the last catalog visible during a transient activity poll failure.
+    } finally {
+      operationPollInFlight.current = false;
+    }
+  }
+
+  async function navigateOperationHistory(offset: number) {
+    if (!desktop || historyPageInFlight.current || !Number.isSafeInteger(offset) || offset < 0) return;
+    if (offset === 0) {
+      setOlderHistoryPage(null);
+      setHistoryError(null);
+      return;
+    }
+    historyPageInFlight.current = true;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const page = await readModelOperationsPage(MODEL_OPERATION_PAGE_SIZE, offset);
+      setOlderHistoryPage({ offset, page });
+    } catch (error: unknown) {
+      setHistoryError(error instanceof Error ? error.message : "The model operation history could not be reached.");
+    } finally {
+      setHistoryLoading(false);
+      historyPageInFlight.current = false;
     }
   }
 
@@ -1669,7 +1726,7 @@ export function ModelsView() {
     }
     const available = new Set(modelState.catalog.models.map((model) => model.modelId));
     setSelectedProfileModelId((current) => available.has(current) ? current : "");
-  }, [modelState]);
+  }, [modelState.status === "ready" ? modelState.catalog : null]);
 
   const hasActiveOperations = modelState.status === "ready"
     && (operationStarting || modelState.operations.some(isActiveModelOperation));
@@ -1681,6 +1738,14 @@ export function ModelsView() {
   }, [desktop, hasActiveOperations]);
 
   const visibleModels = modelState.status === "ready" ? filterModelCatalog(modelState.catalog, query) : [];
+  const nextHistoryOffset = nextModelHistoryOffset(
+    modelState.status === "ready" ? modelState.nextOffset : null,
+    olderHistoryPage?.page ?? null,
+  );
+  const modelOperationIndex = useMemo(
+    () => indexRecentModelOperations(modelState.status === "ready" ? modelState.operations : []),
+    [modelState.status === "ready" ? modelState.operations : null],
+  );
   const selectedProfileModel = modelState.status === "ready"
     ? modelState.catalog.models.find((model) => model.modelId === selectedProfileModelId)
     : undefined;
@@ -1851,7 +1916,7 @@ export function ModelsView() {
           {modelState.status === "ready" && visibleModels.length > 0 && (
             <div className="model-list">
               {visibleModels.map((model) => {
-                const rowOperation = findModelOperation(model, modelState.operations);
+                const rowOperation = indexedModelOperation(model, modelOperationIndex);
                 const availability = deriveModelAvailability(model, rowOperation);
                 const operationMessage = modelOperationMessage(rowOperation);
                 const recommendation = classifyModelRecommendation(
@@ -1934,12 +1999,37 @@ export function ModelsView() {
                   <p className="eyebrow">{translate("Persisted activity")}</p>
                   <h3>{translate("Model operations")}</h3>
                 </div>
+                <nav className="model-actions" aria-label={translate("Model operation history navigation")}>
+                  <button
+                    className="text-button" type="button"
+                    onClick={() => void navigateOperationHistory(0)}
+                    disabled={!olderHistoryPage || historyLoading}
+                  >{translate("Recent operations")}</button>
+                  <button
+                    className="text-button" type="button"
+                    onClick={() => void navigateOperationHistory(Math.max(0, (olderHistoryPage?.offset ?? 0) - MODEL_OPERATION_PAGE_SIZE))}
+                    disabled={!olderHistoryPage || historyLoading}
+                  >{translate("Newer")}</button>
+                  <button
+                    className="text-button" type="button"
+                    onClick={() => void navigateOperationHistory(nextHistoryOffset ?? 0)}
+                    disabled={historyLoading || nextHistoryOffset === null}
+                  >{translate("Older")}</button>
+                </nav>
               </div>
-              {modelState.operations.length === 0 ? (
+              <p className="field-help" role="status" aria-live="polite">
+                {historyLoading
+                  ? translate("Loading model operation history…")
+                  : olderHistoryPage
+                    ? translate("Older history page. Active operations remain current.")
+                    : translate("Recent history and all active operations.")}
+              </p>
+              {historyError && <p className="form-feedback form-feedback-error" role="alert">{historyError}</p>}
+              {modelState.operations.length === 0 && !olderHistoryPage ? (
                 <p className="field-help">{translate("No model operations are persisted locally.")}</p>
               ) : (
-                <div className="profile-record-list">
-                  {[...modelState.operations].reverse().map((operation) => (
+                <div className="profile-record-list" aria-live="off">
+                  {visibleModelOperationPage(modelState.active, olderHistoryPage?.page.history ?? modelState.history).map((operation) => (
                     <article className="profile-record-row" key={operation.operationId}>
                       <span>
                         <strong>{modelOperationKindLabel(operation.kind)} · {operation.modelName ?? operation.managedPath ?? displayName(operation.modelId, "Model")}</strong>
@@ -3190,13 +3280,62 @@ function ArenaResultsSurface({
         <>
           <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Comparison")}</p><h4>{translate("Responses by competitor")}</h4></div><div className="arena-actions"><button className="secondary-button" type="button" disabled={cards.length === 0} onClick={() => { setBlind(true); setRevealed(false); }}>{translate("Blind evaluate")}</button><button className="text-button" type="button" onClick={onOpenRuns}>{translate("Open history →")}</button></div></div>
           <div className="arena-competitor-results">{[...grouped.entries()].map(([competitorId, items]) => { const first = items[0]; const completed = items.find((item) => item.execution?.attempt.status === "completed"); const key = completed?.execution ? `${completed.runId}:${completed.execution.attempt.attemptId}` : ""; const response = responseState.status === "ready" && key ? responseState.responses[key] : undefined; const competitorSummary = competitorSummaries.find((candidate) => candidate.competitorId === competitorId); return <article className="competitor-result-card" key={competitorId}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Competitor")}</p><h4>{displayName(first.competitorLabel, "Competitor")}</h4></div><span className="field-help">{items.length} {translate("sample")}{items.length === 1 ? "" : "s"}</span></div><div className="results-facts"><BoundaryRow label="Status" value={items.every((item) => item.execution?.attempt.status === "completed") ? "Completed" : "Partial / failed"} /><BoundaryRow label="Profile revision" value={competitorId} /><BoundaryRow label="Latest run" value={completed?.runId ?? first.runId} />{competitorSummary && <><BoundaryRow label="Objective uncertainty" value={formatArenaMetric(competitorSummary.objectiveUncertainty)} /><BoundaryRow label="Objective tie margin" value={formatArenaMetric(competitorSummary.objectiveTieMargin)} /></>}</div>{response ? <pre className="arena-response-text">{response.text}</pre> : <p className="field-help">{translate("No response text is available for this competitor. Inspect run history for verified evidence.")}</p>}<ul className="arena-sample-list">{items.map((item) => { const evidence = summaryPersistence.status === "saved" ? summaryPersistence.record.evidence.find((candidate) => candidate.runId === item.runId && candidate.repetition === item.repetition) : undefined; return <li key={`${item.runId}-${item.repetition}`}><strong>#{item.repetition}</strong> {item.execution ? attemptStatusLabel(item.execution.attempt.status) : translate(item.error ? "failed before persistence" : "cancelled")} {evidence?.durationMs === null || evidence?.durationMs === undefined ? "" : ` · ${evidence.durationMs.toFixed(0)} ms`} {evidence?.objectivePassed === null || evidence?.objectivePassed === undefined ? "" : ` · ${translate("Objective")} ${evidence.objectivePassed ? translate("pass") : translate("fail")}`} {item.error ? <HumanError summary="Sample failed" detail={item.error} /> : null}</li>; })}</ul></article>; })}</div>
-          {ranking.length > 0 && <div className="arena-ranking" aria-label={translate("Arena ranking")}><div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Ranking")}</p><h4>{translate("Human scores after immutable lock")}</h4></div><span className="run-status arena-status-success">{translate("Revealed")}</span></div><ol className="arena-ranking-list">{ranking.map((entry) => <li key={entry.competitorId}><strong>#{entry.rank} · {displayName(entry.competitorLabel, "Competitor")}</strong><span>{entry.metric === "human_average_score" ? formatMessage("{score}/5 average", { score: formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }) : formatMessage("{rate}% objective pass rate", { rate: Math.round(entry.value * 100) })}{" · "}{formatMessage("{count} samples", { count: entry.sampleSize })}</span></li>)}</ol></div>}
+          <ArenaRankingPanel ranking={ranking} locked={lockState === "locked"} revealed={revealed} />
           {revealed && lockState === "locked" && <p className="field-help" role="status">{translate("Blind scores are locked in immutable per-run evaluation records. Responses are now identified.")}</p>}
            <div className="export-actions" role="group" aria-label={translate("Current Arena evidence exports")}><button className="secondary-button" type="button" onClick={() => download("json")}>{translate("Export JSON")}</button><button className="secondary-button" type="button" onClick={() => download("markdown")}>{translate("Export Markdown")}</button><button className="secondary-button" type="button" onClick={() => download("csv")}>{translate("Export CSV")}</button></div>
            {exportMessage && <p className="field-help" role="status" aria-live="polite">{exportMessage}</p>}
         </>
       )}
     </section>
+  );
+}
+
+export function ArenaRankingPanel({
+  ranking,
+  locked,
+  revealed,
+}: {
+  ranking: readonly ArenaRankingEntry[];
+  locked: boolean;
+  revealed: boolean;
+}) {
+  // Neither the leaderboard nor its lack of evidence should reveal review
+  // outcomes or competitor identities while blind evaluation is still active.
+  if (!locked || !revealed) return null;
+  if (ranking.length === 0) {
+    return (
+      <div className="arena-ranking" role="status" aria-live="polite" aria-label={translate("Arena ranking")}>
+        <EmptyState
+          title="No comparable ranking available"
+          description="A ranking needs human scores for every competitor or verified objective outcomes for every competitor."
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="arena-ranking" aria-label={translate("Arena ranking")}>
+      <div className="section-heading compact-heading">
+        <div>
+          <p className="eyebrow">{translate("Ranking")}</p>
+          <h4>{translate(ranking[0].metric === "human_average_score"
+            ? "Human scores after immutable lock"
+            : "Objective pass rates (human review incomplete)")}</h4>
+        </div>
+        <span className="run-status arena-status-success">{translate("Revealed")}</span>
+      </div>
+      <ol className="arena-ranking-list">
+        {ranking.map((entry) => (
+          <li key={entry.competitorId}>
+            <strong>#{entry.rank} · {displayName(entry.competitorLabel, "Competitor")}</strong>
+            <span>{entry.metric === "human_average_score"
+              ? formatMessage("{score}/5 average", { score: formatLocaleNumber(entry.value, undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) })
+              : formatMessage("{rate}% objective pass rate", { rate: Math.round(entry.value * 100) })}
+              {" · "}{formatMessage("{count} samples", { count: entry.sampleSize })}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
