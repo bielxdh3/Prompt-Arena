@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use serde_json::{json, Map, Value};
@@ -26,7 +27,9 @@ pub const MAX_MODEL_SOURCE_COUNT: usize = 8;
 pub const MAX_MODEL_QUERY_BYTES: usize = 256;
 pub const MAX_GGUF_HEADER_BYTES: usize = 256 * 1024;
 pub const MAX_MODEL_OPERATION_COUNT: usize = 512;
+/// Maximum number of persisted snapshots for one operation, including initial and terminal states.
 pub const MAX_MODEL_OPERATION_EVENTS: usize = 512;
+const MODEL_PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_GGUF_STRING_BYTES: usize = 64 * 1024;
 const MAX_GGUF_METADATA_ENTRIES: usize = 4_096;
 const MAX_GGUF_VALUE_DEPTH: usize = 8;
@@ -163,6 +166,29 @@ impl ModelOperationController {
         cancellation.cancel();
         Ok(())
     }
+}
+
+/// Run once on application startup, before accepting new model operations.
+/// A previous process cannot leave an in-memory cancellation token behind, so
+/// queued/running rows from that process must become terminal audit evidence.
+pub fn reconcile_interrupted_model_operations(
+    storage: &StorageService,
+) -> Result<usize, ModelLibraryError> {
+    let mut recovered = 0;
+    for mut operation in storage.list_model_operations()? {
+        if !matches!(
+            operation.status,
+            ModelOperationStatus::Queued | ModelOperationStatus::Running
+        ) {
+            continue;
+        }
+        operation.status = ModelOperationStatus::Failed;
+        operation.message = Some("interrupted by an earlier application shutdown".to_owned());
+        operation.updated_at = now_marker();
+        persist_operation(storage, &operation)?;
+        recovered += 1;
+    }
+    Ok(recovered)
 }
 
 pub fn default_source_configs() -> Vec<ModelSourceConfig> {
@@ -589,11 +615,8 @@ fn reserve_operation(
             "model operation id already exists".to_owned(),
         ));
     }
-    if storage.list_model_operations()?.len() >= MAX_MODEL_OPERATION_COUNT {
-        return Err(ModelLibraryError::InvalidRequest(
-            "model operation count exceeds the local item limit".to_owned(),
-        ));
-    }
+    // MAX_MODEL_OPERATION_COUNT limits concurrent operations in the controller;
+    // it must not cap lifetime audit history or permanently block new work.
     Ok(())
 }
 
@@ -625,17 +648,25 @@ fn execute_download(
     cancellation: &CancellationToken,
 ) -> Result<CompletedOperation, ModelLibraryError> {
     let provider = download_provider(endpoint)?;
-    let mut progress_events = 0_usize;
+    // Every runtime frame is validated; only meaningful progress is written to SQLite.
+    // Reserve room for the queued, running and terminal snapshots in the audit history.
+    let mut persisted_events = 2_usize;
+    let mut last_persisted = operation.clone();
+    let mut last_persisted_at = Instant::now();
     provider.pull_model(model_name, cancellation, |event| {
-        if progress_events >= MAX_MODEL_OPERATION_EVENTS {
-            return Err(RuntimeError::Protocol {
-                message: "model operation progress exceeded the local item limit".to_owned(),
-            });
-        }
-        progress_events += 1;
         apply_download_event(operation, event)?;
-        operation.updated_at = now_marker();
-        persist_operation(storage, operation).map_err(operation_runtime_error)?;
+        if persisted_events < MAX_MODEL_OPERATION_EVENTS.saturating_sub(1)
+            && (operation.progress_percent != last_persisted.progress_percent
+                || operation.message != last_persisted.message
+                || (operation.bytes_completed != last_persisted.bytes_completed
+                    && last_persisted_at.elapsed() >= MODEL_PROGRESS_PERSIST_INTERVAL))
+        {
+            operation.updated_at = now_marker();
+            persist_operation(storage, operation).map_err(operation_runtime_error)?;
+            last_persisted = operation.clone();
+            last_persisted_at = Instant::now();
+            persisted_events += 1;
+        }
         Ok(())
     })?;
     if cancellation.is_cancelled() {
@@ -1764,7 +1795,16 @@ mod tests {
                     return;
                 };
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                read_request_headers(&mut stream);
+                let request_headers = read_request_headers(&mut stream);
+                let request_length = request_headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length: "))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut request_body = vec![0; request_length];
+                if stream.read_exact(&mut request_body).is_err() {
+                    return;
+                }
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -2181,6 +2221,196 @@ mod tests {
         assert_eq!(events.last().unwrap(), &operation);
 
         drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn download_accepts_more_than_512_progress_frames_without_unbounded_audit_writes() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let mut body = (0..600_u64)
+            .map(|completed| {
+                json!({
+                    "status": "downloading",
+                    "total": 600,
+                    "completed": completed
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push('\n');
+        body.push_str(&json!({ "status": "success", "total": 600, "completed": 600 }).to_string());
+        body.push('\n');
+        let server = PullServer::start(body);
+
+        let result = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Download {
+                operation_id: "download-many-frames".to_owned(),
+                endpoint: server.endpoint.clone(),
+                model_name: "tiny-model".to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("a large but bounded progress stream must complete");
+
+        assert_eq!(result.status, ModelOperationStatus::Completed, "{result:?}");
+        assert_eq!(result.bytes_completed, 600);
+        let events = storage
+            .list_model_operation_events("download-many-frames")
+            .unwrap();
+        assert!(
+            events.len() < 150,
+            "unchanged percentage frames should be coalesced"
+        );
+        assert!(events.len() <= MAX_MODEL_OPERATION_EVENTS);
+        assert_eq!(events.first().unwrap().status, ModelOperationStatus::Queued);
+        assert_eq!(events.last().unwrap(), &result);
+
+        drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn download_reserves_a_terminal_audit_snapshot_after_history_limit() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let mut body = (0..(MAX_MODEL_OPERATION_EVENTS + 20))
+            .map(|index| json!({ "status": format!("phase-{index}") }).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push('\n');
+        body.push_str(&json!({ "status": "success", "total": 100, "completed": 100 }).to_string());
+        body.push('\n');
+        let server = PullServer::start(body);
+
+        let operation = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Download {
+                operation_id: "bounded-history".to_owned(),
+                endpoint: server.endpoint.clone(),
+                model_name: "tiny-model".to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("bounded progress history must not reject a valid runtime stream");
+
+        assert_eq!(
+            operation.status,
+            ModelOperationStatus::Completed,
+            "{operation:?}"
+        );
+        let events = storage
+            .list_model_operation_events("bounded-history")
+            .unwrap();
+        assert_eq!(events.len(), MAX_MODEL_OPERATION_EVENTS);
+        assert_eq!(events.first().unwrap().status, ModelOperationStatus::Queued);
+        assert_eq!(events.last().unwrap(), &operation);
+
+        drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_reconciles_orphaned_model_operations_without_touching_terminal_history() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let queued = queued_operation(
+            "orphan-queued",
+            ModelOperationKind::Download,
+            ModelBackend::Ollama,
+            None,
+            Some("model".to_owned()),
+            None,
+            None,
+            "100".to_owned(),
+        );
+        let mut running = queued.clone();
+        running.operation_id = "orphan-running".to_owned();
+        running.status = ModelOperationStatus::Running;
+        running.bytes_completed = 42;
+        let mut finished = queued.clone();
+        finished.operation_id = "already-finished".to_owned();
+        finished.status = ModelOperationStatus::Completed;
+        storage.save_model_operation(&queued).unwrap();
+        storage.save_model_operation(&running).unwrap();
+        storage.save_model_operation(&finished).unwrap();
+
+        assert_eq!(reconcile_interrupted_model_operations(&storage).unwrap(), 2);
+        assert_eq!(reconcile_interrupted_model_operations(&storage).unwrap(), 0);
+        for operation_id in ["orphan-queued", "orphan-running"] {
+            let operation = storage.get_model_operation(operation_id).unwrap().unwrap();
+            assert_eq!(operation.status, ModelOperationStatus::Failed);
+            assert!(operation
+                .message
+                .unwrap()
+                .contains("earlier application shutdown"));
+            let events = storage.list_model_operation_events(operation_id).unwrap();
+            assert_eq!(events.last().unwrap().status, ModelOperationStatus::Failed);
+        }
+        assert_eq!(
+            storage
+                .get_model_operation("orphan-running")
+                .unwrap()
+                .unwrap()
+                .bytes_completed,
+            42
+        );
+        assert_eq!(
+            storage.get_model_operation("already-finished").unwrap(),
+            Some(finished)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn historical_operation_count_does_not_block_the_next_operation() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        for index in 0..MAX_MODEL_OPERATION_COUNT {
+            let mut historical = queued_operation(
+                &format!("completed-{index}"),
+                ModelOperationKind::Import,
+                ModelBackend::LlamaCpp,
+                None,
+                None,
+                None,
+                None,
+                "100".to_owned(),
+            );
+            historical.status = ModelOperationStatus::Completed;
+            storage.save_model_operation(&historical).unwrap();
+        }
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let operation = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "operation-513".to_owned(),
+                source_path: "next.gguf".to_owned(),
+            },
+            &cancellation,
+        )
+        .expect("historical operations must not exhaust lifetime operation capacity");
+
+        assert_eq!(operation.status, ModelOperationStatus::Cancelled);
+        assert_eq!(
+            storage.list_model_operations().unwrap().len(),
+            MAX_MODEL_OPERATION_COUNT + 1
+        );
+        let old = storage.get_model_operation("completed-0").unwrap().unwrap();
+        assert_eq!(old.status, ModelOperationStatus::Completed);
+        assert_eq!(
+            storage
+                .list_model_operation_events("completed-0")
+                .unwrap()
+                .len(),
+            1
+        );
+
         let _ = fs::remove_dir_all(root);
     }
 

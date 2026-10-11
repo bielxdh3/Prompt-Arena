@@ -30,4 +30,30 @@ describe("release publication boundary", () => {
     expect(workflow).not.toMatch(/\bgh\s+release\s+(?:create|edit|upload)\b/iu);
     expect(workflow).not.toMatch(/\bgit\s+push\b/iu);
   });
+
+  it("keeps Windows smoke text diagnostics on PRs and restricts failed installers to trusted manual runs", () => {
+    const workflow = fs.readFileSync(path.join(REPOSITORY_ROOT, ".github", "workflows", "package.yml"), "utf8");
+    const capture = workflow.indexOf("- name: Capture Windows Installer failure context");
+    const uploadDiagnostics = workflow.indexOf("- name: Upload Windows MSI smoke diagnostics");
+    const uploadFailedPackages = workflow.indexOf("- name: Upload failed Windows package candidates for reproduction");
+    expect(capture).toBeGreaterThan(workflow.indexOf("- name: Verify Windows packages and run clean-install smoke"));
+    expect(uploadDiagnostics).toBeGreaterThan(capture);
+    expect(uploadFailedPackages).toBeGreaterThan(uploadDiagnostics);
+    const captureStep = workflow.slice(capture, uploadDiagnostics);
+    expect(captureStep).toContain("if: failure() && runner.os == 'Windows'");
+    expect(captureStep).toContain("windows-installer-context.txt");
+    expect(captureStep).toContain("Get-Service -Name msiserver");
+    expect(captureStep).toContain("Get-CimInstance Win32_Process");
+    expect(captureStep).toContain("Get-WinEvent");
+    expect(captureStep).not.toMatch(/Select-Object[^\r\n]*(?:CommandLine|Message)/u);
+    const diagnosticsStep = workflow.slice(uploadDiagnostics, uploadFailedPackages);
+    expect(diagnosticsStep).toContain("if: failure() && runner.os == 'Windows'");
+    expect(diagnosticsStep).not.toContain("github.event_name == 'workflow_dispatch'");
+    expect(diagnosticsStep).toContain("prompt-arena-msi-diagnostics/");
+    const failedPackageStep = workflow.slice(uploadFailedPackages, workflow.indexOf("- name: Verify Linux packages"));
+    expect(failedPackageStep).toContain("if: failure() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.ref == 'main'");
+    expect(failedPackageStep).toContain("package-artifacts/");
+    expect(failedPackageStep).toContain("checksums-sha256.txt");
+    expect(failedPackageStep).toContain("retention-days: 7");
+  });
 });

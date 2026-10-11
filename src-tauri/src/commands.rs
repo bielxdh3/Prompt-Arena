@@ -135,6 +135,7 @@ const OLLAMA_EXECUTABLE: &str = "ollama";
 const OLLAMA_SERVE_ARGUMENT: &str = "serve";
 const OLLAMA_START_RETRIES: usize = 20;
 const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
+const MAX_ACTIVE_ONE_SHOT_RUNS: usize = 16;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
@@ -179,6 +180,14 @@ impl OneShotCancellationRegistry {
             return Err(CommandError {
                 code: "run_already_active",
                 message: "a run with this id is already active".to_owned(),
+            });
+        }
+        if active.len() >= MAX_ACTIVE_ONE_SHOT_RUNS {
+            return Err(CommandError {
+                code: "run_concurrency_limit",
+                message: format!(
+                    "at most {MAX_ACTIVE_ONE_SHOT_RUNS} one-shot runs may be active at once"
+                ),
             });
         }
         let cancellation = CancellationToken::new();
@@ -240,6 +249,12 @@ impl Drop for ActiveOneShotCancellation<'_> {
 
 fn one_shot_cancellations() -> &'static OneShotCancellationRegistry {
     ONE_SHOT_CANCELLATIONS.get_or_init(OneShotCancellationRegistry::default)
+}
+
+fn register_one_shot_run(
+    run_id: &str,
+) -> Result<(CancellationToken, ActiveOneShotCancellation<'static>), CommandError> {
+    one_shot_cancellations().register(run_id)
 }
 
 fn valid_one_shot_run_id(run_id: &str) -> bool {
@@ -467,8 +482,22 @@ pub fn remove_external_provider(provider_id: ExternalProviderId) -> Result<bool,
 }
 
 #[tauri::command]
-pub fn execute_external_generation(
+pub async fn execute_external_generation(
     app: AppHandle,
+    request: ExternalGenerationRequest,
+) -> Result<ExternalGenerationResult, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_external_generation_blocking(&app, request)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "provider_transport",
+        message: "the external generation worker failed".to_owned(),
+    })?
+}
+
+fn execute_external_generation_blocking(
+    app: &AppHandle,
     request: ExternalGenerationRequest,
 ) -> Result<ExternalGenerationResult, CommandError> {
     let result = execute_external_generation_record(request).map_err(CommandError::from)?;
@@ -482,7 +511,7 @@ pub fn execute_external_generation(
     );
     let evidence = sanitized_external_generation_evidence(generation_id, &result)
         .map_err(CommandError::from)?;
-    storage_for(&app)?
+    storage_for(app)?
         .save_external_generation_evidence(&evidence, &now_marker())
         .map_err(CommandError::from)?;
     Ok(result)
@@ -861,43 +890,71 @@ pub fn list_profile_revisions(app: AppHandle) -> Result<Vec<ProfileRevision>, Co
 }
 
 #[tauri::command]
-pub fn discover_local_models(
+pub async fn discover_local_models(
     app: AppHandle,
     request: ModelDiscoveryRequest,
 ) -> Result<ModelCatalog, CommandError> {
-    discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_discovery_failed",
+        message: "the local model discovery worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn read_live_profile_model_identity(
+pub async fn read_live_profile_model_identity(
     app: AppHandle,
     profile_revision_id: String,
     require_loaded_model_digest: bool,
 ) -> Result<LiveProfileModelIdentity, CommandError> {
-    read_live_profile_model_identity_backend(
-        &storage_for(&app)?,
-        &profile_revision_id,
-        require_loaded_model_digest,
-    )
-    .map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        read_live_profile_model_identity_backend(
+            &storage_for(&app)?,
+            &profile_revision_id,
+            require_loaded_model_digest,
+        )
+        .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_discovery_failed",
+        message: "the local model identity worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
-pub fn import_managed_gguf_model(
+pub async fn import_managed_gguf_model(
     app: AppHandle,
     request: ModelImportRequest,
 ) -> Result<ModelRecord, CommandError> {
-    import_managed_gguf_model_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        import_managed_gguf_model_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_import_failed",
+        message: "the managed GGUF import worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
-pub fn start_model_operation(
+pub async fn start_model_operation(
     app: AppHandle,
     request: ModelOperationRequest,
 ) -> Result<ModelOperation, CommandError> {
-    model_operation_controller()
-        .execute(&storage_for(&app)?, &request)
-        .map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        model_operation_controller()
+            .execute(&storage_for(&app)?, &request)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_operation_failed",
+        message: "the model operation worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
@@ -930,14 +987,30 @@ pub fn list_model_removals(app: AppHandle) -> Result<Vec<ModelRemovalEvidence>, 
 }
 
 #[tauri::command]
-pub fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
-    OllamaProvider::default_local()?
-        .list_models()
-        .map_err(Into::into)
+pub async fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        OllamaProvider::default_local()?
+            .list_models()
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "runtime_failed",
+        message: "the local Ollama model listing worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
-pub fn start_local_ollama() -> Result<OllamaStartStatus, CommandError> {
+pub async fn start_local_ollama() -> Result<OllamaStartStatus, CommandError> {
+    tauri::async_runtime::spawn_blocking(start_local_ollama_blocking)
+        .await
+        .map_err(|_| CommandError {
+            code: "ollama_start_failed",
+            message: "the Ollama startup worker failed".to_owned(),
+        })?
+}
+
+fn start_local_ollama_blocking() -> Result<OllamaStartStatus, CommandError> {
     let _start_guard = OLLAMA_START_LOCK.lock().map_err(|_| CommandError {
         code: "ollama_start_failed",
         message: "Ollama could not be started.".to_owned(),
@@ -1120,15 +1193,30 @@ pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus
 /// Execute exactly one bounded generation in the app-owned worker, then persist
 /// its terminal outcome in the app-owned store.
 #[tauri::command]
-pub fn execute_run_once(
+pub async fn execute_run_once(
     app: AppHandle,
-    mut plan: RunPlan,
+    plan: RunPlan,
 ) -> Result<PersistedExecution, CommandError> {
-    // Register first because the UI exposes this run ID before the backend
-    // finishes authoritative preflight. A cancellation during preflight must
-    // still apply to this active sample; a failed bind drops the guard below.
-    let (cancellation, active_run) = one_shot_cancellations().register(&plan.run_id)?;
-    let storage = storage_for(&app)?;
+    // Reserve synchronously during command dispatch, before spawn_blocking can
+    // queue the work. Immediate cancel requests must see this pending run.
+    let (cancellation, active_run) = register_one_shot_run(&plan.run_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_run_once_blocking(&app, plan, cancellation, active_run)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "worker_failed",
+        message: "the one-shot execution worker failed".to_owned(),
+    })?
+}
+
+fn execute_run_once_blocking(
+    app: &AppHandle,
+    mut plan: RunPlan,
+    cancellation: CancellationToken,
+    active_run: ActiveOneShotCancellation<'_>,
+) -> Result<PersistedExecution, CommandError> {
+    let storage = storage_for(app)?;
     bind_authoritative_execution_boundary(&mut plan, &storage)?;
     let outcome = if let Some(verifier_id) = plan.docker_verifier_id {
         let mut generation_plan = plan.clone();
@@ -1139,10 +1227,10 @@ pub fn execute_run_once(
         generation_plan.docker_verifier_id = None;
         generation_plan.verifier_policy = None;
         generation_plan.objective_expectation = None;
-        let generated = invoke_worker_once(&app, &generation_plan, &cancellation)?;
+        let generated = invoke_worker_once(app, &generation_plan, &cancellation)?;
         attach_docker_contract_outcome(generated, verifier_id, &cancellation)
     } else {
-        invoke_worker_once(&app, &plan, &cancellation)?
+        invoke_worker_once(app, &plan, &cancellation)?
     };
     // Keep the run ID reserved until persistence finishes, while rejecting
     // late cancel requests after its terminal outcome has been assembled.
@@ -1601,14 +1689,20 @@ mod tests {
         ffi::OsStr,
         fs,
         path::{Path, PathBuf},
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc, Arc, Barrier, Mutex,
+        },
+        thread,
+        time::Duration,
     };
 
     use super::{
-        app_status, docker_evaluation_score, ollama_server_command, ollama_spawn_error,
-        read_benchmark_version_from_storage, resolve_worker_executable, start_ollama_with,
-        worker_executable_name, worker_executable_path, worker_sidecar_resource_path,
-        OllamaStartStatus, OneShotCancellationRegistry, StorageState, OLLAMA_START_RETRIES,
+        app_status, cancel_run_once, docker_evaluation_score, ollama_server_command,
+        ollama_spawn_error, read_benchmark_version_from_storage, register_one_shot_run,
+        resolve_worker_executable, start_ollama_with, worker_executable_name,
+        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus,
+        OneShotCancellationRegistry, StorageState, MAX_ACTIVE_ONE_SHOT_RUNS, OLLAMA_START_RETRIES,
         WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
@@ -1675,6 +1769,101 @@ mod tests {
         assert!(registry.register("arena-123-1-2").is_err());
         drop(finished);
         assert!(!registry.cancel("arena-123-1-2"));
+    }
+
+    #[test]
+    fn concurrent_one_shot_runs_are_capped_and_slots_reopen_after_completion() {
+        let registry = Arc::new(OneShotCancellationRegistry::default());
+        let start = Arc::new(Barrier::new(MAX_ACTIVE_ONE_SHOT_RUNS + 1));
+        let (registered_tx, registered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let (released_tx, released_rx) = mpsc::channel();
+
+        let workers = (0..MAX_ACTIVE_ONE_SHOT_RUNS)
+            .map(|index| {
+                let registry = Arc::clone(&registry);
+                let start = Arc::clone(&start);
+                let registered_tx = registered_tx.clone();
+                let release_rx = Arc::clone(&release_rx);
+                let released_tx = released_tx.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    let id = format!("parallel-run-{index}");
+                    let registration = registry.register(&id);
+                    registered_tx.send(registration.is_ok()).unwrap();
+                    let (_token, active_run) = registration.expect("a slot is available");
+                    release_rx.lock().unwrap().recv().unwrap();
+                    drop(active_run);
+                    released_tx.send(()).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(registered_tx);
+        drop(released_tx);
+
+        start.wait();
+        for _ in 0..MAX_ACTIVE_ONE_SHOT_RUNS {
+            assert!(registered_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+
+        let limit_error = registry.register("parallel-run-overflow").err().unwrap();
+        assert_eq!(limit_error.code, "run_concurrency_limit");
+        assert!(limit_error.message.contains("16"));
+        let duplicate_error = registry.register("parallel-run-0").err().unwrap();
+        assert_eq!(duplicate_error.code, "run_already_active");
+        assert!(registry.cancel("parallel-run-0"));
+
+        release_tx.send(()).unwrap();
+        released_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (_token, replacement) = registry
+            .register("parallel-run-replacement")
+            .expect("a finished run immediately reopens its slot");
+        assert_eq!(
+            registry
+                .register("parallel-run-overflow")
+                .err()
+                .unwrap()
+                .code,
+            "run_concurrency_limit"
+        );
+        drop(replacement);
+
+        for _ in 1..MAX_ACTIVE_ONE_SHOT_RUNS {
+            release_tx.send(()).unwrap();
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        for index in 0..MAX_ACTIVE_ONE_SHOT_RUNS * 2 {
+            let (_, completed) = registry
+                .register(&format!("sequential-run-{index}"))
+                .expect("sequential workflows can reuse slots indefinitely");
+            drop(completed);
+        }
+    }
+
+    #[test]
+    fn early_cancel_reaches_run_registered_before_worker_starts() {
+        let run_id = format!(
+            "early-cancel-{}",
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        // Exercise the same reservation path as the Tauri command, then
+        // deliberately delay the worker to simulate a saturated blocking pool.
+        let (cancellation, active_run) = register_one_shot_run(&run_id).unwrap();
+        let (start_tx, start_rx) = mpsc::channel::<()>();
+        let worker = thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let was_cancelled = cancellation.is_cancelled();
+            drop(active_run);
+            was_cancelled
+        });
+
+        assert!(cancel_run_once(run_id.clone()));
+        start_tx.send(()).unwrap();
+        assert!(worker.join().unwrap());
+        assert!(!cancel_run_once(run_id));
     }
 
     #[test]

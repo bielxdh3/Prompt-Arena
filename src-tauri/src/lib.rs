@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 pub mod commands;
 pub mod docker_evaluator;
 pub mod domain;
@@ -17,8 +19,18 @@ pub mod worker;
 pub const APP_NAME: &str = "Prompt Arena";
 pub const APP_PROTOCOL_VERSION: u16 = 1;
 
+fn initialize_app_storage(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = storage::StorageService::open(root)?;
+    model_library::reconcile_interrupted_model_operations(&storage)?;
+    Ok(())
+}
+
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
+        .setup(|app| {
+            let root = app.path().app_data_dir()?;
+            initialize_app_storage(&root)
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::validate_benchmark_document,
@@ -79,4 +91,65 @@ pub fn run() -> tauri::Result<()> {
             commands::cancel_run_once
         ])
         .run(tauri::generate_context!())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use crate::{
+        domain::{ModelBackend, ModelOperation, ModelOperationKind, ModelOperationStatus},
+        storage::StorageService,
+    };
+
+    #[test]
+    fn startup_initialization_reconciles_interrupted_model_operations() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "prompt-arena-startup-test-{}-{unique}",
+            std::process::id()
+        ));
+        let storage = StorageService::open(&root).unwrap();
+        storage
+            .save_model_operation(&ModelOperation {
+                operation_id: "orphan-startup".to_owned(),
+                kind: ModelOperationKind::Download,
+                backend: ModelBackend::Ollama,
+                source_id: None,
+                model_name: Some("example-model".to_owned()),
+                model_id: None,
+                managed_path: None,
+                status: ModelOperationStatus::Running,
+                bytes_total: None,
+                bytes_completed: 0,
+                progress_percent: Some(0),
+                content_hash: None,
+                message: None,
+                created_at: "100".to_owned(),
+                updated_at: "100".to_owned(),
+            })
+            .unwrap();
+        drop(storage);
+
+        super::initialize_app_storage(&root).unwrap();
+        let storage = StorageService::open(&root).unwrap();
+        let recovered = storage
+            .get_model_operation("orphan-startup")
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.status, ModelOperationStatus::Failed);
+        assert_eq!(
+            recovered.message.as_deref(),
+            Some("interrupted by an earlier application shutdown")
+        );
+
+        drop(storage);
+        let _ = fs::remove_dir_all(root);
+    }
 }
