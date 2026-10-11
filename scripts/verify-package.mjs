@@ -150,17 +150,25 @@ function findUninstaller(installDirectory) {
 }
 
 export function buildMsiexecArguments(action, installer, installDirectory, logPath) {
-  if (typeof logPath !== "string" || !logPath || logPath.includes('"')) {
-    throw new Error("MSI log path is invalid");
-  }
+  const msi = quoteMsiexecPath(installer, "MSI installer path");
+  const log = quoteMsiexecPath(logPath, "MSI log path");
   if (action === "install") {
-    if (typeof installDirectory !== "string" || !installDirectory || installDirectory.includes('"')) {
-      throw new Error("MSI install directory is invalid");
-    }
-    return ["/i", installer, "/qn", "/norestart", `INSTALLDIR="${installDirectory}"`, "/L*V!", logPath];
+    const directory = quoteMsiexecPath(installDirectory, "MSI install directory");
+    // Windows Installer parses GetCommandLineW, not just argv. An ordinary
+    // Node spawn() escapes the quotes inside INSTALLDIR="...", so msiexec can
+    // hang in a modal usage/error dialog even with /qn and no MSI log. These
+    // arguments are already quoted for windowsVerbatimArguments below.
+    return ["/i", msi, "/qn", "/norestart", `INSTALLDIR=${directory}`, "/L*V!", log];
   }
-  if (action === "uninstall") return ["/x", installer, "/qn", "/norestart", "/L*V!", logPath];
+  if (action === "uninstall") return ["/x", msi, "/qn", "/norestart", "/L*V!", log];
   throw new Error(`unsupported MSI action: ${action}`);
+}
+
+function quoteMsiexecPath(value, label) {
+  if (typeof value !== "string" || !value || /["\x00-\x1f]/u.test(value) || value.endsWith("\\")) {
+    throw new Error(`${label} is invalid`);
+  }
+  return `"${value}"`;
 }
 
 export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = false } = {}) {
@@ -172,9 +180,12 @@ export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = fal
 }
 
 export function buildMsiexecPreflightArguments(missingMsiPath, logPath) {
-  // Intentionally non-existent MSI: tests launch/CLI error handling without
-  // installing software or depending on a previously installed MSI product.
-  return ["/i", missingMsiPath, "/qn", "/norestart", "/L*V!", logPath];
+  // An intentionally nonexistent MSI cannot install anything. Exercise the
+  // *same public property syntax* as the actual smoke, including a path with
+  // spaces; a previous preflight without INSTALLDIR missed a modal CLI hang.
+  return buildMsiexecArguments(
+    "install", missingMsiPath, path.join(path.dirname(missingMsiPath), "install destination with spaces"), logPath,
+  );
 }
 
 export function verifyMsiexecPreflightExitCode(exitCode) {
@@ -300,7 +311,11 @@ export function runMsiexec(args, action, logPath, {
 
   return new Promise((resolve, reject) => {
     const started = Date.now();
-    const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+    // With a real msiexec.exe on Windows, let the Windows Installer parser
+    // receive the exact CLI tokens built above. Tests using a substitute Node
+    // executable intentionally retain normal spawn argv handling.
+    const isWindowsInstaller = process.platform === "win32" && path.basename(command).toLowerCase() === "msiexec.exe";
+    const child = spawn(command, args, { stdio: "ignore", windowsHide: true, windowsVerbatimArguments: isWindowsInstaller });
     let settled = false;
     let timedOut = false;
     let timer;
