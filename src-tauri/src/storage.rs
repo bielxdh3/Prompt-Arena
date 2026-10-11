@@ -2875,9 +2875,9 @@ impl StorageService {
         }
 
         let mut deleted_records = 0u32;
-        for table in RETENTION_DELETE_TABLES {
+        for table in retention_delete_tables() {
             let deleted = transaction
-                .execute(table.delete_sql, params![request.cutoff_at])
+                .execute(&table.delete_sql, params![request.cutoff_at])
                 .map_err(|_| StorageError::DatabaseFailure)?;
             deleted_records = deleted_records
                 .checked_add(u32::try_from(deleted).map_err(|_| StorageError::DatabaseFailure)?)
@@ -3251,58 +3251,104 @@ impl StorageService {
 
 struct RetentionTableSql {
     name: &'static str,
-    count_sql: &'static str,
-    delete_sql: &'static str,
+    count_sql: String,
+    delete_sql: String,
 }
 
-const RETENTION_DELETE_TABLES: &[RetentionTableSql] = &[
-    // Preview and cleanup follow dependency order: old results, then eligible attempts, then runs.
-    RetentionTableSql {
-        name: "result_records",
-        count_sql: "SELECT COUNT(*) FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-        delete_sql: "DELETE FROM result_records WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-    },
-    RetentionTableSql {
-        name: "attempts",
-        count_sql: "SELECT COUNT(*) FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER))",
-        delete_sql: "DELETE FROM attempts WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER))",
-    },
-    RetentionTableSql {
-        name: "runs",
-        count_sql: concat!(
-            "SELECT COUNT(*) FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
-            "AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 AND NOT (CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)))) ",
-            "AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) ",
-            "AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+fn retention_delete_tables() -> Vec<RetentionTableSql> {
+    // An immutable report can outlive its source run. Protect the full source
+    // attempt (and all of its results) whenever any retained record references
+    // either its attempt ID or its run ID. The same predicates drive previews
+    // and deletion, so an approved preview cannot silently widen its scope.
+    let referenced_attempt = [
+        "blind_evaluations",
+        "arena_summaries",
+        "roadmap_records",
+    ]
+    .iter()
+    .map(|table| {
+        format!(
+            "NOT EXISTS (SELECT 1 FROM {table} WHERE \
+             instr({table}.document_json, '\"attemptId\":\"' || attempts.record_id || '\"') > 0 \
+             OR instr({table}.document_json, '\"runId\":\"' || \
+                CASE WHEN json_valid(attempts.document_json) \
+                     THEN json_extract(attempts.document_json, '$.runId') ELSE NULL END || '\"') > 0)"
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" AND ");
+
+    let eligible_attempt = format!(
+        "CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) \
+         AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id \
+              AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)) \
+         AND {referenced_attempt}"
+    );
+    // A result is removable only if its parent attempt is also removable.
+    let eligible_result = format!(
+        "CAST(result_records.created_at AS INTEGER) < CAST(?1 AS INTEGER) \
+         AND EXISTS (SELECT 1 FROM attempts WHERE attempts.record_id = result_records.attempt_id \
+              AND {eligible_attempt})"
+    );
+    let referenced_run = ["blind_evaluations", "arena_summaries", "roadmap_records"]
+        .iter()
+        .map(|table| {
+            format!(
+                "NOT EXISTS (SELECT 1 FROM {table} WHERE \
+                 instr({table}.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let eligible_run = format!(
+        "CAST(runs.created_at AS INTEGER) < CAST(?1 AS INTEGER) \
+         AND NOT EXISTS (SELECT 1 FROM attempts WHERE \
+              instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 \
+              AND NOT ({eligible_attempt})) AND {referenced_run}"
+    );
+    // Model ratings and historical comparisons are permanent roadmap records.
+    // Their Arena source summaries must stay available after age-based cleanup.
+    // Follow the exact validated source object and its content hash, rather
+    // than matching an ID that happens to occur in unrelated JSON text.
+    let eligible_arena_summary = concat!(
+        "CAST(arena_summaries.created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
+        "AND NOT EXISTS (SELECT 1 FROM roadmap_records WHERE ",
+        "(roadmap_records.kind = 'model_ratings' AND EXISTS (",
+        "SELECT 1 FROM json_each(roadmap_records.document_json, '$.sourcePopulation') AS source ",
+        "WHERE json_extract(source.value, '$.arenaId') = arena_summaries.record_id ",
+        "AND json_extract(source.value, '$.contentHash') = arena_summaries.content_hash)) ",
+        "OR (roadmap_records.kind = 'historical_regression' AND EXISTS (",
+        "SELECT 1 FROM json_each(roadmap_records.document_json, '$.sourceReferences') AS source ",
+        "WHERE json_extract(source.value, '$.sourceKind') = 'arena_summary' ",
+        "AND json_extract(source.value, '$.sourceId') = arena_summaries.record_id ",
+        "AND json_extract(source.value, '$.contentHash') = arena_summaries.content_hash)))"
+    );
+
+    let table = |name: &'static str, predicate: &str| RetentionTableSql {
+        name,
+        count_sql: format!("SELECT COUNT(*) FROM {name} WHERE {predicate}"),
+        delete_sql: format!("DELETE FROM {name} WHERE {predicate}"),
+    };
+    // Order matters for result_records -> attempts foreign keys.
+    vec![
+        table("result_records", &eligible_result),
+        table("attempts", &eligible_attempt),
+        table("runs", &eligible_run),
+        table(
+            "blind_evaluations",
+            "CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
         ),
-        delete_sql: concat!(
-            "DELETE FROM runs WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER) ",
-            "AND NOT EXISTS (SELECT 1 FROM attempts WHERE instr(attempts.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0 AND NOT (CAST(attempts.created_at AS INTEGER) < CAST(?1 AS INTEGER) AND NOT EXISTS (SELECT 1 FROM result_records WHERE result_records.attempt_id = attempts.record_id AND CAST(result_records.created_at AS INTEGER) >= CAST(?1 AS INTEGER)))) ",
-            "AND NOT EXISTS (SELECT 1 FROM blind_evaluations WHERE instr(blind_evaluations.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0) ",
-            "AND NOT EXISTS (SELECT 1 FROM arena_summaries WHERE instr(arena_summaries.document_json, '\"runId\":\"' || runs.record_id || '\"') > 0)"
+        table("arena_summaries", eligible_arena_summary),
+        table(
+            "calibration_results",
+            "CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
         ),
-    },
-    RetentionTableSql {
-        name: "blind_evaluations",
-        count_sql: "SELECT COUNT(*) FROM blind_evaluations WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-        delete_sql: "DELETE FROM blind_evaluations WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-    },
-    RetentionTableSql {
-        name: "arena_summaries",
-        count_sql: "SELECT COUNT(*) FROM arena_summaries WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-        delete_sql: "DELETE FROM arena_summaries WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-    },
-    RetentionTableSql {
-        name: "calibration_results",
-        count_sql: "SELECT COUNT(*) FROM calibration_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-        delete_sql: "DELETE FROM calibration_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-    },
-    RetentionTableSql {
-        name: "tournament_results",
-        count_sql: "SELECT COUNT(*) FROM tournament_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-        delete_sql: "DELETE FROM tournament_results WHERE CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
-    },
-];
+        table(
+            "tournament_results",
+            "CAST(created_at AS INTEGER) < CAST(?1 AS INTEGER)",
+        ),
+    ]
+}
 
 const RETENTION_PROTECTED_TABLES: &[&str] = &[
     "packs",
@@ -3316,6 +3362,7 @@ const RETENTION_PROTECTED_TABLES: &[&str] = &[
     "model_removals",
     "external_generation_evidence",
     "artifact_records",
+    "roadmap_records",
 ];
 
 fn validate_retention_age(older_than_days: u32) -> Result<(), StorageError> {
@@ -3368,10 +3415,11 @@ fn preview_storage_retention_connection(
     cutoff_at: &str,
 ) -> Result<StorageRetentionPreview, StorageError> {
     let mut eligible_records = 0u32;
-    let mut tables = Vec::with_capacity(RETENTION_DELETE_TABLES.len());
-    for table in RETENTION_DELETE_TABLES {
+    let delete_tables = retention_delete_tables();
+    let mut tables = Vec::with_capacity(delete_tables.len());
+    for table in delete_tables {
         let count: i64 = connection
-            .query_row(table.count_sql, params![cutoff_at], |row| row.get(0))
+            .query_row(&table.count_sql, params![cutoff_at], |row| row.get(0))
             .map_err(|_| StorageError::DatabaseFailure)?;
         let count = u32::try_from(count).map_err(|_| StorageError::DatabaseFailure)?;
         eligible_records = eligible_records
@@ -6035,19 +6083,29 @@ mod tests {
 
         let preview = service
             .preview_storage_retention_at(30, "200")
-            .expect("retention previews both old run and attempt cascades");
-        assert_eq!(preview.eligible_records, 7);
-        service
+            .expect("retention previews immutable source references");
+        assert_eq!(preview.eligible_records, 0);
+        let retention = service
             .cleanup_storage_retention(&StorageRetentionRequest {
                 older_than_days: 30,
                 cutoff_at: "200".to_owned(),
-                expected_records: 7,
-                confirmation: "DELETE 7 LOCAL RECORDS".to_owned(),
+                expected_records: 0,
+                confirmation: "DELETE 0 LOCAL RECORDS".to_owned(),
             })
-            .expect("retention removes the source attempt and run");
+            .expect("retention preserves source records referenced by immutable history");
+        assert_eq!(retention.deleted_records, 0);
+        assert_eq!(
+            service.get_run(&source_run.run_id).unwrap(),
+            Some(source_run.clone())
+        );
+        assert!(service
+            .list_attempts(&source_run.run_id)
+            .unwrap()
+            .iter()
+            .any(|attempt| attempt.attempt_id == source_attempt.attempt_id));
         let (replay_after_retention, replay_after_retention_outcome) = service
             .save_roadmap_record(&request, "500")
-            .expect("immutable snapshot replay succeeds after source retention");
+            .expect("immutable snapshot replay succeeds with protected sources");
         assert_eq!(replay_after_retention, first);
         assert_eq!(replay_after_retention_outcome, SaveOutcome::AlreadyPresent);
         let _ = fs::remove_dir_all(root);
@@ -6227,6 +6285,132 @@ mod tests {
                 .unwrap(),
             1
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retention_preserves_attempts_and_results_referenced_by_immutable_reports() {
+        let root = temporary_root();
+        let service = StorageService::open(&root).expect("storage opens");
+        let connection =
+            Connection::open(service.layout().database_path()).expect("database opens");
+        connection
+            .execute(
+                "INSERT INTO runs (record_id, content_hash, document_json, created_at) VALUES
+                 ('report-run', 'report-run-hash', '{}', '100'),
+                 ('attempt-only-run', 'attempt-only-run-hash', '{}', '100'),
+                 ('plain-run', 'plain-run-hash', '{}', '100')",
+                [],
+            )
+            .expect("historical runs insert");
+        connection
+            .execute(
+                r#"INSERT INTO attempts (record_id, content_hash, document_json, created_at) VALUES
+                   ('report-attempt', 'report-attempt-hash', '{"runId":"report-run"}', '100'),
+                   ('attempt-only-attempt', 'attempt-only-attempt-hash', '{"runId":"attempt-only-run"}', '100'),
+                   ('plain-attempt', 'plain-attempt-hash', '{"runId":"plain-run"}', '100')"#,
+                [],
+            )
+            .expect("historical attempts insert");
+        connection
+            .execute(
+                "INSERT INTO result_records (result_id, attempt_id, content_hash, document_json, created_at) VALUES
+                 ('report-result', 'report-attempt', 'report-result-hash', '{}', '100'),
+                 ('attempt-only-result', 'attempt-only-attempt', 'attempt-only-result-hash', '{}', '100'),
+                 ('plain-result', 'plain-attempt', 'plain-result-hash', '{}', '100')",
+                [],
+            )
+            .expect("historical result references insert");
+        // A summary can reference only a run; preserving its child attempts
+        // must not depend on the optional summary attemptId being present.
+        connection
+            .execute(
+                r#"INSERT INTO arena_summaries (record_id, content_hash, document_json, created_at)
+                   VALUES ('saved-summary', 'saved-summary-hash',
+                           '{"evidence":[{"runId":"report-run","attemptId":null}]}', '100'),
+                          ('history-summary', 'history-summary-hash', '{}', '100'),
+                          ('plain-summary', 'plain-summary-hash', '{}', '100')"#,
+                [],
+            )
+            .expect("saved and expired summaries insert");
+        // An immutable derived record may identify the source attempt
+        // without repeating its run ID.
+        connection
+            .execute(
+                r#"INSERT INTO roadmap_records (record_id, kind, content_hash, document_json, created_at)
+                   VALUES ('saved-analysis', 'single_model_benchmark', 'saved-analysis-hash',
+                           '{"payload":{"attempt":{"attemptId":"attempt-only-attempt"}}}', '300'),
+                          ('saved-ratings', 'model_ratings', 'saved-ratings-hash',
+                           '{"sourcePopulation":[{"arenaId":"saved-summary","contentHash":"saved-summary-hash"}]}', '300'),
+                          ('saved-history', 'historical_regression', 'saved-history-hash',
+                           '{"sourceReferences":[{"sourceKind":"arena_summary","sourceId":"history-summary","contentHash":"history-summary-hash"}]}', '300')"#,
+                [],
+            )
+            .expect("saved source-linked analyses insert");
+
+        let preview = service
+            .preview_storage_retention_at(30, "200")
+            .expect("retention previews");
+        assert_eq!(
+            preview.eligible_records, 4,
+            "only unreferenced history may be deleted"
+        );
+        assert!(preview
+            .protected_tables
+            .contains(&"roadmap_records".to_owned()));
+        let result = service
+            .cleanup_storage_retention(&StorageRetentionRequest {
+                older_than_days: 30,
+                cutoff_at: preview.cutoff_at.clone(),
+                expected_records: preview.eligible_records,
+                confirmation: preview.confirmation.clone(),
+            })
+            .expect("retention cleans only unreferenced history");
+        assert_eq!(result.deleted_records, 4);
+        for table in ["runs", "attempts", "result_records"] {
+            assert_eq!(
+                connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get::<_, u32>(0)
+                    })
+                    .unwrap(),
+                2,
+                "{table} must retain both protected source records"
+            );
+        }
+        for (table, id_column, id) in [
+            ("runs", "record_id", "plain-run"),
+            ("attempts", "record_id", "plain-attempt"),
+            ("result_records", "result_id", "plain-result"),
+            ("arena_summaries", "record_id", "plain-summary"),
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        &format!("SELECT COUNT(*) FROM {table} WHERE {id_column} = ?1"),
+                        rusqlite::params![id],
+                        |row| row.get::<_, u32>(0),
+                    )
+                    .unwrap(),
+                0,
+                "{table} should remove unreferenced old {id}"
+            );
+        }
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM arena_summaries", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM roadmap_records", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            3
+        );
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 

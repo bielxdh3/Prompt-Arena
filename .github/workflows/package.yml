@@ -133,12 +133,56 @@ jobs:
           PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run verify:package -- --platform windows --smoke
 
+      - name: Capture Windows Installer failure context
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:PACKAGE_DIAGNOSTICS_DIR | Out-Null
+          $report = Join-Path $env:PACKAGE_DIAGNOSTICS_DIR 'windows-installer-context.txt'
+          "Captured at: $(Get-Date -Format o)" | Set-Content -LiteralPath $report
+          'Windows Installer service:' | Add-Content -LiteralPath $report
+          try {
+            Get-Service -Name msiserver -ErrorAction Stop | Format-List Name,Status,StartType | Out-String | Add-Content -LiteralPath $report
+          } catch {
+            "Service query failed: $_" | Add-Content -LiteralPath $report
+          }
+          'msiexec processes:' | Add-Content -LiteralPath $report
+          try {
+            Get-CimInstance Win32_Process -Filter "Name = 'msiexec.exe'" -ErrorAction Stop |
+              Select-Object ProcessId,ParentProcessId,CreationDate,ExecutablePath |
+              Format-List | Out-String | Add-Content -LiteralPath $report
+          } catch {
+            "Process query failed: $_" | Add-Content -LiteralPath $report
+          }
+          'Recent MsiInstaller application events:' | Add-Content -LiteralPath $report
+          try {
+            Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='MsiInstaller';StartTime=(Get-Date).AddMinutes(-25)} -MaxEvents 30 -ErrorAction Stop |
+              Select-Object TimeCreated,Id,LevelDisplayName,ProviderName |
+              Format-List | Out-String | Add-Content -LiteralPath $report
+          } catch {
+            "Event query failed or no events found: $_" | Add-Content -LiteralPath $report
+          }
+
       - name: Upload Windows MSI smoke diagnostics
         if: failure() && runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
         with:
           name: prompt-arena-msi-diagnostics-${{ steps.commit.outputs.sha }}
           path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failed Windows package candidates for reproduction
+        if: failure() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.ref == 'main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        with:
+          name: prompt-arena-windows-failed-smoke-${{ steps.commit.outputs.sha }}
+          path: |
+            package-artifacts/
+            checksums-sha256.txt
+            package-verification.txt
           if-no-files-found: ignore
           retention-days: 7
 

@@ -12,6 +12,26 @@ describe("model ratings", () => {
     expect(first.ratings.every((rating) => rating.uncertaintyMethod === "sample_count_heuristic")).toBe(true);
   });
 
+  it("orders equal match IDs deterministically regardless of imported record order", () => {
+    const outcomes = [
+      { matchId: "same-imported-id", competitorAId: "alpha", competitorBId: "beta", winnerId: "alpha" },
+      { matchId: "same-imported-id", competitorAId: "alpha", competitorBId: "gamma", winnerId: "gamma" },
+      { matchId: "later", competitorAId: "beta", competitorBId: "gamma", winnerId: "beta" },
+    ];
+    const options = { createdAt: "2026-09-12T00:00:00Z" };
+    expect(computeEloRatings(outcomes, options)).toEqual(computeEloRatings([...outcomes].reverse(), options));
+  });
+
+  it("ignores malformed imported identities and categories in both rating algorithms", () => {
+    const invalid = [
+      { matchId: "bad-identity", competitorAId: 42, competitorBId: "beta", winnerId: null },
+      { matchId: "bad-category", competitorAId: "alpha", competitorBId: "beta", winnerId: "alpha", category: 1 },
+      { matchId: "bad-name", competitorAId: "alpha", competitorBId: "beta", winnerId: "alpha", categoryName: true },
+    ] as never;
+    expect(computeEloRatings(invalid).ratings).toEqual([]);
+    expect(computeBradleyTerryRatings(invalid).ratings).toEqual([]);
+  });
+
   it("fits deterministic Bradley-Terry abilities with finite model-based standard errors", () => {
     const outcomes = [
       ...Array.from({ length: 12 }, (_, index) => ({ matchId: `a-b-${index}`, competitorAId: "a", competitorBId: "b", winnerId: "a" })),
@@ -28,6 +48,22 @@ describe("model ratings", () => {
     expect(result.ratings.every((rating) => Number.isFinite(rating.uncertainty) && rating.uncertainty > 0 && rating.comparisonGroupId === "global:component-1")).toBe(true);
     expect(result.ratings.every((rating) => rating.sourceClusterCount === undefined)).toBe(true);
     expect(result.ratings.every((rating) => rating.uncertaintyMethod === "laplace_standard_error")).toBe(true);
+  });
+
+  it("fits a larger connected Bradley-Terry population with finite covariance and reproducible results", () => {
+    const outcomes = Array.from({ length: 60 }, (_, index) => ({
+      matchId: `match-${index}`,
+      competitorAId: `model-${index}`,
+      competitorBId: `model-${index + 1}`,
+      winnerId: index % 3 === 0 ? `model-${index + 1}` : `model-${index}`,
+    }));
+    const options = { createdAt: "2026-09-12T00:00:00Z" };
+    const result = computeBradleyTerryRatings(outcomes, options);
+    const repeated = computeBradleyTerryRatings([...outcomes].reverse(), options);
+    expect(result).toEqual(repeated);
+    expect(result.ratings).toHaveLength(61);
+    expect(result.ratings.every((rating) => Number.isFinite(rating.rating) && Number.isFinite(rating.uncertainty) && rating.uncertainty > 0)).toBe(true);
+    expect(result.ratings.reduce((sum, rating) => sum + rating.sampleCount, 0)).toBe(outcomes.length * 2);
   });
 
   it("reports source-cluster counts separately from duplicated pair samples", () => {

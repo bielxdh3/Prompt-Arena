@@ -151,6 +151,15 @@ function asAttemptRecord(execution: PersistedExecution): AttemptRecord {
   return execution.attempt;
 }
 
+export function currentBenchmarkSelection(
+  selectedVersionId: string,
+  loadedVersion: BenchmarkVersion | null,
+  loadedDocument: ArenaDocument | null,
+): { version: BenchmarkVersion; document: ArenaDocument } | null {
+  if (!loadedVersion || !loadedDocument || loadedVersion.summary.versionId !== selectedVersionId) return null;
+  return { version: loadedVersion, document: loadedDocument };
+}
+
 export function RoadmapFeaturesView() {
   const [state, setState] = useState<SurfaceState>(() => isDesktopEnvironment() ? { status: "loading" } : { status: "preview" });
   const [revealedArenaIds, setRevealedArenaIds] = useState<Set<string>>(() => new Set());
@@ -209,8 +218,8 @@ export function RoadmapFeaturesView() {
         records,
         summaries,
       });
-      if (!versionId && versions[0]) setVersionId(versions[0].versionId);
-      if (!profileId && profiles[0]) setProfileId(profiles[0].profileRevisionId);
+      setVersionId((current) => versions.some((item) => item.versionId === current) ? current : versions[0]?.versionId ?? "");
+      setProfileId((current) => profiles.some((item) => item.profileRevisionId === current) ? current : profiles[0]?.profileRevisionId ?? "");
     } catch (error: unknown) {
       setState({ status: "error", message: error instanceof Error ? error.message : "The local single-model evidence is unavailable." });
     }
@@ -252,6 +261,8 @@ export function RoadmapFeaturesView() {
   useEffect(() => {
     if (!versionId || !isDesktopEnvironment()) return;
     let active = true;
+    setVersion(null);
+    setDocument(null);
     void readBenchmarkVersion(versionId)
       .then((value) => {
         if (!active) return;
@@ -275,8 +286,11 @@ export function RoadmapFeaturesView() {
     return () => { active = false; };
   }, [versionId]);
 
-  const taskChoices = document ? taskOptions(document) : [];
-  const caseChoices = document ? caseOptions(document, taskId) : [];
+  const selectedBenchmark = currentBenchmarkSelection(versionId, version, document);
+  const currentVersion = selectedBenchmark?.version ?? null;
+  const currentDocument = selectedBenchmark?.document ?? null;
+  const taskChoices = currentDocument ? taskOptions(currentDocument) : [];
+  const caseChoices = currentDocument ? caseOptions(currentDocument, taskId) : [];
 
   useEffect(() => {
     setTaskId((current) => taskChoices.some((option) => option.value === current) ? current : taskChoices[0]?.value ?? "");
@@ -314,9 +328,12 @@ export function RoadmapFeaturesView() {
     ? state.records.filter((record) => record.kind === "single_model_suite" && isSingleModelSuitePayload(record.payload)).map((record) => record.payload as unknown as SingleModelSuitePayload)
     : [], [state]);
   const performancePayload = singlePayloads.find((payload) => payload.runId === performanceRunId) ?? single ?? singlePayloads[0] ?? null;
+  const singleRunOrdinals = useMemo(() => new Map([...new Set(singlePayloads.map((payload) => payload.runId))]
+    .sort().map((runId, index) => [runId, index + 1] as const)), [singlePayloads]);
+  const singleRunLabel = (runId: string) => `${translate("Run")} ${formatLocaleNumber(singleRunOrdinals.get(runId) ?? 1)}`;
   const singleRunOptions = singlePayloads.map((payload) => ({
     value: payload.runId,
-    label: `${displayName(payload.profileRevision.model, "Model")} / ${numberedName("Run", payload.runId, singlePayloads.map((item) => item.runId))}`,
+    label: `${displayName(payload.profileRevision.model, "Model")} / ${singleRunLabel(payload.runId)}`,
   }));
   const revealedArenaSummaries = useMemo(() => state.status === "ready"
     ? state.summaries.filter((summary) => summary.blind === false || revealedArenaIds.has(summary.arenaId))
@@ -325,7 +342,7 @@ export function RoadmapFeaturesView() {
   const historicalRunOptions = [
     ...singlePayloads.map((payload) => ({
       value: encodeHistoricalSelection("single_model_benchmark", payload.runId),
-      label: `${displayName(payload.profileRevision.model, "Model")} / ${numberedName("Run", payload.runId, singlePayloads.map((item) => item.runId))}`,
+      label: `${displayName(payload.profileRevision.model, "Model")} / ${singleRunLabel(payload.runId)}`,
     })),
     ...comparableArenaSummaries.map((summary) => ({
       value: encodeHistoricalSelection("arena_summary", summary.arenaId),
@@ -427,11 +444,11 @@ export function RoadmapFeaturesView() {
   }
 
   async function generateRobustness() {
-    if (!version || !document || !profileId) {
+    if (!currentVersion || !currentDocument || !profileId) {
       setNotice(translate("Choose a benchmark and immutable model profile first."));
       return;
     }
-    const task = document.tasks.find((item) => item.taskId === taskId);
+    const task = currentDocument.tasks.find((item) => item.taskId === taskId);
     const sourceCase = task?.cases.find((item) => item.caseId === caseId);
     const profile = state.status === "ready" ? state.profiles.find((item) => item.profileRevisionId === profileId) : undefined;
     if (!task || !sourceCase || !profile) {
@@ -439,7 +456,7 @@ export function RoadmapFeaturesView() {
       return;
     }
     const sourcePrompt = [task.prompt.trim(), sourceCase.prompt?.trim() ?? null].filter(Boolean).join("\n\n");
-    const variants = generatePerturbations(sourcePrompt, sourceCase.expected, version.summary.versionId, 1, ["paraphrase", "instruction_reorder", "variable_rename", "formatting_variation", "concise_wording", "verbose_wording", "irrelevant_noise"] as PerturbationType[]);
+    const variants = generatePerturbations(sourcePrompt, sourceCase.expected, currentVersion.summary.versionId, 1, ["paraphrase", "instruction_reorder", "variable_rename", "formatting_variation", "concise_wording", "verbose_wording", "irrelevant_noise"] as PerturbationType[]);
     beginCancellableOperation();
     setBusy(true);
     setActiveOperation({ kind: "robustness_baseline" });
@@ -447,7 +464,7 @@ export function RoadmapFeaturesView() {
     setErrorDetail(null);
     try {
       const hardware = await readHardwareSnapshot().catch(() => null);
-      const basePlan = buildRunPlan({ runId: newId("robust-base"), version, taskId, caseId, profileRevision: profile, metadata: { mode: "robustness_arena", variant: "base", featureVersion: 1 } });
+      const basePlan = buildRunPlan({ runId: newId("robust-base"), version: currentVersion, taskId, caseId, profileRevision: profile, metadata: { mode: "robustness_arena", variant: "base", featureVersion: 1 } });
       let basePayload: SingleModelBenchmarkPayload | null = null;
       let baseRunId: string | undefined;
       let baseAttemptId: string | undefined;
@@ -466,7 +483,7 @@ export function RoadmapFeaturesView() {
           basePassed = passed && typeof passed === "object" && !Array.isArray(passed) && typeof (passed as Record<string, unknown>).passed === "boolean"
             ? (passed as Record<string, unknown>).passed as boolean
             : null;
-          basePayload = buildSingleModelBenchmarkPayload({ run: baseExecution.run, attempt: baseExecution.attempt, profile, execution: baseExecution, performance: performanceEvidenceFromExecution(baseExecution), benchmarkVersionId: version.summary.versionId, benchmarkContentHash: version.summary.contentHash, taskId, caseId, hardware });
+          basePayload = buildSingleModelBenchmarkPayload({ run: baseExecution.run, attempt: baseExecution.attempt, profile, execution: baseExecution, performance: performanceEvidenceFromExecution(baseExecution), benchmarkVersionId: currentVersion.summary.versionId, benchmarkContentHash: currentVersion.summary.contentHash, taskId, caseId, hardware });
           try {
             const savedSource = await saveRoadmapRecord(singleModelRecord(basePayload));
             baseSourceContentHash = savedSource.record.contentHash;
@@ -494,7 +511,7 @@ export function RoadmapFeaturesView() {
           const runId = newId("robust");
           const plan = buildRunPlan({
             runId,
-            version,
+            version: currentVersion,
             taskId,
             caseId,
             profileRevision: profile,
@@ -515,7 +532,7 @@ export function RoadmapFeaturesView() {
           const passed = objective && typeof objective === "object" && !Array.isArray(objective) && typeof (objective as Record<string, unknown>).passed === "boolean"
             ? (objective as Record<string, unknown>).passed as boolean
             : null;
-          const payload = buildSingleModelBenchmarkPayload({ run: execution.run, attempt: execution.attempt, profile, execution, performance: performanceEvidenceFromExecution(execution), benchmarkVersionId: version.summary.versionId, benchmarkContentHash: version.summary.contentHash, taskId, caseId, hardware });
+          const payload = buildSingleModelBenchmarkPayload({ run: execution.run, attempt: execution.attempt, profile, execution, performance: performanceEvidenceFromExecution(execution), benchmarkVersionId: currentVersion.summary.versionId, benchmarkContentHash: currentVersion.summary.contentHash, taskId, caseId, hardware });
           return { status, passed, runId: execution.run.runId, attemptId: execution.attempt.attemptId, value: payload };
         },
         async (_variant, payload) => {
@@ -934,15 +951,15 @@ export function RoadmapFeaturesView() {
   }
 
   async function saveSingle(execution: PersistedExecution, profile: ProfileRevision, selectedTaskId: string, selectedCaseId: string, hardware: HardwareSnapshot | null): Promise<SingleModelBenchmarkPayload> {
-    if (!version) throw new Error(translate("Select an immutable benchmark version first."));
+    if (!currentVersion) throw new Error(translate("Select an immutable benchmark version first."));
     const payload = buildSingleModelBenchmarkPayload({
       run: asRunRecord(execution),
       attempt: asAttemptRecord(execution),
       profile,
       execution,
       performance: performanceEvidenceFromExecution(execution),
-      benchmarkVersionId: version.summary.versionId,
-      benchmarkContentHash: version.summary.contentHash,
+      benchmarkVersionId: currentVersion.summary.versionId,
+      benchmarkContentHash: currentVersion.summary.contentHash,
       taskId: selectedTaskId,
       caseId: selectedCaseId,
       hardware,
@@ -955,7 +972,9 @@ export function RoadmapFeaturesView() {
   }
 
   async function runSingle() {
-    if (!version || !document || !profileId || !taskId || !caseId) {
+    if (!currentVersion || !currentDocument || !profileId || !taskId || !caseId
+      || !taskChoices.some((task) => task.value === taskId)
+      || !caseChoices.some((benchmarkCase) => benchmarkCase.value === caseId)) {
       setNotice(translate("Choose a benchmark, model, task, and case first."));
       return;
     }
@@ -973,7 +992,7 @@ export function RoadmapFeaturesView() {
       const hardware = await readHardwareSnapshot().catch(() => null);
       const plan = buildRunPlan({
         runId: newId("single"),
-        version,
+        version: currentVersion,
         taskId,
         caseId,
         profileRevision: profile,
@@ -995,7 +1014,7 @@ export function RoadmapFeaturesView() {
   }
 
   async function runSuite() {
-    if (!version || !document || !profileId) {
+    if (!currentVersion || !currentDocument || !profileId) {
       setNotice(translate("Choose a benchmark and immutable model profile first."));
       return;
     }
@@ -1004,7 +1023,7 @@ export function RoadmapFeaturesView() {
       setNotice(translate("The selected immutable profile is unavailable."));
       return;
     }
-    const challenges = document.tasks.flatMap((task) => task.cases.map((benchmarkCase) => ({ taskId: task.taskId, caseId: benchmarkCase.caseId })));
+    const challenges = currentDocument.tasks.flatMap((task) => task.cases.map((benchmarkCase) => ({ taskId: task.taskId, caseId: benchmarkCase.caseId })));
     if (challenges.length === 0) {
       setNotice(translate("The selected benchmark has no executable challenges."));
       return;
@@ -1026,7 +1045,7 @@ export function RoadmapFeaturesView() {
           setActiveOperation({ kind: "suite", completed: currentCaseIndex, total: challenges.length });
           const plan = buildRunPlan({
             runId: newId("suite-case"),
-            version,
+            version: currentVersion,
             taskId: challenge.taskId,
             caseId: challenge.caseId,
             profileRevision: profile,
@@ -1049,7 +1068,7 @@ export function RoadmapFeaturesView() {
         () => cancellationRef.current?.shouldContinue() ?? false);
       const suitePayload = buildSingleModelSuitePayload({
         suiteId,
-        benchmarkVersionId: version.summary.versionId,
+        benchmarkVersionId: currentVersion.summary.versionId,
         profileRevision: profile as unknown as Record<string, unknown>,
         cases: outcomes,
         startedAt,
@@ -1085,12 +1104,12 @@ export function RoadmapFeaturesView() {
       <section className="panel" aria-labelledby="single-model-heading">
         <div className="section-heading compact-heading"><div><p className="eyebrow">{translate("Benchmark")}</p><h3 id="single-model-heading">{translate("Single-model benchmark")}</h3></div></div>
         <div className="arena-selection-grid">
-          <FieldSelect id="insights-version" label={translate("Benchmark version")} value={versionId} options={versionOptions(state.versions)} onChange={setVersionId} />
-          <FieldSelect id="insights-profile" label={translate("Immutable model profile")} value={profileId} options={state.profiles.map((profile) => ({ value: profile.profileRevisionId, label: profileDisplayName(profile) }))} onChange={setProfileId} />
-          <FieldSelect id="insights-task" label={translate("Task")} value={taskId} options={taskChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setTaskId} />
-          <FieldSelect id="insights-case" label={translate("Case")} value={caseId} options={caseChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setCaseId} />
+          <FieldSelect id="insights-version" label={translate("Benchmark version")} value={versionId} options={versionOptions(state.versions)} onChange={setVersionId} disabled={busy} />
+          <FieldSelect id="insights-profile" label={translate("Immutable model profile")} value={profileId} options={state.profiles.map((profile) => ({ value: profile.profileRevisionId, label: profileDisplayName(profile) }))} onChange={setProfileId} disabled={busy} />
+          <FieldSelect id="insights-task" label={translate("Task")} value={taskId} options={taskChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setTaskId} disabled={busy || !currentDocument} />
+          <FieldSelect id="insights-case" label={translate("Case")} value={caseId} options={caseChoices.map((option) => ({ value: option.value, label: option.label }))} onChange={setCaseId} disabled={busy || !currentDocument || !taskChoices.some((task) => task.value === taskId)} />
         </div>
-        <div className="arena-actions"><button className="primary-button" type="button" onClick={() => void runSingle()} disabled={busy}>{activeOperation?.kind === "single" ? translate("Running…") : translate("Run single benchmark")}</button><button className="secondary-button" type="button" onClick={() => void runSuite()} disabled={busy}>{activeOperation?.kind === "suite" ? translate("Running…") : translate("Run full benchmark suite")}</button>{cancellableOperation && (activeOperation?.kind === "single" || activeOperation?.kind === "suite") && <button className="secondary-button" type="button" aria-label={translate("Cancel run")} onClick={() => void requestCancel()} disabled={cancelPending}>{cancelPending ? translate("Cancelling…") : translate("Cancel run")}</button>}</div>
+        <div className="arena-actions"><button className="primary-button" type="button" onClick={() => void runSingle()} disabled={busy || !currentDocument || !taskChoices.some((task) => task.value === taskId) || !caseChoices.some((benchmarkCase) => benchmarkCase.value === caseId)}>{activeOperation?.kind === "single" ? translate("Running…") : translate("Run single benchmark")}</button><button className="secondary-button" type="button" onClick={() => void runSuite()} disabled={busy || !currentDocument}>{activeOperation?.kind === "suite" ? translate("Running…") : translate("Run full benchmark suite")}</button>{cancellableOperation && (activeOperation?.kind === "single" || activeOperation?.kind === "suite") && <button className="secondary-button" type="button" aria-label={translate("Cancel run")} onClick={() => void requestCancel()} disabled={cancelPending}>{cancelPending ? translate("Cancelling…") : translate("Cancel run")}</button>}</div>
         {activeOperationLabel && activeOperation?.kind !== "robustness_baseline" && activeOperation?.kind !== "robustness_variants" && <p className="field-help" role="status" aria-live="polite" aria-atomic="true">{activeOperationLabel}</p>}
         {single && <EvidenceSummary payload={single} />}
       </section>
@@ -1164,7 +1183,7 @@ export function RoadmapFeaturesView() {
         <p className="field-help">{translate("Generate deterministic prompt perturbations, execute them with the same immutable model profile, and keep unavailable outcomes explicit.")}</p>
         <p className="field-help">{translate("Unverified app-calculated snapshot. The local store preserves it immutably but does not verify it against source evidence.")}</p>
         <p className="field-help">{translate("Robustness comparison exports include prompt variants and saved results. Review the file before sharing.")}</p>
-        <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !version || !document}>{activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants" ? translate("Running…") : translate("Run robustness variants")}</button>{cancellableOperation && (activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants") && <button className="secondary-button" type="button" aria-label={translate("Cancel run")} onClick={() => void requestCancel()} disabled={cancelPending}>{cancelPending ? translate("Cancelling…") : translate("Cancel run")}</button>}</div>
+        <div className="arena-actions"><button className="secondary-button" type="button" onClick={() => void generateRobustness()} disabled={busy || !currentDocument || !taskChoices.some((task) => task.value === taskId) || !caseChoices.some((benchmarkCase) => benchmarkCase.value === caseId)}>{activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants" ? translate("Running…") : translate("Run robustness variants")}</button>{cancellableOperation && (activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants") && <button className="secondary-button" type="button" aria-label={translate("Cancel run")} onClick={() => void requestCancel()} disabled={cancelPending}>{cancelPending ? translate("Cancelling…") : translate("Cancel run")}</button>}</div>
         {(activeOperation?.kind === "robustness_baseline" || activeOperation?.kind === "robustness_variants") && activeOperationLabel && <p className="field-help" role="status" aria-live="polite" aria-atomic="true">{activeOperationLabel}</p>}
         <p className="field-help">{translate("Deterministic prompt transformations do not prove semantic equivalence. The original benchmark verifier and expected-answer contract remain authoritative.")}</p>
         {robustnessHistory.length === 0 ? <StateMessage title={translate("No saved robustness results yet")} description={translate("Run robustness variants to save an immutable result that can be reopened here.")} /> : <>
@@ -1354,8 +1373,8 @@ function isRepeatedHistoricalRegression(value: Record<string, unknown>): value i
     });
 }
 
-function FieldSelect({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
-  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder={translate("Select…")} onChange={onChange} />;
+function FieldSelect({ id, label, value, options, onChange, disabled = false }: { id: string; label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void; disabled?: boolean }) {
+  return <AccessibleListbox id={id} label={label} value={value} options={options} placeholder={translate("Select…")} disabled={disabled} onChange={onChange} />;
 }
 
 function MultiRunSelect({ id, label, selectedValues, options, onChange }: { id: string; label: string; selectedValues: string[]; options: Array<{ value: string; label: string }>; onChange: (values: string[]) => void }) {

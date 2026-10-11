@@ -276,6 +276,7 @@ impl OllamaProvider {
 
         let mut body = response.body;
         let mut streamed_bytes = 0_usize;
+        let mut confirmed_success = false;
         while let Some(line) = read_line_with_cancel(&mut body, cancellation, read_deadline)? {
             if line.trim().is_empty() {
                 continue;
@@ -290,9 +291,16 @@ impl OllamaProvider {
                 serde_json::from_str(&line).map_err(|error| RuntimeError::Protocol {
                     message: format!("runtime returned malformed pull JSON: {error}"),
                 })?;
+            confirmed_success = event.get("status").and_then(Value::as_str) == Some("success");
             on_event(&event)?;
         }
-        Ok(())
+        if confirmed_success {
+            Ok(())
+        } else {
+            Err(RuntimeError::Protocol {
+                message: "runtime pull stream ended without a success confirmation".to_owned(),
+            })
+        }
     }
 
     pub(crate) fn list_running_models(&self) -> Result<Vec<ModelInfo>, RuntimeError> {
@@ -2063,6 +2071,39 @@ mod tests {
             server.provider().health(),
             Err(RuntimeError::Protocol { .. })
         ));
+    }
+
+    #[test]
+    fn pull_requires_a_terminal_success_event() {
+        let server = MockServer::start(vec![
+            MockReply::Chunked(
+                200,
+                vec![json!({"status": "pulling manifest"}).to_string()],
+                None,
+            ),
+            MockReply::Chunked(
+                200,
+                vec![
+                    json!({"status": "pulling manifest"}).to_string(),
+                    json!({"status": "success"}).to_string(),
+                ],
+                None,
+            ),
+        ]);
+        let provider = server.provider();
+        assert!(matches!(
+            provider.pull_model("model", &CancellationToken::new(), |_| Ok(())),
+            Err(RuntimeError::Protocol { message }) if message.contains("success confirmation")
+        ));
+
+        let mut statuses = Vec::new();
+        provider
+            .pull_model("model", &CancellationToken::new(), |event| {
+                statuses.push(event["status"].as_str().unwrap().to_owned());
+                Ok(())
+            })
+            .expect("a pull ending in a success event must be accepted");
+        assert_eq!(statuses, ["pulling manifest", "success"]);
     }
 
     #[test]

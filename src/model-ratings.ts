@@ -70,11 +70,18 @@ export function computeEloRatings(outcomes: readonly RatingOutcome[], options: {
   const categoryOverride = Object.prototype.hasOwnProperty.call(options, "category");
   const ordered = [...outcomes].filter((o) => o.valid !== false
     && typeof o.matchId === "string" && o.matchId.trim()
-    && o.competitorAId
-    && o.competitorBId
+    && typeof o.competitorAId === "string" && o.competitorAId.trim()
+    && typeof o.competitorBId === "string" && o.competitorBId.trim()
     && o.competitorAId !== o.competitorBId
+    && (o.category == null || typeof o.category === "string")
+    && (o.categoryName == null || typeof o.categoryName === "string")
     && (o.winnerId === null || o.winnerId === o.competitorAId || o.winnerId === o.competitorBId))
-    .sort((a, b) => a.matchId.localeCompare(b.matchId));
+    .sort((a, b) => a.matchId.localeCompare(b.matchId)
+      || a.competitorAId.localeCompare(b.competitorAId)
+      || a.competitorBId.localeCompare(b.competitorBId)
+      || (a.winnerId ?? "").localeCompare(b.winnerId ?? "")
+      || (a.category ?? "").localeCompare(b.category ?? "")
+      || (a.categoryName ?? "").localeCompare(b.categoryName ?? ""));
   for (const outcome of ordered) {
     const category = categoryOverride ? options.category ?? null : outcome.category ?? null;
     const categoryName = category === null ? null : outcome.categoryName ?? category;
@@ -160,14 +167,26 @@ function solveLinearSystem(matrix: number[][], vector: number[]): number[] | nul
 
 function invertMatrix(matrix: number[][]): number[][] | null {
   const size = matrix.length;
-  const columns: number[][] = [];
+  // Eliminate [A | I] once. Solving A*x=e_i independently for each column
+  // would repeat cubic elimination N times, making covariance O(N^4).
+  const augmented = matrix.map((row, index) => [...row, ...Array.from({ length: size }, (_, column) => Number(index === column))]);
   for (let column = 0; column < size; column += 1) {
-    const unit = Array.from({ length: size }, (_, row) => row === column ? 1 : 0);
-    const solution = solveLinearSystem(matrix, unit);
-    if (!solution) return null;
-    columns.push(solution);
+    let pivotRow = column;
+    for (let row = column + 1; row < size; row += 1) {
+      if (Math.abs(augmented[row][column]) > Math.abs(augmented[pivotRow][column])) pivotRow = row;
+    }
+    const pivot = augmented[pivotRow][column];
+    if (!Number.isFinite(pivot) || Math.abs(pivot) < 1e-14) return null;
+    [augmented[column], augmented[pivotRow]] = [augmented[pivotRow], augmented[column]];
+    for (let cell = column; cell < size * 2; cell += 1) augmented[column][cell] /= pivot;
+    for (let row = 0; row < size; row += 1) {
+      if (row === column) continue;
+      const factor = augmented[row][column];
+      for (let cell = column; cell < size * 2; cell += 1) augmented[row][cell] -= factor * augmented[column][cell];
+    }
   }
-  return Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, column) => columns[column][row]));
+  const inverse = augmented.map((row) => row.slice(size));
+  return inverse.every((row) => row.every(Number.isFinite)) ? inverse : null;
 }
 
 function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutcome[]): { theta: number[]; standardErrors: number[]; uncertaintyMethod: BradleyTerryUncertaintyMethod; sourceClusterCount?: number } | null {
@@ -193,13 +212,21 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
       const residual = observation.scoreA - probabilityA;
       const variance = probabilityA * (1 - probabilityA);
       logPosterior += observation.scoreA * logLogistic(difference) + (1 - observation.scoreA) * logLogistic(-difference);
-      for (let row = 0; row < parameterCount; row += 1) {
-        const xRow = (observation.a === row + 1 ? 1 : 0) - (observation.b === row + 1 ? 1 : 0);
-        gradient[row] += xRow * residual;
-        for (let column = 0; column < parameterCount; column += 1) {
-          const xColumn = (observation.a === column + 1 ? 1 : 0) - (observation.b === column + 1 ? 1 : 0);
-          hessian[row][column] += variance * xRow * xColumn;
-        }
+      // Each pair touches at most two coordinates; updating the full dense
+      // Hessian for every observation needlessly costs O(matches * N^2).
+      const a = observation.a - 1;
+      const b = observation.b - 1;
+      if (a >= 0) {
+        gradient[a] += residual;
+        hessian[a][a] += variance;
+      }
+      if (b >= 0) {
+        gradient[b] -= residual;
+        hessian[b][b] += variance;
+      }
+      if (a >= 0 && b >= 0) {
+        hessian[a][b] -= variance;
+        hessian[b][a] -= variance;
       }
     }
     for (let row = 0; row < parameterCount; row += 1) {
@@ -257,19 +284,18 @@ function fitBradleyTerryComponent(competitorIds: string[], outcomes: RatingOutco
         const score = clusterScores.get(observation.clusterId!)!;
         const probabilityA = logistic(fitted.theta[observation.a] - fitted.theta[observation.b]);
         const residual = observation.scoreA - probabilityA;
-        for (let row = 0; row < parameterCount; row += 1) {
-          const xRow = (observation.a === row + 1 ? 1 : 0) - (observation.b === row + 1 ? 1 : 0);
-          score[row] += xRow * residual;
-        }
+        if (observation.a > 0) score[observation.a - 1] += residual;
+        if (observation.b > 0) score[observation.b - 1] -= residual;
       }
       const meat = Array.from({ length: parameterCount }, () => Array(parameterCount).fill(0) as number[]);
       for (const score of clusterScores.values()) for (let row = 0; row < parameterCount; row += 1) for (let column = 0; column < parameterCount; column += 1) meat[row][column] += score[row] * score[column];
       const correction = clusterIds.length / (clusterIds.length - 1);
-      const robustCovariance = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) => {
-        let value = 0;
-        for (let left = 0; left < parameterCount; left += 1) for (let right = 0; right < parameterCount; right += 1) value += covariance[row][left] * meat[left][right] * covariance[right][column];
-        return correction * value;
-      }));
+      // (covariance * meat) * covariance avoids redoing both inner sums for
+      // every output cell, reducing robust uncertainty from O(N^4) to O(N^3).
+      const leftProduct = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) =>
+        covariance[row].reduce((sum, value, index) => sum + value * meat[index][column], 0)));
+      const robustCovariance = Array.from({ length: parameterCount }, (_, row) => Array.from({ length: parameterCount }, (_, column) =>
+        correction * leftProduct[row].reduce((sum, value, index) => sum + value * covariance[index][column], 0)));
       standardErrors = standardErrorsFromCovariance(robustCovariance);
       uncertaintyMethod = "cluster_robust_standard_error_v1";
     }
@@ -284,7 +310,11 @@ export function computeBradleyTerryRatings(outcomes: readonly RatingOutcome[], o
   const categoryOverride = Object.prototype.hasOwnProperty.call(options, "category");
   const ordered = [...outcomes].filter((outcome) => outcome.valid !== false
     && typeof outcome.matchId === "string" && outcome.matchId.trim()
-    && outcome.competitorAId && outcome.competitorBId && outcome.competitorAId !== outcome.competitorBId
+    && typeof outcome.competitorAId === "string" && outcome.competitorAId.trim()
+    && typeof outcome.competitorBId === "string" && outcome.competitorBId.trim()
+    && outcome.competitorAId !== outcome.competitorBId
+    && (outcome.category == null || typeof outcome.category === "string")
+    && (outcome.categoryName == null || typeof outcome.categoryName === "string")
     && (outcome.winnerId === null || outcome.winnerId === outcome.competitorAId || outcome.winnerId === outcome.competitorBId))
     .sort((left, right) => left.matchId.localeCompare(right.matchId) || left.competitorAId.localeCompare(right.competitorAId) || left.competitorBId.localeCompare(right.competitorBId));
   const matchesByCategory = new Map<string, { category: string | null; categoryName: string | null; outcomes: RatingOutcome[] }>();

@@ -309,6 +309,8 @@ const PT_BR_MESSAGES_BASE = {
   "Loading your workspace": "Carregando seu espaço de trabalho",
   "Loading local benchmarks": "Carregando benchmarks locais",
   "Loading Arena records": "Carregando registros da Arena",
+  "Loading Advanced Arena…": "Carregando Arena Avançada…",
+  "Loading Insights…": "Carregando análises…",
   "Loading local models": "Carregando modelos locais",
   "No saved Arena summaries": "Nenhum resumo da Arena salvo",
   "No benchmark records": "Nenhum registro de benchmark",
@@ -337,6 +339,9 @@ const PT_BR_MESSAGES_BASE = {
   "Blind execution labels and metrics": "Rótulos e métricas da execução às cegas",
   "Live execution monitor": "Monitor de execução ao vivo",
   "Arena is running": "A Arena está executando",
+  "Arena running. Per-sample progress is hidden until reveal.": "A Arena está executando. O progresso por amostra fica oculto até a revelação.",
+  "In progress": "Em andamento",
+  "Hidden until reveal": "Oculto até a revelação",
   "Saving measured evidence": "Salvando evidências medidas",
   "Blind results locked until reveal": "Resultados cegos bloqueados até a revelação",
   "Arena state": "Estado da Arena",
@@ -1903,4 +1908,3 @@ export function useI18n(): I18nContextValue {
   if (!context) throw new Error("useI18n must be used inside I18nProvider.");
   return context;
 }
-

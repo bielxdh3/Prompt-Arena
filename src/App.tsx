@@ -3,7 +3,7 @@ import { TechnicalDetails } from "./technical-details";
 import { HumanError, FormFeedback } from "./human-error";
 import { containsMachineIdentity, displayName, isMachineIdentity, numberedName, profileDisplayName, runtimeDisplayName } from "./display-names";
 import { arenaSummaryIdentityRevealed } from "./arena-summary-visibility";
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   configureExternalProvider,
   executeExternalGeneration,
@@ -241,8 +241,6 @@ import {
   modelOperationMessage,
 } from "./model-library-roadmap";
 import { FONT_OPTIONS } from "./font-options";
-import { AdvancedArenaView } from "./advanced-arena-view";
-import { RoadmapFeaturesView } from "./roadmap-features-view";
 import { AccessibleListbox } from "./accessible-listbox";
 import {
   formatLocaleDate,
@@ -252,6 +250,9 @@ import {
   translate,
   useI18n,
 } from "./i18n";
+
+const AdvancedArenaView = lazy(() => import("./advanced-arena-view").then(({ AdvancedArenaView }) => ({ default: AdvancedArenaView })));
+const RoadmapFeaturesView = lazy(() => import("./roadmap-features-view").then(({ RoadmapFeaturesView }) => ({ default: RoadmapFeaturesView })));
 
 type ViewId = "overview" | "arena" | "advanced-arena" | "insights" | "benchmarks" | "models" | "runs" | "settings";
 type ConnectionState =
@@ -457,8 +458,8 @@ function AppShell() {
           <div key={activeView} className="page-transition">
             {activeView === "overview" && <Overview connection={connection} onNavigate={setActiveView} />}
             {activeView === "arena" && <ArenaView onOpenRuns={() => setActiveView("runs")} />}
-            {activeView === "advanced-arena" && <AdvancedArenaView />}
-            {activeView === "insights" && <RoadmapFeaturesView />}
+            {activeView === "advanced-arena" && <Suspense fallback={<section className="panel" role="status">{translate("Loading Advanced Arena…")}</section>}><AdvancedArenaView /></Suspense>}
+            {activeView === "insights" && <Suspense fallback={<section className="panel" role="status">{translate("Loading Insights…")}</section>}><RoadmapFeaturesView /></Suspense>}
             {activeView === "benchmarks" && <BenchmarksView />}
             {activeView === "models" && <ModelsView />}
             {activeView === "runs" && <RunsView onNavigate={setActiveView} />}
@@ -3000,7 +3001,7 @@ function ArenaView({ onOpenRuns }: { onOpenRuns: () => void }) {
   );
 }
 
-function ArenaExecutionMonitor({
+export function ArenaExecutionMonitor({
   telemetry,
   blind,
   saving,
@@ -3020,14 +3021,14 @@ function ArenaExecutionMonitor({
   const lastError = visibleArenaTelemetryError(telemetry.lastError, blind);
   return (
     <div className="arena-execution-monitor">
-      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{formatMessage("{completed} / {total} samples", { completed: telemetry.completed, total: telemetry.total })}</p>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{blind ? translate("Arena running. Per-sample progress is hidden until reveal.") : formatMessage("{completed} / {total} samples", { completed: telemetry.completed, total: telemetry.total })}</p>
       <div className="section-heading compact-heading">
         <div><p className="eyebrow">{translate("Live execution monitor")}</p><h4>{translate(saving ? "Saving measured evidence" : "Arena is running")}</h4></div>
-        <span className="run-status run-status-neutral">{telemetry.completed}/{telemetry.total}</span>
+        <span className="run-status run-status-neutral">{blind ? translate("In progress") : `${telemetry.completed}/${telemetry.total}`}</span>
       </div>
       <div className="arena-live-facts">
         <BoundaryRow label="Arena state" value={saving ? "saving" : telemetry.state} />
-        <BoundaryRow label="Progress" value={formatMessage("{completed} / {total} samples", { completed: telemetry.completed, total: telemetry.total })} />
+        <BoundaryRow label="Progress" value={blind ? translate("Hidden until reveal") : formatMessage("{completed} / {total} samples", { completed: telemetry.completed, total: telemetry.total })} />
         <BoundaryRow label="Arena wall time" value={blind ? "Hidden during blind execution" : formatArenaMs(telemetry.wallElapsedMs)} />
         <BoundaryRow label="ETA" value={blind ? "Hidden during blind execution" : telemetry.etaMs === null ? "Unavailable · needs 2 measured samples" : `~${formatArenaMs(telemetry.etaMs)}`} />
       </div>
@@ -3058,7 +3059,7 @@ function ArenaExecutionMonitor({
         })}
       </div>}
       {blind && <p className="field-help">{translate("Individual competitor progress, order, and metrics are hidden until results are revealed.")}</p>}
-      {lastError && <p className="field-help" role="alert"> {translate("Failure recorded:")} {translate(lastError)}</p>}
+      {!blind && lastError && <p className="field-help" role="alert"> {translate("Failure recorded:")} {translate(lastError)}</p>}
       {telemetry.state === "cancelled" && <p className="field-help" role="status">{translate("Cancellation recorded. Queued samples were skipped; completed evidence was retained.")}</p>}
       {telemetry.state === "failed" && <p className="field-help" role="alert">{translate("One or more samples failed. Other sequential competitors continued where possible.")}</p>}
       {cancelNotice && <p className="field-help" role="status">{cancelNotice}</p>}
@@ -3296,6 +3297,12 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
   const [attemptsState, setAttemptsState] = useState<AttemptsState>({ status: "idle" });
   const [responsesState, setResponsesState] = useState<AttemptResponsesState>({ status: "idle" });
   const [blindEvaluationStatus, setBlindEvaluationStatus] = useState<BlindEvaluationSurfaceStatus>("loading");
+  const runOrdinals = useMemo(() => {
+    if (state.status !== "ready") return new Map<string, number>();
+    return new Map([...new Set(state.runs.map((run) => run.runId))]
+      .sort().map((runId, index) => [runId, index + 1] as const));
+  }, [state]);
+  const runLabel = (runId: string) => `${translate("Run")} ${formatLocaleNumber(runOrdinals.get(runId) ?? 1)}`;
 
   useEffect(() => {
     let current = true;
@@ -3389,7 +3396,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
   const filteredRuns = state.status === "ready"
     ? state.runs.filter((run) => {
       const query = historyQuery.trim().toLowerCase();
-      return !query || [numberedName("Run", run.runId, state.runs.map((item) => item.runId)), state.versions.find((version) => version.versionId === run.benchmarkVersionId)?.displayName ?? "", attemptStatusLabel(run.status), run.runId, run.benchmarkVersionId, run.status, ...run.profileRevisionIds]
+      return !query || [runLabel(run.runId), state.versions.find((version) => version.versionId === run.benchmarkVersionId)?.displayName ?? "", attemptStatusLabel(run.status), run.runId, run.benchmarkVersionId, run.status, ...run.profileRevisionIds]
         .some((value) => value.toLowerCase().includes(query));
     })
     : [];
@@ -3461,7 +3468,7 @@ function RunsView({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
                 >
                   <div>
                     <p className="eyebrow">{displayName(state.versions.find((version) => version.versionId === run.benchmarkVersionId)?.displayName, "Benchmark")}</p>
-                    <h3>{numberedName("Run", run.runId, state.runs.map((item) => item.runId))}</h3>
+                    <h3>{runLabel(run.runId)}</h3>
                     <p className="run-meta">
                       {formatLocaleNumber(run.attemptIds.length)} {translate("Attempts")} / {formatLocaleNumber(run.profileRevisionIds.length)} {translate("Models")} / {formatDisplayTimestamp(run.startedAt)}
                     </p>
