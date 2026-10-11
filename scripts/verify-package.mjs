@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,6 +25,9 @@ const UNINSTALL_POLL_INTERVAL_MS = 100;
 const MSI_TIMEOUT_MS = 10 * 60_000;
 const MSI_DIAGNOSTIC_POLL_MS = 15_000;
 const MSI_LOG_TAIL_BYTES = 96 * 1024;
+const MSI_PREFLIGHT_TIMEOUT_MS = 20_000;
+const MSI_PROCESS_PROBE_INTERVAL_MS = 30_000;
+const MSI_PROCESS_PROBE_TIMEOUT_MS = 8_000;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
   const configPath = path.join(repositoryRoot, "src-tauri", "tauri.conf.json");
@@ -168,6 +171,75 @@ export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = fal
   throw new Error(`MSI ${action} failed with msiexec exit code ${exitCode}`);
 }
 
+export function buildMsiexecPreflightArguments(missingMsiPath, logPath) {
+  // Intentionally non-existent MSI: tests launch/CLI error handling without
+  // installing software or depending on a previously installed MSI product.
+  return ["/i", missingMsiPath, "/qn", "/norestart", "/L*V!", logPath];
+}
+
+export function verifyMsiexecPreflightExitCode(exitCode) {
+  if (exitCode !== 1619 && exitCode !== 1620) {
+    throw new Error(`msiexec preflight failed to reject a missing MSI normally (exit ${exitCode}); installer smoke is unsafe to interpret`);
+  }
+}
+
+export function verifyMsiexecPreflightLog(logPath) {
+  const status = summarizeMsiLogTail(logPath);
+  if (!status.exists || status.size === 0) {
+    throw new Error("msiexec preflight returned, but Windows Installer did not write the requested verbose log");
+  }
+  return status.size;
+}
+
+export async function msiexecPreflight(smokeRoot, diagnosticDirectory, { command = "msiexec.exe", timeoutMs = MSI_PREFLIGHT_TIMEOUT_MS } = {}) {
+  const missingMsi = path.join(smokeRoot, "definitely-missing-msiexec-preflight.msi");
+  if (fs.existsSync(missingMsi)) throw new Error("MSI preflight sentinel must not exist");
+  const preflightLog = path.join(diagnosticDirectory, "msi-preflight.log");
+  const code = await runMsiexec(buildMsiexecPreflightArguments(missingMsi, preflightLog), "preflight", preflightLog, {
+    command, timeoutMs,
+    diagnosticPath: path.join(diagnosticDirectory, "msi-preflight-status.txt"),
+    processDiagnosticPath: path.join(diagnosticDirectory, "msi-preflight-processes.txt"),
+  });
+  verifyMsiexecPreflightExitCode(code);
+  verifyMsiexecPreflightLog(preflightLog);
+  return code;
+}
+
+// Only fixed process/service names, numeric process IDs and booleans/status
+// are collected. No command lines, executable paths, user names, MSI properties
+// or verbose installer logs are persisted in CI diagnostics.
+const MSI_PROCESS_PROBE_PS = `
+$ErrorActionPreference = 'SilentlyContinue'
+$service = Get-Service -Name 'msiserver'
+if ($service) { Write-Output "service=$($service.Status)" }
+$names = @('msiexec.exe', 'consent.exe', 'msedgewebview2.exe', 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe')
+$processes = @(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe' OR Name='consent.exe' OR Name='msedgewebview2.exe' OR Name='MicrosoftEdgeWebView2RuntimeInstallerX64.exe'")
+foreach ($name in $names) {
+  $matching = @($processes | Where-Object { $_.Name -ieq $name })
+  Write-Output "$name=$($matching.Count)"
+  foreach ($process in $matching | Select-Object -First 5) {
+    Write-Output "pid=$($process.ProcessId) parent=$($process.ParentProcessId) name=$($process.Name)"
+  }
+}
+`;
+
+export function sanitizeMsiexecProcessEvidence(output) {
+  return String(output).split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => /^(?:service=(?:Running|Stopped|StartPending|StopPending|Paused)|(?:msiexec\.exe|consent\.exe|msedgewebview2\.exe|MicrosoftEdgeWebView2RuntimeInstallerX64\.exe)=\d{1,4}|pid=\d{1,10} parent=\d{1,10} name=(?:msiexec\.exe|consent\.exe|msedgewebview2\.exe|MicrosoftEdgeWebView2RuntimeInstallerX64\.exe))$/iu.test(line))
+    .slice(0, 32);
+}
+
+function probeMsiexecProcessState() {
+  if (process.platform !== "win32") return Promise.resolve(["probe unavailable: non-Windows host"]);
+  return new Promise((resolve) => {
+    const command = Buffer.from(MSI_PROCESS_PROBE_PS, "utf16le").toString("base64");
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", command], {
+      windowsHide: true, timeout: MSI_PROCESS_PROBE_TIMEOUT_MS, maxBuffer: 8192,
+    }, (error, stdout) => resolve(error ? ["probe unavailable"] : sanitizeMsiexecProcessEvidence(stdout)));
+  });
+}
+
 // Only action identities and numeric return codes are extracted from MSI logs.
 // Never upload raw MSI verbose logs: they may contain MSI properties/secrets.
 export function summarizeMsiLogTail(logPath) {
@@ -212,6 +284,8 @@ export function runMsiexec(args, action, logPath, {
   timeoutMs = MSI_TIMEOUT_MS,
   pollMs = MSI_DIAGNOSTIC_POLL_MS,
   diagnosticPath,
+  processDiagnosticPath,
+  processProbe = probeMsiexecProcessState,
 } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(pollMs) || pollMs <= 0) {
     throw new Error("invalid MSI watchdog settings");
@@ -231,9 +305,26 @@ export function runMsiexec(args, action, logPath, {
     let timedOut = false;
     let timer;
     let interval;
+    let lastProbeAt = -MSI_PROCESS_PROBE_INTERVAL_MS;
+    let probePending = false;
+    const processSnapshots = [];
+    const captureProcesses = () => {
+      if (!processDiagnosticPath || probePending || settled || Date.now() - lastProbeAt < MSI_PROCESS_PROBE_INTERVAL_MS) return;
+      lastProbeAt = Date.now();
+      probePending = true;
+      Promise.resolve().then(() => processProbe()).then((evidence) => {
+        if (!Array.isArray(evidence)) return;
+        const snapshotLines = sanitizeMsiexecProcessEvidence(evidence.join("\n"));
+        processSnapshots.push(`Elapsed seconds: ${Math.floor((Date.now() - started) / 1000)}`, ...snapshotLines);
+        if (processSnapshots.length > 128) processSnapshots.splice(0, processSnapshots.length - 128);
+        writeRegularFileSync(processDiagnosticPath, `${processSnapshots.join("\n")}\n`);
+      }).catch(() => { /* Installer itself must determine smoke success. */ })
+        .finally(() => { probePending = false; });
+    };
     const snapshot = (state, extra = "") => {
       try { recordMsiDiagnostic(diagnosticPath, action, state, started, child.pid, logPath, extra); }
       catch (error) { console.error(`MSI diagnostics unavailable: ${error.message}`); }
+      if (state === "started" || state === "running") captureProcesses();
     };
     const settle = (error, code) => {
       if (settled) return;
@@ -290,10 +381,17 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, diagnosticDirect
   let installTimedOut = false;
   let smokeError;
 
+  // Test the Windows Installer launcher BEFORE executing a valid MSI. If the
+  // runner cannot reject an impossible package promptly, that is a host/CLI
+  // issue rather than evidence that WebView2 or the actual payload hung.
+  const preflightCode = await msiexecPreflight(smokeRoot, diagnosticDirectory);
+  lines.push(`Windows Installer preflight: missing package rejected (exit ${preflightCode}).`);
+
   try {
     installAttempted = true;
     const installCode = await runMsiexec(buildMsiexecArguments("install", installer, installDirectory, installLogPath), "install", installLogPath, {
       diagnosticPath: path.join(diagnosticDirectory, "msi-install-status.txt"),
+      processDiagnosticPath: path.join(diagnosticDirectory, "msi-install-processes.txt"),
     });
     const installResult = checkMsiexecExitCode(installCode, "install");
     if (installResult.rebootRequired) throw new Error("MSI installation requested a reboot; this clean-install smoke cannot validate a pre-reboot application launch");
@@ -319,6 +417,7 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, diagnosticDirect
       try {
         const uninstallCode = await runMsiexec(buildMsiexecArguments("uninstall", installer, undefined, uninstallLogPath), "uninstall", uninstallLogPath, {
           diagnosticPath: path.join(diagnosticDirectory, "msi-uninstall-status.txt"),
+          processDiagnosticPath: path.join(diagnosticDirectory, "msi-uninstall-processes.txt"),
         });
         const uninstallResult = checkMsiexecExitCode(uninstallCode, "uninstall", { allowNotInstalled: true });
         if (uninstallResult.rebootRequired) throw new Error("MSI uninstall requested a reboot; clean teardown was not verified");
@@ -497,6 +596,10 @@ function parseCliArgs(argv) {
       options.smoke = true;
       continue;
     }
+    if (argument === "--msiexec-preflight-only") {
+      options.msiexecpreflightonly = true;
+      continue;
+    }
     if (!["--platform", "--artifact-directory", "--manifest-path", "--evidence-file"].includes(argument)) {
       throw new Error(`unknown package verification option: ${argument}`);
     }
@@ -517,24 +620,37 @@ if (isMainModule()) {
   let evidencePath = path.resolve(REPOSITORY_ROOT, "package-verification.txt");
   try {
     const options = parseCliArgs(process.argv.slice(2));
-    const repositoryRoot = REPOSITORY_ROOT;
-    const metadata = readPackageMetadata(repositoryRoot);
-    const platform = normalizePlatform(options.platform ?? hostPackagingPlatform());
-    const artifactDirectory = path.resolve(repositoryRoot, options.artifactdirectory ?? "package-artifacts");
-    const manifestPath = path.resolve(repositoryRoot, options.manifestpath ?? CHECKSUM_MANIFEST_NAME);
-    evidencePath = path.resolve(repositoryRoot, options.evidencefile ?? "package-verification.txt");
-    const result = verifyPackageArtifacts({ platform, version: metadata.version, artifactDirectory, manifestPath });
-    lines.push(`Checksum manifest: passed (${result.entries.length} artifact(s)).`);
-    if (result.optionalMissing.length > 0) lines.push(`Optional artifacts unavailable: ${result.optionalMissing.join(", ")}.`);
-    if (options.smoke) {
-      if (platform === "windows") await windowsSmoke(artifactDirectory, metadata, lines);
-      else await linuxSmoke(artifactDirectory, metadata, lines);
+    if (options.msiexecpreflightonly) {
+      if (process.platform !== "win32") throw new Error("Windows Installer preflight requires a Windows host");
+      if (options.smoke || options.platform || options.artifactdirectory || options.manifestpath || options.evidencefile) {
+        throw new Error("Windows Installer preflight must run without package verification options");
+      }
+      const smokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-arena-msiexec-preflight-"));
+      const diagnosticDirectory = process.env.PACKAGE_DIAGNOSTICS_DIR?.trim()
+        ? path.resolve(process.env.PACKAGE_DIAGNOSTICS_DIR.trim()) : path.join(smokeRoot, "diagnostics");
+      fs.mkdirSync(diagnosticDirectory, { recursive: true });
+      const code = await msiexecPreflight(smokeRoot, diagnosticDirectory);
+      console.log(`Windows Installer launcher preflight passed (missing MSI rejected with exit ${code}).`);
     } else {
-      lines.push("Clean-install/app smoke: not requested.");
+      const repositoryRoot = REPOSITORY_ROOT;
+      const metadata = readPackageMetadata(repositoryRoot);
+      const platform = normalizePlatform(options.platform ?? hostPackagingPlatform());
+      const artifactDirectory = path.resolve(repositoryRoot, options.artifactdirectory ?? "package-artifacts");
+      const manifestPath = path.resolve(repositoryRoot, options.manifestpath ?? CHECKSUM_MANIFEST_NAME);
+      evidencePath = path.resolve(repositoryRoot, options.evidencefile ?? "package-verification.txt");
+      const result = verifyPackageArtifacts({ platform, version: metadata.version, artifactDirectory, manifestPath });
+      lines.push(`Checksum manifest: passed (${result.entries.length} artifact(s)).`);
+      if (result.optionalMissing.length > 0) lines.push(`Optional artifacts unavailable: ${result.optionalMissing.join(", ")}.`);
+      if (options.smoke) {
+        if (platform === "windows") await windowsSmoke(artifactDirectory, metadata, lines);
+        else await linuxSmoke(artifactDirectory, metadata, lines);
+      } else {
+        lines.push("Clean-install/app smoke: not requested.");
+      }
+      lines.push("Result: passed.");
+      writeEvidence(evidencePath, lines);
+      console.log(lines.join("\n"));
     }
-    lines.push("Result: passed.");
-    writeEvidence(evidencePath, lines);
-    console.log(lines.join("\n"));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Package verification failed.";
     lines.push(`Result: failed — ${message}`);
