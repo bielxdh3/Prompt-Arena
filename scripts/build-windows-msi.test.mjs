@@ -35,6 +35,9 @@ describe("Windows MSI generated-output hygiene", () => {
 
   const duplicateFixture = `<?xml version="1.0"?>
 <Wix><Fragment><DirectoryRef Id="APPLICATIONFOLDER">
+  <Component Id="Path" Guid="*">
+    <File Id="Path" Source="C:\\build\\prompt-arena.exe" KeyPath="yes" />
+  </Component>
   <Component Id="prompt_arena_worker" Guid="*">
     <File Id="WorkerDuplicate" Name="prompt-arena-worker.exe" Source="C:\\build\\prompt-arena-worker.exe" />
   </Component>
@@ -58,6 +61,7 @@ describe("Windows MSI generated-output hygiene", () => {
     const mainDirect = patched.slice(patched.indexOf('<Feature Id="MainProgram"'), patched.indexOf('<Feature Id="ShortcutsFeature"'));
     const optional = patched.slice(patched.indexOf('<Feature Id="Environment"'), patched.indexOf('</Feature>', patched.indexOf('<Feature Id="Environment"')));
     expect(mainDirect).toContain('<ComponentRef Id="retained_worker"/>');
+    expect(mainDirect).toContain('<ComponentRef Id="Path"/>');
     expect(optional).not.toContain('<ComponentRef Id="retained_worker"/>');
   });
 
@@ -164,8 +168,17 @@ describe("Windows MSI generated-output hygiene", () => {
     const mandatory = patched.slice(patched.indexOf('Id="MainProgram"'), patched.indexOf('Id="ShortcutsFeature"'));
     const optional = patched.slice(patched.indexOf('Id="Environment"'), patched.indexOf('</Feature>', patched.indexOf('Id="Environment"')));
     expect(mandatory).toContain('<ComponentRef Id="prompt_arena_worker.exe"/>');
+    expect(mandatory).toContain('<ComponentRef Id="Path"/>');
     expect(optional).not.toContain('prompt_arena_worker.exe');
-    expect(optional).toContain('<ComponentRef Id="Path"/>');
+    expect(optional).not.toContain('<ComponentRef Id="Path"/>');
+    expect(patched.match(/<ComponentRef Id="Path"\/>/gu)).toHaveLength(1);
+  });
+
+  it("refuses to rehome unknown application payloads or references from unrelated features", () => {
+    const unexpectedFile = duplicateFixture.replace('Source="C:\\build\\prompt-arena.exe"', 'Source="C:\\build\\unrelated.exe"');
+    expect(() => patchDuplicateWorkerComponentContents(unexpectedFile)).toThrow("core application executable is unfamiliar");
+    const thirdFeature = duplicateFixture.replace('</Feature></Fragment></Wix>', '<Feature Id="Other" Level="1"><ComponentRef Id="Path"/></Feature></Feature></Fragment></Wix>');
+    expect(() => patchDuplicateWorkerComponentContents(thirdFeature)).toThrow("not confined to expected optional features");
   });
 
   it("fails closed if worker belongs to an unknown optional feature or MainProgram is not compulsory", () => {

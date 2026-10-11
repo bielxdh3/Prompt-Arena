@@ -85,6 +85,10 @@ try {
     if ($workerLinks.Count -ne 1 -or [string]$workerLinks[0][0] -cne 'MainProgram') {
       throw 'MSI worker component must have exactly one direct FeatureComponents reference in mandatory MainProgram'
     }
+    $appLinks = @($featureComponents | Where-Object { [string]$_[1] -ceq $appComponentId })
+    if ($appLinks.Count -ne 1 -or [string]$appLinks[0][0] -cne 'MainProgram') {
+      throw 'MSI application executable must have exactly one direct FeatureComponents reference in mandatory MainProgram'
+    }
     $mainFeature = @($features | Where-Object { [string]$_[0] -ceq 'MainProgram' })
     # msidbFeatureAttributesUIDisallowAbsent (0x10) ensures that custom UI
     # cannot deselect the main program while enabling optional features.
