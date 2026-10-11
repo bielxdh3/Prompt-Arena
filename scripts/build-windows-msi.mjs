@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { readPackageVersion } from "./package-artifacts.mjs";
+import { writeRegularFileSync } from "./safe-files.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -36,6 +37,16 @@ const MSI_WORKER_FILENAMES = new Set([
   "prompt-arena-worker-x86_64-pc-windows-msvc.exe",
 ]);
 
+// The Tauri WiX template normally uses <File Source="..." KeyPath="yes" />
+// without a Name attribute. WiX derives the installed filename from Source.
+function wixFileName(fileTag) {
+  const explicit = wixAttribute(fileTag, "Name");
+  if (explicit) return explicit.toLowerCase();
+  const source = wixAttribute(fileTag, "Source");
+  if (!source || source.includes("&") || source.includes("$")) return undefined;
+  return source.split(/[\\/]/u).at(-1)?.toLowerCase();
+}
+
 // This is a narrow check for Tauri's generated WiX fragments, not an XML parser.
 // When a future Tauri version changes the shape, refuse to patch the MSI rather
 // than risk silently shipping an application without its one-shot worker.
@@ -51,13 +62,115 @@ export function inspectWixWorkerPayload(wxs) {
     const header = /^<Component\b[^>]*>/u.exec(body)?.[0];
     const componentId = header && wixAttribute(header, "Id");
     for (const [fileTag] of body.matchAll(/<File\b[^>]*>/gu)) {
-      const name = wixAttribute(fileTag, "Name");
-      if (name && MSI_WORKER_FILENAMES.has(name.toLowerCase())) {
+      const name = wixFileName(fileTag);
+      if (name && MSI_WORKER_FILENAMES.has(name)) {
         workers.push({ componentId, referenced: references.has(componentId) });
       }
     }
   }
   return workers;
+}
+
+function diagnosticToken(value) {
+  return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,96}$/u.test(value) ? value : "unavailable";
+}
+
+// Safe for PR artifacts: never emit raw XML, paths, WiX variable values,
+// installer properties or arbitrary file content. Report only allowlisted
+// identifiers and element names from worker-related components.
+export function summarizeWixWorkerGraph(contents) {
+  const components = [...contents.matchAll(/<Component\b[^>]*>[\s\S]*?<\/Component>/gu)];
+  const relevant = components.filter(([body]) => {
+    const header = /^<Component\b[^>]*>/u.exec(body)?.[0] ?? "";
+    return (wixAttribute(header, "Id") ?? "").toLowerCase().includes("worker")
+      || [...body.matchAll(/<File\b[^>]*>/gu)].some(([tag]) => (wixFileName(tag) ?? "").includes("prompt-arena-worker"));
+  });
+  const lines = [
+    `WiX component blocks: ${components.length}`,
+    `Worker-related component blocks: ${relevant.length}`,
+    `Recognized worker payload files: ${inspectWixWorkerPayload(contents).length}`,
+  ];
+  for (const [body] of relevant.slice(0, 12)) {
+    const header = /^<Component\b[^>]*>/u.exec(body)?.[0] ?? "";
+    lines.push(`Component: ${diagnosticToken(wixAttribute(header, "Id"))}`);
+    const elements = [...body.matchAll(/<([a-zA-Z][a-zA-Z0-9]*)\b/gu)]
+      .slice(1, 12).map(([, name]) => diagnosticToken(name));
+    lines.push(`  Child element names: ${elements.join(", ")}`);
+    for (const [tag] of [...body.matchAll(/<File\b[^>]*>/gu)].slice(0, 6)) {
+      const explicitName = wixAttribute(tag, "Name");
+      const source = wixAttribute(tag, "Source");
+      const sourceBasename = source?.split(/[\\/]/u).at(-1);
+      const safeSourceBasename = sourceBasename && MSI_WORKER_FILENAMES.has(sourceBasename.toLowerCase())
+        ? sourceBasename : "other-or-unavailable";
+      lines.push(`  File Id=${diagnosticToken(wixAttribute(tag, "Id"))} Name=${diagnosticToken(explicitName)} SourceBasename=${safeSourceBasename}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+// Traverse only the generated WiX Feature tags, tracking their immediate parent.
+// The worker must move from optional Environment into mandatory MainProgram,
+// never into another optional child Feature or outside the Feature graph.
+function wixFeatures(contents) {
+  const features = [];
+  const open = [];
+  for (const match of contents.matchAll(/<\/?Feature\b[^>]*>/gu)) {
+    if (match[0].startsWith("</")) {
+      const current = open.pop();
+      if (!current) throw new Error("WiX feature nesting is invalid; refusing MSI fallback");
+      current.closeStart = match.index;
+      continue;
+    }
+    const feature = {
+      id: wixAttribute(match[0], "Id"),
+      absent: wixAttribute(match[0], "Absent"),
+      parentId: open.at(-1)?.id,
+      openStart: match.index,
+      openEnd: match.index + match[0].length,
+    };
+    features.push(feature);
+    open.push(feature);
+  }
+  if (open.length !== 0) throw new Error("WiX feature tags are unbalanced; refusing MSI fallback");
+  return features;
+}
+
+export function putWorkerInMandatoryFeature(contents, retainedComponentId) {
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,95}$/u.test(retainedComponentId)) {
+    throw new Error("WiX worker component identifier is invalid");
+  }
+  const features = wixFeatures(contents);
+  const main = features.filter((feature) => feature.id === "MainProgram");
+  const environment = features.filter((feature) => feature.id === "Environment");
+  if (main.length !== 1 || main[0].absent !== "disallow"
+      || environment.length !== 1 || environment[0].parentId !== "MainProgram"
+      || environment[0].absent !== "allow") {
+    throw new Error("WiX worker feature layout is unfamiliar; refusing to move worker from optional feature");
+  }
+  const references = [...contents.matchAll(/<ComponentRef\b[^>]*\/>/gu)]
+    .filter(([tag]) => wixAttribute(tag, "Id") === retainedComponentId);
+  if (references.length !== 1 || references[0].index < environment[0].openEnd
+      || references[0].index >= environment[0].closeStart) {
+    throw new Error("WiX retained worker is not uniquely referenced from optional Environment feature");
+  }
+  const reference = references[0];
+  const withoutOptionalRef = contents.slice(0, reference.index) + contents.slice(reference.index + reference[0].length);
+  return withoutOptionalRef.slice(0, main[0].openEnd)
+    + `\n            <ComponentRef Id="${retainedComponentId}"/>`
+    + withoutOptionalRef.slice(main[0].openEnd);
+}
+
+function saveWixFailureDiagnostics() {
+  const directory = process.env.PACKAGE_DIAGNOSTICS_DIR?.trim();
+  if (!directory) return;
+  const wxsPath = path.join(REPOSITORY_ROOT, "src-tauri", "target", "release", "wix", "x64", "main.wxs");
+  if (!fs.existsSync(wxsPath)) return;
+  const wxsInfo = fs.lstatSync(wxsPath);
+  if (!wxsInfo.isFile() || wxsInfo.isSymbolicLink() || wxsInfo.size > 2 * 1024 * 1024) return;
+  fs.mkdirSync(directory, { recursive: true });
+  const directoryInfo = fs.lstatSync(directory);
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) return;
+  writeRegularFileSync(path.join(directory, "wix-worker-graph.txt"), summarizeWixWorkerGraph(fs.readFileSync(wxsPath, "utf8")));
 }
 
 export function patchDuplicateWorkerComponentContents(contents) {
@@ -71,7 +184,7 @@ export function patchDuplicateWorkerComponentContents(contents) {
   const removedComponent = matches[0][0];
   const removedBody = /<Component\b[^>]*>([\s\S]*?)<\/Component>/u.exec(removedComponent)?.[1]?.trim();
   const removedFileTag = removedBody && /^<File\b[^>]*\/>$/u.exec(removedBody)?.[0];
-  if (!removedFileTag || wixAttribute(removedFileTag, "Name")?.toLowerCase() !== "prompt-arena-worker.exe") {
+  if (!removedFileTag || wixFileName(removedFileTag) !== "prompt-arena-worker.exe") {
     throw new Error("WiX fallback would remove an unknown or multi-resource component; refusing to patch MSI");
   }
   const before = inspectWixWorkerPayload(contents);
@@ -83,7 +196,7 @@ export function patchDuplicateWorkerComponentContents(contents) {
       + `(source worker files=${before.length}, retained worker files=${after.length}, retained referenced=${after[0]?.referenced === true})`,
     );
   }
-  return patched;
+  return putWorkerInMandatoryFeature(patched, after[0].componentId);
 }
 
 function patchDuplicateWorkerComponent(wxsPath) {
@@ -184,6 +297,8 @@ if (isMainModule()) {
     const outputPath = buildWindowsMsi();
     console.log(`Windows MSI ready: ${outputPath}`);
   } catch (error) {
+    try { saveWixFailureDiagnostics(); }
+    catch { /* Preserve the real WiX failure if diagnostic capture is unavailable. */ }
     console.error(error instanceof Error ? error.message : "Windows MSI build failed.");
     process.exitCode = 1;
   }

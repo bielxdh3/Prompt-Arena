@@ -99,6 +99,8 @@ jobs:
 
       - name: Build Windows MSI installer
         if: runner.os == 'Windows'
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run build:windows-msi
 
       - name: Build Linux packages

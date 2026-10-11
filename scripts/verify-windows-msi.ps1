@@ -66,8 +66,9 @@ try {
     $installer = New-Object -ComObject WindowsInstaller.Installer
     $database = Invoke-InstallerCom $installer 'OpenDatabase' @($source.FullName, 0)
     $files = @(Read-MsiRows $database 'SELECT `File`, `FileName`, `Component_` FROM `File`' 3)
-    $featureComponents = @(Read-MsiRows $database 'SELECT `Component_` FROM `FeatureComponents`' 1)
+    $featureComponents = @(Read-MsiRows $database 'SELECT `Feature_`, `Component_` FROM `FeatureComponents`' 2)
     $components = @(Read-MsiRows $database 'SELECT `Component`, `Directory_` FROM `Component`' 2)
+    $features = @(Read-MsiRows $database 'SELECT `Feature`, `Level`, `Attributes` FROM `Feature`' 3)
 
     $resourceWorker = 'prompt-arena-worker-x86_64-pc-windows-msvc.exe'
     $worker = @($files | Where-Object {
@@ -80,8 +81,16 @@ try {
     }
     $workerComponentId = [string]$worker[0][2]
     $appComponentId = [string]$app[0][2]
-    $referenced = @($featureComponents | Where-Object { [string]$_[0] -eq $workerComponentId }).Count
-    if ($referenced -lt 1) { throw 'MSI worker component is not referenced by any installed feature' }
+    $workerLinks = @($featureComponents | Where-Object { [string]$_[1] -ceq $workerComponentId })
+    if ($workerLinks.Count -ne 1 -or [string]$workerLinks[0][0] -cne 'MainProgram') {
+      throw 'MSI worker component must have exactly one direct FeatureComponents reference in mandatory MainProgram'
+    }
+    $mainFeature = @($features | Where-Object { [string]$_[0] -ceq 'MainProgram' })
+    # msidbFeatureAttributesUIDisallowAbsent (0x10) ensures that custom UI
+    # cannot deselect the main program while enabling optional features.
+    if ($mainFeature.Count -ne 1 -or [int]$mainFeature[0][1] -ne 1 -or (([int]$mainFeature[0][2] -band 16) -eq 0)) {
+      throw 'MSI MainProgram must be a level-1 feature with UIDisallowAbsent enabled'
+    }
     $workerDir = @($components | Where-Object { [string]$_[0] -eq $workerComponentId })
     $appDir = @($components | Where-Object { [string]$_[0] -eq $appComponentId })
     if ($workerDir.Count -ne 1 -or $appDir.Count -ne 1) {
@@ -101,7 +110,7 @@ try {
     if (-not $validBesideApp -and -not $validResource) {
       throw 'MSI worker does not install at either Tauri-resolvable path (app dir or binaries/<target-triple> resource)'
     }
-    Write-Output "MSI worker payload verified: one worker executable at resolvable layout '$relativeDir/$workerName', linked to an installed feature."
+    Write-Output "MSI worker payload verified: one worker executable at resolvable layout '$relativeDir/$workerName', directly linked to mandatory MainProgram."
     exit 0
   }
   throw 'MSI worker validation requires an existing .msi file'
