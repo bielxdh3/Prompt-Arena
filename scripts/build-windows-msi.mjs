@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { readPackageVersion } from "./package-artifacts.mjs";
-import { writeRegularFileSync } from "./safe-files.mjs";
+import { readRegularFileSync, writeRegularFileSync } from "./safe-files.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -164,13 +164,14 @@ function saveWixFailureDiagnostics() {
   const directory = process.env.PACKAGE_DIAGNOSTICS_DIR?.trim();
   if (!directory) return;
   const wxsPath = path.join(REPOSITORY_ROOT, "src-tauri", "target", "release", "wix", "x64", "main.wxs");
-  if (!fs.existsSync(wxsPath)) return;
-  const wxsInfo = fs.lstatSync(wxsPath);
-  if (!wxsInfo.isFile() || wxsInfo.isSymbolicLink() || wxsInfo.size > 2 * 1024 * 1024) return;
+  // Open and read through the verified regular-file descriptor: a pathname
+  // check followed by readFileSync(path) could race a replacement on Windows.
+  const wixSource = readRegularFileSync(wxsPath, "utf8");
+  if (Buffer.byteLength(wixSource, "utf8") > 2 * 1024 * 1024) return;
   fs.mkdirSync(directory, { recursive: true });
   const directoryInfo = fs.lstatSync(directory);
   if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) return;
-  writeRegularFileSync(path.join(directory, "wix-worker-graph.txt"), summarizeWixWorkerGraph(fs.readFileSync(wxsPath, "utf8")));
+  writeRegularFileSync(path.join(directory, "wix-worker-graph.txt"), summarizeWixWorkerGraph(wixSource));
 }
 
 export function patchDuplicateWorkerComponentContents(contents) {

@@ -65,7 +65,7 @@ describe("Windows MSI generated-output hygiene", () => {
     const tauri = duplicateFixture.replace(
       'Id="WorkerDuplicate" Name="prompt-arena-worker.exe" Source=',
       'Id="Bin_prompt_arena_worker" Source=',
-    ).replace(' Source="C:\\build\\prompt-arena-worker.exe" />\n  </Component>\n</DirectoryRef>', ' Source="C:\\build\\prompt-arena-worker.exe" />\n  </Component>\n</DirectoryRef>');
+    );
     expect(tauri).not.toContain('Id="Bin_prompt_arena_worker" Name=');
     const patched = patchDuplicateWorkerComponentContents(tauri);
     expect(inspectWixWorkerPayload(patched)).toEqual([{ componentId: "retained_worker", referenced: true }]);
