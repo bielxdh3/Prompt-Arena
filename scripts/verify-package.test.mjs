@@ -6,9 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildMsiexecArguments,
+  buildMsiexecPreflightArguments,
   checkMsiexecExitCode,
   runMsiexec,
+  sanitizeMsiexecProcessEvidence,
   summarizeMsiLogTail,
+  verifyMsiexecPreflightExitCode,
+  verifyMsiexecPreflightLog,
   verifyInstalledWorker,
   windowsInstallerPath,
 } from "./verify-package.mjs";
@@ -76,6 +80,51 @@ describe("Windows package smoke helpers", () => {
     expect(() => checkMsiexecExitCode(1603, "install")).toThrow("exit code 1603");
   });
 
+  it("preflights a nonexistent MSI with quiet arguments without installing a real package", () => {
+    const root = diagnosticRoot();
+    const missingMsi = path.join(root, "missing.msi");
+    const log = path.join(root, "preflight.log");
+    expect(fs.existsSync(missingMsi)).toBe(false);
+    expect(buildMsiexecPreflightArguments(missingMsi, log)).toEqual([
+      "/i", missingMsi, "/qn", "/norestart", "/L*V!", log,
+    ]);
+    for (const code of [1619, 1620]) expect(() => verifyMsiexecPreflightExitCode(code)).not.toThrow();
+    for (const code of [0, 1603, 3010]) expect(() => verifyMsiexecPreflightExitCode(code)).toThrow("preflight failed");
+    expect(() => verifyMsiexecPreflightLog(log)).toThrow("did not write the requested verbose log");
+    fs.writeFileSync(log, "");
+    expect(() => verifyMsiexecPreflightLog(log)).toThrow("did not write the requested verbose log");
+    fs.writeFileSync(log, "MSI (s) (00:00): preflight diagnostic bytes");
+    expect(verifyMsiexecPreflightLog(log)).toBeGreaterThan(0);
+  });
+
+  it("preserves Windows argument values with embedded spaces using spawn's argv separation", async () => {
+    const root = diagnosticRoot();
+    const log = path.join(root, "msi.log");
+    const output = path.join(root, "argv capture.json");
+    const value = 'INSTALLDIR="C:\\Program Files\\Prompt Arena"';
+    const script = "require('node:fs').writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))";
+    expect(await runMsiexec(["-e", script, output, value], "install", log, {
+      command: process.execPath, timeoutMs: 3_000, pollMs: 200,
+    })).toBe(0);
+    expect(JSON.parse(fs.readFileSync(output, "utf8"))).toEqual([value]);
+  });
+
+  it("filters installer process snapshots to names and numeric IDs, never command lines", () => {
+    const evidence = [
+      "service=Running",
+      "msiexec.exe=1",
+      "pid=596 parent=210 name=msiexec.exe",
+      "MicrosoftEdgeWebView2RuntimeInstallerX64.exe=0",
+      "pid=999 parent=1 name=bad-process.exe",
+      "CommandLine=TOKEN=sensitive-secret",
+      "someuser=example",
+    ].join("\n");
+    expect(sanitizeMsiexecProcessEvidence(evidence)).toEqual([
+      "service=Running", "msiexec.exe=1", "pid=596 parent=210 name=msiexec.exe",
+      "MicrosoftEdgeWebView2RuntimeInstallerX64.exe=0",
+    ]);
+  });
+
   it("extracts only safe MSI action names and numeric codes from verbose logs", () => {
     const file = path.join(diagnosticRoot(), "msi.log");
     fs.writeFileSync(file, [
@@ -107,6 +156,24 @@ describe("Windows package smoke helpers", () => {
     expect(contents).toContain("MSI verbose log bytes: 0");
     expect(contents).toContain("MSI install timed out after 0.2 seconds");
     expect(contents).not.toContain("setTimeout(() => {}, 10000)");
+  });
+
+  it("persists allowlisted process evidence while launcher stalls, omitting secrets", async () => {
+    const root = diagnosticRoot();
+    const log = path.join(root, "msi.log");
+    const processStatus = path.join(root, "msi-processes.txt");
+    await expect(runMsiexec(["-e", "setTimeout(() => {}, 10000)"], "install", log, {
+      command: process.execPath,
+      timeoutMs: 300,
+      pollMs: 50,
+      diagnosticPath: path.join(root, "msi-status.txt"),
+      processDiagnosticPath: processStatus,
+      processProbe: async () => ["service=Stopped", "msiexec.exe=1", "pid=99 parent=11 name=msiexec.exe", "TOKEN=secret"],
+    })).rejects.toMatchObject({ name: "MsiexecTimeoutError" });
+    const report = fs.readFileSync(processStatus, "utf8");
+    expect(report).toContain("msiexec.exe=1");
+    expect(report).toContain("service=Stopped");
+    expect(report).not.toContain("TOKEN=secret");
   });
 
   it("tracks a zero-exit launcher and saves final diagnostic status", async () => {
