@@ -46,20 +46,20 @@ describe("Windows package smoke helpers", () => {
     const uninstallLog = path.join("C:", "runner temp", "msi uninstall.log");
     expect(buildMsiexecArguments("install", installer, installDirectory, installLog)).toEqual([
       "/i",
-      installer,
+      `"${installer}"`,
       "/qn",
       "/norestart",
       `INSTALLDIR="${installDirectory}"`,
       "/L*V!",
-      installLog,
+      `"${installLog}"`,
     ]);
     expect(buildMsiexecArguments("uninstall", installer, undefined, uninstallLog)).toEqual([
       "/x",
-      installer,
+      `"${installer}"`,
       "/qn",
       "/norestart",
       "/L*V!",
-      uninstallLog,
+      `"${uninstallLog}"`,
     ]);
     expect(() => buildMsiexecArguments("install", installer, "C:\\bad\"path", installLog)).toThrow("MSI install directory is invalid");
     expect(() => buildMsiexecArguments("install", installer, installDirectory)).toThrow("MSI log path is invalid");
@@ -86,7 +86,8 @@ describe("Windows package smoke helpers", () => {
     const log = path.join(root, "preflight.log");
     expect(fs.existsSync(missingMsi)).toBe(false);
     expect(buildMsiexecPreflightArguments(missingMsi, log)).toEqual([
-      "/i", missingMsi, "/qn", "/norestart", "/L*V!", log,
+      "/i", `"${missingMsi}"`, "/qn", "/norestart",
+      `INSTALLDIR="${path.join(root, "install destination with spaces")}"`, "/L*V!", `"${log}"`,
     ]);
     for (const code of [1619, 1620]) expect(() => verifyMsiexecPreflightExitCode(code)).not.toThrow();
     for (const code of [0, 1603, 3010]) expect(() => verifyMsiexecPreflightExitCode(code)).toThrow("preflight failed");
@@ -97,16 +98,32 @@ describe("Windows package smoke helpers", () => {
     expect(verifyMsiexecPreflightLog(log)).toBeGreaterThan(0);
   });
 
-  it("preserves Windows argument values with embedded spaces using spawn's argv separation", async () => {
+  it("keeps substitute process argv intact, without applying msiexec-specific verbatim quoting", async () => {
     const root = diagnosticRoot();
     const log = path.join(root, "msi.log");
     const output = path.join(root, "argv capture.json");
-    const value = 'INSTALLDIR="C:\\Program Files\\Prompt Arena"';
+    const value = 'INSTALLDIR=C:\\Program Files\\Prompt Arena';
     const script = "require('node:fs').writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))";
     expect(await runMsiexec(["-e", script, output, value], "install", log, {
       command: process.execPath, timeoutMs: 3_000, pollMs: 200,
     })).toBe(0);
     expect(JSON.parse(fs.readFileSync(output, "utf8"))).toEqual([value]);
+  });
+
+  it.skipIf(process.platform !== "win32")("passes explicitly quoted INSTALLDIR values to real Windows Installer without a modal parser hang", async () => {
+    // A nonexistent MSI cannot install anything. It still exercises the exact
+    // /qn + INSTALLDIR + /L*V! command line that hung for 600 s in CI.
+    const root = diagnosticRoot();
+    const nonexistent = path.join(root, "nonexistent package.msi");
+    const directory = path.join(root, "destination with spaces");
+    const log = path.join(root, "msi cli test.log");
+    const status = path.join(root, "cli-status.txt");
+    expect(fs.existsSync(nonexistent)).toBe(false);
+    const args = buildMsiexecArguments("install", nonexistent, directory, log);
+    const code = await runMsiexec(args, "install", log, { timeoutMs: 6_000, pollMs: 500, diagnosticPath: status });
+    expect(code).toBe(1619);
+    expect(summarizeMsiLogTail(log).size).toBeGreaterThan(0);
+    expect(fs.readFileSync(status, "utf8")).toContain("State: exited");
   });
 
   it("filters installer process snapshots to names and numeric IDs, never command lines", () => {
