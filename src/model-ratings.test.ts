@@ -22,6 +22,41 @@ describe("model ratings", () => {
     expect(computeEloRatings(outcomes, options)).toEqual(computeEloRatings([...outcomes].reverse(), options));
   });
 
+  it("treats canonically equivalent Unicode spellings as distinct sortable identities", () => {
+    const outcomes = [
+      { matchId: "same", competitorAId: "é", competitorBId: "common", winnerId: "é" },
+      { matchId: "same", competitorAId: "e\u0301", competitorBId: "common", winnerId: "common" },
+    ];
+    const options = { createdAt: "2026-09-12T00:00:00Z" };
+    expect("é".localeCompare("e\u0301")).toBe(0);
+    expect(computeEloRatings(outcomes, options)).toEqual(computeEloRatings([...outcomes].reverse(), options));
+    expect(computeBradleyTerryRatings(outcomes, options)).toEqual(computeBradleyTerryRatings([...outcomes].reverse(), options));
+  });
+
+  it("keeps null, empty, global and NUL-containing identities separate in both algorithms", () => {
+    const categories = [null, "", "global", "x", "x\u0000y"] as const;
+    const outcomes = categories.map((category, index) => ({
+      matchId: `match-${index}`,
+      category,
+      competitorAId: category === "x" ? "y\u0000z" : "z",
+      competitorBId: "other",
+      winnerId: category === "" ? "other" : category === "x" ? "y\u0000z" : "z",
+    }));
+    const options = { createdAt: "2026-09-12T00:00:00Z" };
+    const ratings = [computeEloRatings(outcomes, options), computeBradleyTerryRatings(outcomes, options)];
+    for (const result of ratings) {
+      expect(result.ratings).toHaveLength(10);
+      expect(result.ratings.every((row) => row.sampleCount === 1)).toBe(true);
+      expect(categories.map((category) => result.ratings.filter((row) => row.category === category).length)).toEqual([2, 2, 2, 2, 2]);
+      expect(result.ratings.some((row) => row.category === "x" && row.competitorId === "y\u0000z")).toBe(true);
+      expect(result.ratings.some((row) => row.category === "x\u0000y" && row.competitorId === "z")).toBe(true);
+      expect(result).toEqual(result.ruleVersion === "elo-v1" ? computeEloRatings([...outcomes].reverse(), options) : computeBradleyTerryRatings([...outcomes].reverse(), options));
+    }
+    const comparisonGroups = ratings[1].ratings.map((row) => row.comparisonGroupId);
+    expect(new Set(comparisonGroups).size).toBe(categories.length);
+    expect(comparisonGroups).toContain("global:component-1");
+  });
+
   it("ignores malformed imported identities and categories in both rating algorithms", () => {
     const invalid = [
       { matchId: "bad-identity", competitorAId: 42, competitorBId: "beta", winnerId: null },
@@ -87,6 +122,19 @@ describe("model ratings", () => {
     expect(repeated.ratings.every((rating) => rating.sourceClusterCount === 2)).toBe(true);
     expect(repeated.ratings.find((rating) => rating.competitorId === "a")?.uncertainty).toBeGreaterThanOrEqual(initial.ratings.find((rating) => rating.competitorId === "a")?.uncertainty ?? 0);
     expect(repeated.ratings.every((rating) => rating.uncertaintyMethod === "cluster_robust_standard_error_v1")).toBe(true);
+  });
+
+  it("matches the analytic two-model cluster sandwich variance", () => {
+    const result = computeBradleyTerryRatings([
+      { matchId: "a", clusterId: "source-a", competitorAId: "a", competitorBId: "b", winnerId: "a" },
+      { matchId: "b", clusterId: "source-b", competitorAId: "a", competitorBId: "b", winnerId: "b" },
+    ]);
+    // At equal abilities each match has Bernoulli variance 1/4. The centered
+    // two-player prior adds precision 1/18, and cluster correction is 2.
+    const posteriorVariance = 1 / (2 / 4 + 1 / 18);
+    const expectedStandardError = Math.sqrt(2 * 2 * (posteriorVariance / 4) ** 2) * 400 / Math.LN10;
+    expect(result.ratings.map((row) => row.rating)).toEqual([1000, 1000]);
+    expect(result.ratings.every((row) => Math.abs(row.uncertainty - expectedStandardError) < 0.01)).toBe(true);
   });
 
   it("uses prior-only standard deviations when source evidence has fewer than two clusters", () => {

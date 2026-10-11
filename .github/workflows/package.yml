@@ -133,6 +133,33 @@ jobs:
           PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run verify:package -- --platform windows --smoke
 
+      - name: Record Windows MSI prerequisite and signature evidence
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:PACKAGE_DIAGNOSTICS_DIR | Out-Null
+          $report = Join-Path $env:PACKAGE_DIAGNOSTICS_DIR 'msi-prerequisites.txt'
+          "OS: $([Environment]::OSVersion.Version)" | Set-Content -LiteralPath $report
+          # WiX checks this WebView2 client ID; query both machine registry views and user scope.
+          $webViewId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtimeKeys = @(
+            "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$webViewId"
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$webViewId"
+            "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$webViewId"
+          )
+          $runtime = @(Get-ItemProperty -LiteralPath $runtimeKeys -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty pv -Unique)
+          "WebView2 Runtime registered versions: $(if ($runtime.Count) { $runtime -join ', ' } else { 'none detected in standard EdgeUpdate keys' })" | Add-Content -LiteralPath $report
+          $msi = @(Get-ChildItem package-artifacts -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+          if ($msi.Count -eq 1) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $msi[0].FullName
+            "MSI Authenticode status: $($signature.Status)" | Add-Content -LiteralPath $report
+          } else {
+            "Normalized MSI candidates: $($msi.Count)" | Add-Content -LiteralPath $report
+          }
+
       - name: Capture Windows Installer failure context
         if: failure() && runner.os == 'Windows'
         shell: pwsh
@@ -170,7 +197,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
         with:
           name: prompt-arena-msi-diagnostics-${{ steps.commit.outputs.sha }}
-          path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/
+          # Raw verbose .log files may contain installer properties or secrets.
+          # Upload only bounded, allowlisted diagnostic summaries to PR runs.
+          path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/*.txt
           if-no-files-found: ignore
           retention-days: 7
 

@@ -1282,6 +1282,30 @@ export async function readModelOperations(): Promise<ModelOperation[]> {
   );
 }
 
+/** Bounded audit page. Active work is always included regardless of history offset. */
+export type ModelOperationsPage = {
+  active: ModelOperation[];
+  history: ModelOperation[];
+  nextOffset: number | null;
+};
+
+export const MODEL_OPERATION_PAGE_SIZE = 100;
+
+export async function readModelOperationsPage(
+  limit = MODEL_OPERATION_PAGE_SIZE,
+  offset = 0,
+): Promise<ModelOperationsPage> {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MODEL_OPERATION_PAGE_SIZE
+    || !Number.isSafeInteger(offset) || offset < 0 || offset > 0xFFFFFFFF - limit) {
+    throw new Error("The model operation history page is invalid.");
+  }
+  return invokeDesktop<ModelOperationsPage>(
+    "list_model_operations_page",
+    "The local model operation history could not be reached.",
+    { limit, offset },
+  );
+}
+
 export async function readModelOperation(operationId: string): Promise<ModelOperation | null> {
   return invokeDesktop<ModelOperation | null>(
     "get_model_operation",

@@ -599,13 +599,32 @@ export function rankArenaCompetitors(
   executions: ArenaExecution[],
   humanScores: ReadonlyMap<string, number> = new Map(),
 ): ArenaRankingEntry[] {
-  return summarizeArenaCompetitors(executions)
+  const grouped = groupArenaExecutions(executions);
+  const summaries = summarizeArenaCompetitors(executions);
+  const humanScoresByCompetitor = new Map([...grouped].map(([competitorId, items]) => [competitorId, items
+    .filter((item) => item.execution?.attempt.status === "completed")
+    .map((item) => humanScores.get(executionKey(item)))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5)]));
+  const objectiveResultsByCompetitor = new Map([...grouped].map(([competitorId, items]) => [competitorId, items
+    .map((item) => {
+      const score = item.execution?.attempt.result?.score;
+      return isRecord(score) ? score.passed : null;
+    })
+    .filter((passed): passed is boolean => typeof passed === "boolean")]));
+  // A leaderboard compares one metric for all entrants. A 1–5 human average
+  // cannot be ranked against a 0–1 objective pass rate. Until every competitor
+  // has an eligible human evaluation, use objective evidence for everyone.
+  const completeHumanCoverage = summaries.length > 0 && summaries.every((summary) =>
+    (humanScoresByCompetitor.get(summary.competitorId)?.length ?? 0) > 0);
+  // An unmeasured objective rate is unknown, not a 0% failure. With neither
+  // complete human coverage nor complete objective evidence, no shared ranking
+  // metric exists yet; suppress the leaderboard rather than assign false ranks.
+  if (!completeHumanCoverage && summaries.some((summary) =>
+    (objectiveResultsByCompetitor.get(summary.competitorId)?.length ?? 0) === 0)) return [];
+  return summaries
     .map((summary) => {
-      const items = groupArenaExecutions(executions).get(summary.competitorId) ?? [];
-      const scores = items
-        .map((item) => humanScores.get(executionKey(item)))
-        .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5);
-      if (scores.length > 0) {
+      if (completeHumanCoverage) {
+        const scores = humanScoresByCompetitor.get(summary.competitorId)!;
         return {
           competitorId: summary.competitorId,
           competitorLabel: summary.competitorLabel,
@@ -616,17 +635,19 @@ export function rankArenaCompetitors(
           tieMargin: confidenceHalfWidth(scores) * 2,
         };
       }
+      const objectiveResults = objectiveResultsByCompetitor.get(summary.competitorId)!;
+      const objectiveUncertainty = confidenceHalfWidth(objectiveResults.map((passed) => passed ? 1 : 0));
       return {
         competitorId: summary.competitorId,
         competitorLabel: summary.competitorLabel,
         metric: "objective_pass_rate" as const,
-        value: summary.objectiveChecked === 0 ? 0 : summary.objectivePassed / summary.objectiveChecked,
-        sampleSize: summary.objectiveChecked,
-        uncertainty: summary.objectiveUncertainty,
-        tieMargin: summary.objectiveTieMargin,
+        value: objectiveResults.filter(Boolean).length / objectiveResults.length,
+        sampleSize: objectiveResults.length,
+        uncertainty: objectiveUncertainty,
+        tieMargin: objectiveUncertainty * 2,
       };
     })
-    .sort((left, right) => right.value - left.value || left.competitorId.localeCompare(right.competitorId))
+    .sort((left, right) => right.value - left.value || compareText(left.competitorId, right.competitorId))
     .reduce<ArenaRankingEntry[]>((ranking, entry, index, ordered) => {
       const previous = ranking[index - 1];
       ranking.push({
@@ -1203,4 +1224,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function attemptForExecution(item: ArenaExecution): AttemptRecord | null {
   return item.execution?.attempt ?? null;
 }
-

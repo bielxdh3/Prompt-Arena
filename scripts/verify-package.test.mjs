@@ -1,12 +1,28 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildMsiexecArguments,
   checkMsiexecExitCode,
+  runMsiexec,
+  summarizeMsiLogTail,
+  verifyInstalledWorker,
   windowsInstallerPath,
 } from "./verify-package.mjs";
+
+const smokeRoots = [];
+afterEach(() => {
+  for (const root of smokeRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+function diagnosticRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-arena-msiexec-unit-"));
+  smokeRoots.push(root);
+  return root;
+}
 
 describe("Windows package smoke helpers", () => {
   it("selects the normalized MSI and NSIS artifacts by kind", () => {
@@ -58,5 +74,74 @@ describe("Windows package smoke helpers", () => {
     expect(() => checkMsiexecExitCode(1605, "install")).toThrow("exit code 1605");
     expect(() => checkMsiexecExitCode(1605, "uninstall")).toThrow("exit code 1605");
     expect(() => checkMsiexecExitCode(1603, "install")).toThrow("exit code 1603");
+  });
+
+  it("extracts only safe MSI action names and numeric codes from verbose logs", () => {
+    const file = path.join(diagnosticRoot(), "msi.log");
+    fs.writeFileSync(file, [
+      "Property(S): PASSWORD = secret-would-leak",
+      "Action start 9:43:05: InstallValidate.",
+      "Action ended 9:43:06: InstallValidate. Return value 1.",
+      "Action start 9:43:07: CUSTOM_ACTION_password=secret.",
+      "Action ended 9:43:08: InstallFinalize. Return value 3.",
+    ].join("\n"));
+    expect(summarizeMsiLogTail(file)).toEqual({
+      exists: true,
+      size: fs.statSync(file).size,
+      recentActions: ["start InstallValidate", "ended InstallValidate (code 1)", "ended InstallFinalize (code 3)"],
+    });
+  });
+
+  it("records an actionable process heartbeat and short timeout without exposing argv", async () => {
+    const root = diagnosticRoot();
+    const log = path.join(root, "msi.log");
+    const status = path.join(root, "msi-status.txt");
+    await expect(runMsiexec(["-e", "setTimeout(() => {}, 10000)"], "install", log, {
+      command: process.execPath,
+      timeoutMs: 200,
+      pollMs: 40,
+      diagnosticPath: status,
+    })).rejects.toMatchObject({ name: "MsiexecTimeoutError", action: "install" });
+    const contents = fs.readFileSync(status, "utf8");
+    expect(contents).toContain("State: failed");
+    expect(contents).toContain("MSI verbose log bytes: 0");
+    expect(contents).toContain("MSI install timed out after 0.2 seconds");
+    expect(contents).not.toContain("setTimeout(() => {}, 10000)");
+  });
+
+  it("tracks a zero-exit launcher and saves final diagnostic status", async () => {
+    const root = diagnosticRoot();
+    const status = path.join(root, "msi-status.txt");
+    expect(await runMsiexec(["-e", "process.exit(0)"], "install", path.join(root, "msi.log"), {
+      command: process.execPath,
+      timeoutMs: 3_000,
+      pollMs: 50,
+      diagnosticPath: status,
+    })).toBe(0);
+    expect(fs.readFileSync(status, "utf8")).toContain("State: exited");
+  });
+
+  it("refuses installed MSI workers missing or differing from the built app sidecar", () => {
+    const root = diagnosticRoot();
+    const install = path.join(root, "installed");
+    const binaryDirectory = path.join(root, "src-tauri", "binaries");
+    fs.mkdirSync(install, { recursive: true });
+    fs.mkdirSync(binaryDirectory, { recursive: true });
+    const built = path.join(binaryDirectory, "prompt-arena-worker-x86_64-pc-windows-msvc.exe");
+    const installed = path.join(install, "prompt-arena-worker.exe");
+    fs.writeFileSync(built, "legitimate-worker");
+    expect(() => verifyInstalledWorker(install, root)).toThrow("exactly one Tauri-resolvable");
+    fs.writeFileSync(installed, "wrong-worker");
+    expect(() => verifyInstalledWorker(install, root)).toThrow("content differs");
+    fs.copyFileSync(built, installed);
+    expect(verifyInstalledWorker(install, root)).toBe(installed);
+    const resourceWorker = path.join(install, "binaries", "prompt-arena-worker-x86_64-pc-windows-msvc.exe");
+    fs.mkdirSync(path.dirname(resourceWorker));
+    fs.copyFileSync(built, resourceWorker);
+    expect(() => verifyInstalledWorker(install, root)).toThrow("exactly one Tauri-resolvable");
+    fs.unlinkSync(installed);
+    expect(verifyInstalledWorker(install, root)).toBe(resourceWorker);
+    fs.writeFileSync(resourceWorker, "modified-content");
+    expect(() => verifyInstalledWorker(install, root)).toThrow("content differs");
   });
 });

@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,8 +21,10 @@ const SMOKE_WAIT_MS = 2_500;
 const SMOKE_TERMINATION_WAIT_MS = 5_000;
 const UNINSTALL_DISAPPEAR_WAIT_MS = 5_000;
 const UNINSTALL_POLL_INTERVAL_MS = 100;
-// The MSI may install its embedded WebView2 runtime on a clean runner.
+// This is a real failure threshold, not a workaround for the unknown hang.
 const MSI_TIMEOUT_MS = 10 * 60_000;
+const MSI_DIAGNOSTIC_POLL_MS = 15_000;
+const MSI_LOG_TAIL_BYTES = 96 * 1024;
 
 export function readPackageMetadata(repositoryRoot = REPOSITORY_ROOT) {
   const configPath = path.join(repositoryRoot, "src-tauri", "tauri.conf.json");
@@ -67,6 +70,24 @@ export function verifyPackageArtifacts({ platform, version, artifactDirectory, m
 
 export function windowsInstallerPath(artifactDirectory, version, kind) {
   return path.join(artifactDirectory, packageArtifactName("windows", version, kind));
+}
+
+export function verifyInstalledWorker(installDirectory, repositoryRoot = REPOSITORY_ROOT) {
+  const built = path.join(repositoryRoot, "src-tauri", "binaries", "prompt-arena-worker-x86_64-pc-windows-msvc.exe");
+  // Tauri's Windows Resource directory is the app executable's directory.
+  // resolve_worker_executable() accepts exactly these two app-owned layouts.
+  const candidates = [
+    path.join(installDirectory, "prompt-arena-worker.exe"),
+    path.join(installDirectory, "binaries", "prompt-arena-worker-x86_64-pc-windows-msvc.exe"),
+  ];
+  const installed = candidates.filter(isRegularFile);
+  if (installed.length !== 1) {
+    throw new Error(`installed MSI must contain exactly one Tauri-resolvable app-owned worker sidecar (found ${installed.length})`);
+  }
+  if (!isRegularFile(built)) throw new Error("built Windows worker sidecar is unavailable for MSI integrity comparison");
+  const digest = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  if (digest(installed[0]) !== digest(built)) throw new Error("installed MSI worker content differs from the built app-owned sidecar");
+  return installed[0];
 }
 
 function commandAvailable(command) {
@@ -147,21 +168,103 @@ export function checkMsiexecExitCode(exitCode, action, { allowNotInstalled = fal
   throw new Error(`MSI ${action} failed with msiexec exit code ${exitCode}`);
 }
 
-function runMsiexec(args, action, logPath) {
+// Only action identities and numeric return codes are extracted from MSI logs.
+// Never upload raw MSI verbose logs: they may contain MSI properties/secrets.
+export function summarizeMsiLogTail(logPath) {
+  let descriptor;
   try {
-    execFileSync("msiexec.exe", args, { stdio: "ignore", timeout: MSI_TIMEOUT_MS });
-    return 0;
-  } catch (error) {
-    if (error && Number.isInteger(error.status)) return error.status;
-    if (error?.code === "ETIMEDOUT") {
-      const timeoutError = new Error(`MSI ${action} timed out after ${MSI_TIMEOUT_MS / 1_000} seconds`, { cause: error });
+    descriptor = fs.openSync(logPath, "r");
+    const size = fs.fstatSync(descriptor).size;
+    const length = Math.min(size, MSI_LOG_TAIL_BYTES);
+    const bytes = Buffer.alloc(length);
+    fs.readSync(descriptor, bytes, 0, length, size - length);
+    const actions = [];
+    for (const line of bytes.toString("utf8").split(/\r?\n/u)) {
+      const match = /^Action (start|ended) [^\r\n]{0,100}?: ([A-Za-z][A-Za-z0-9_.:-]{0,79})\.(?: Return value (\d+)\.)?\s*$/u.exec(line);
+      if (match) actions.push(`${match[1]} ${match[2]}${match[3] ? ` (code ${match[3]})` : ""}`);
+    }
+    return { exists: true, size, recentActions: actions.slice(-8) };
+  } catch {
+    return { exists: false, size: 0, recentActions: [] };
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function recordMsiDiagnostic(diagnosticPath, action, state, startTime, processId, logPath, extra = "") {
+  if (!diagnosticPath) return;
+  const snapshot = summarizeMsiLogTail(logPath);
+  const lines = [
+    `Action: ${action}`,
+    `State: ${state}`,
+    `Elapsed seconds: ${Math.floor((Date.now() - startTime) / 1000)}`,
+    `Launcher PID: ${Number.isInteger(processId) ? processId : "unavailable"}`,
+    `MSI verbose log readable: ${snapshot.exists}`,
+    `MSI verbose log bytes: ${snapshot.size}`,
+    ...snapshot.recentActions.map((value) => `MSI action: ${value}`),
+    ...(extra ? [`Outcome: ${extra}`] : []),
+  ];
+  writeRegularFileSync(diagnosticPath, `${lines.join("\n")}\n`);
+}
+
+export function runMsiexec(args, action, logPath, {
+  command = "msiexec.exe",
+  timeoutMs = MSI_TIMEOUT_MS,
+  pollMs = MSI_DIAGNOSTIC_POLL_MS,
+  diagnosticPath,
+} = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(pollMs) || pollMs <= 0) {
+    throw new Error("invalid MSI watchdog settings");
+  }
+  // Windows Installer requires the log's parent to exist; verify it is a real
+  // writable directory before spawning, instead of diagnosing a silent hang.
+  const logDirectory = path.dirname(logPath);
+  const directoryInfo = fs.lstatSync(logDirectory);
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) throw new Error("MSI log directory is unsafe");
+  const probe = fs.openSync(logPath, "a");
+  fs.closeSync(probe);
+
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+    let settled = false;
+    let timedOut = false;
+    let timer;
+    let interval;
+    const snapshot = (state, extra = "") => {
+      try { recordMsiDiagnostic(diagnosticPath, action, state, started, child.pid, logPath, extra); }
+      catch (error) { console.error(`MSI diagnostics unavailable: ${error.message}`); }
+    };
+    const settle = (error, code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(interval);
+      snapshot(error ? "failed" : "exited", error ? error.message : `exit ${code}`);
+      if (error) reject(error);
+      else resolve(code);
+    };
+    child.once("error", (error) => settle(error));
+    child.once("close", (code, signal) => {
+      if (timedOut) return;
+      if (code === null) settle(new Error(`MSI ${action} terminated by signal ${signal ?? "unknown"}`));
+      else settle(undefined, code);
+    });
+    snapshot("started");
+    interval = setInterval(() => snapshot("running"), pollMs);
+    timer = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      // Killing the launcher does not prove that the msiserver transaction
+      // stopped; never attempt uninstall after an install timeout.
+      child.kill();
+      const timeoutError = new Error(`MSI ${action} timed out after ${timeoutMs / 1_000} seconds`);
       timeoutError.name = "MsiexecTimeoutError";
       timeoutError.action = action;
       timeoutError.logPath = logPath;
-      throw timeoutError;
-    }
-    throw error;
-  }
+      settle(timeoutError);
+    }, timeoutMs);
+  });
 }
 
 function errorMessage(error) {
@@ -182,17 +285,23 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, diagnosticDirect
   const uninstallLogPath = path.join(diagnosticDirectory, "msi-uninstall.log");
   const expectedExecutable = path.join(installDirectory, `${metadata.mainBinaryName}.exe`);
   let executable = expectedExecutable;
+  let installedWorker;
   let installAttempted = false;
   let installTimedOut = false;
   let smokeError;
 
   try {
     installAttempted = true;
-    const installCode = runMsiexec(buildMsiexecArguments("install", installer, installDirectory, installLogPath), "install", installLogPath);
+    const installCode = await runMsiexec(buildMsiexecArguments("install", installer, installDirectory, installLogPath), "install", installLogPath, {
+      diagnosticPath: path.join(diagnosticDirectory, "msi-install-status.txt"),
+    });
     const installResult = checkMsiexecExitCode(installCode, "install");
+    if (installResult.rebootRequired) throw new Error("MSI installation requested a reboot; this clean-install smoke cannot validate a pre-reboot application launch");
     lines.push(`MSI clean install: passed (msiexec exit code ${installCode}${installResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
     executable = findInstalledExecutable(installDirectory, metadata.productName, metadata.mainBinaryName);
     lines.push(`MSI installed executable: found (${path.basename(executable)}).`);
+    installedWorker = verifyInstalledWorker(path.dirname(executable));
+    lines.push("MSI installed worker: sidecar present, matches the SHA-256 of the built app-owned executable.");
     await launchAndStop(executable, []);
     lines.push("MSI installed executable start: passed.");
     await launchAndStop(executable, []);
@@ -208,13 +317,18 @@ async function msiSmoke(artifactDirectory, metadata, smokeRoot, diagnosticDirect
       lines.push("MSI teardown: skipped because the install timed out and Windows Installer state is unresolved; the clean runner will be discarded.");
     } else if (installAttempted) {
       try {
-        const uninstallCode = runMsiexec(buildMsiexecArguments("uninstall", installer, undefined, uninstallLogPath), "uninstall", uninstallLogPath);
+        const uninstallCode = await runMsiexec(buildMsiexecArguments("uninstall", installer, undefined, uninstallLogPath), "uninstall", uninstallLogPath, {
+          diagnosticPath: path.join(diagnosticDirectory, "msi-uninstall-status.txt"),
+        });
         const uninstallResult = checkMsiexecExitCode(uninstallCode, "uninstall", { allowNotInstalled: true });
+        if (uninstallResult.rebootRequired) throw new Error("MSI uninstall requested a reboot; clean teardown was not verified");
         if (uninstallResult.notInstalled) {
           if (fs.existsSync(expectedExecutable)) throw new Error("MSI product was not registered for uninstall but its executable remains");
+          if (installedWorker && fs.existsSync(installedWorker)) throw new Error("MSI product was not registered for uninstall but its worker sidecar remains");
           lines.push("MSI teardown: no registered product remained (msiexec exit code 1605).");
         } else {
           if (!(await waitForPathToDisappear(executable))) throw new Error("MSI uninstall left the installed executable behind after the removal wait");
+          if (installedWorker && !(await waitForPathToDisappear(installedWorker))) throw new Error("MSI uninstall left the app-owned worker sidecar behind after the removal wait");
           lines.push(`MSI silent uninstall: passed (msiexec exit code ${uninstallCode}${uninstallResult.rebootRequired ? "; restart required, /norestart requested" : ""}).`);
         }
       } catch (error) {
