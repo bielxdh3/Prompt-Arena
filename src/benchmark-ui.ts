@@ -4,7 +4,7 @@ export type BenchmarkSurfaceState = "preview" | "empty" | "ready" | "error";
 
 export const OFFICIAL_PACK_SEED_MAX = 4_294_967_295;
 
-export type OfficialPackExecutionState = "available" | "docker_blocked" | "unavailable";
+export type OfficialPackExecutionState = "available" | "docker_required" | "docker_blocked" | "unavailable";
 
 export type DeterministicMaterializationCaseSeed = {
   taskId: string;
@@ -31,7 +31,9 @@ export function parseOfficialPackSeed(value: string): number | null {
 export function officialPackExecutionState(
   execution: Pick<OfficialPackExecution, "status" | "executionBoundary">,
 ): OfficialPackExecutionState {
-  if (execution.executionBoundary === "docker_required") return "docker_blocked";
+  if (execution.executionBoundary === "docker_required") {
+    return execution.status === "available" ? "docker_required" : "docker_blocked";
+  }
   return execution.status === "available" ? "available" : "unavailable";
 }
 

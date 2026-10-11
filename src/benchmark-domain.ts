@@ -22,6 +22,7 @@ export type BenchmarkTask = {
   taskId: string;
   name: string;
   prompt: string;
+  categoryId?: string;
   cases: BenchmarkCase[];
   rubricId?: string;
   difficulty?: number;

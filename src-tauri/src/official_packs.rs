@@ -27,6 +27,7 @@ pub enum OfficialPackStatus {
 #[serde(rename_all = "snake_case")]
 pub enum OfficialPackSandboxStatus {
     NotRequired,
+    Required,
     Unavailable,
 }
 
@@ -160,8 +161,14 @@ const OFFICIAL_PACK_SOURCES: &[OfficialPackSource] = &[
     OfficialPackSource {
         pack_id: "official-programming-software-engineering",
         benchmark_id: "software-engineering",
-        version_id: "software-engineering@1",
+        version_id: "software-engineering@2",
         document_json: include_str!("../../packs/official/programming/software-engineering.json"),
+    },
+    OfficialPackSource {
+        pack_id: "official-programming-python-correctness",
+        benchmark_id: "software-engineering",
+        version_id: "software-engineering@3",
+        document_json: include_str!("../../packs/official/programming/python-correctness.json"),
     },
     OfficialPackSource {
         pack_id: "official-reasoning-math-knowledge",
@@ -395,13 +402,14 @@ mod tests {
         let first = list_official_packs().expect("official packs validate");
         let second = list_official_packs().expect("official packs validate twice");
         assert_eq!(first, second);
-        assert_eq!(first.len(), 3);
+        assert_eq!(first.len(), 4);
         assert_eq!(
             first
                 .iter()
                 .map(|pack| pack.pack_id.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "official-programming-python-correctness",
                 "official-programming-software-engineering",
                 "official-reasoning-math-knowledge",
                 "official-writing-analysis-instruction",
@@ -425,9 +433,14 @@ mod tests {
         let programming = get_official_pack("official-programming-software-engineering")
             .unwrap()
             .unwrap();
+        assert_eq!(programming.summary.version_id, "software-engineering@2");
         assert_eq!(
             programming.summary.execution.sandbox_status,
-            OfficialPackSandboxStatus::Unavailable
+            OfficialPackSandboxStatus::Required
+        );
+        assert_eq!(
+            programming.summary.execution.status,
+            super::OfficialPackStatus::Available
         );
         assert_eq!(
             programming.summary.execution.execution_boundary,
@@ -436,6 +449,26 @@ mod tests {
         assert_eq!(
             programming.summary.execution.evaluation_mode,
             OfficialPackEvaluationMode::Mixed
+        );
+
+        let python = get_official_pack("official-programming-python-correctness")
+            .unwrap()
+            .unwrap();
+        assert_eq!(python.summary.version_id, "software-engineering@3");
+        let python_document: serde_json::Value =
+            serde_json::from_str(&python.document_json).expect("version 3 JSON is valid");
+        assert_eq!(
+            python_document["benchmarkVersion"]["tasks"][0]["cases"][0]["dockerVerifierContract"]
+                ["id"],
+            "fixed_function_python_v1"
+        );
+        assert_eq!(
+            python_document["benchmarkVersion"]["versionId"],
+            "software-engineering@3"
+        );
+        assert_eq!(
+            python.summary.execution.execution_boundary,
+            OfficialPackExecutionBoundary::DockerRequired
         );
 
         let reasoning = get_official_pack("official-reasoning-math-knowledge")

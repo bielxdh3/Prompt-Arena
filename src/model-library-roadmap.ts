@@ -21,6 +21,61 @@ export function findModelOperation(model: ModelRecord, operations: readonly Mode
   return latest;
 }
 
+/** A single linear pass replaces a full history scan for every catalog row.
+ * Operations must be newest-first, with active operations before terminal history.
+ */
+type IndexedOperation = { operation: ModelOperation; position: number };
+
+export function indexRecentModelOperations(operations: readonly ModelOperation[]): Map<string, IndexedOperation> {
+  const index = new Map<string, IndexedOperation>();
+  for (const [position, operation] of operations.entries()) {
+    if (operation.modelId !== null) {
+      const key = JSON.stringify(["model", operation.modelId]);
+      if (!index.has(key)) index.set(key, { operation, position });
+    }
+    if (operation.kind === "download") {
+      const key = JSON.stringify(["download", operation.sourceId, operation.modelName]);
+      if (!index.has(key)) index.set(key, { operation, position });
+    }
+    if (operation.kind === "import" && operation.managedPath !== null) {
+      const key = JSON.stringify(["import", operation.managedPath]);
+      if (!index.has(key)) index.set(key, { operation, position });
+    }
+  }
+  return index;
+}
+
+export function indexedModelOperation(model: ModelRecord, index: ReadonlyMap<string, IndexedOperation>): ModelOperation | null {
+  const candidates = [
+    index.get(JSON.stringify(["model", model.modelId])),
+    index.get(JSON.stringify(["download", model.sourceId, model.name])),
+    ...(model.managedPath ?? model.path ? [index.get(JSON.stringify(["import", model.managedPath ?? model.path]))] : []),
+  ].filter((item): item is IndexedOperation => item !== undefined)
+    .sort((left, right) => Number(isActiveInstall(right.operation)) - Number(isActiveInstall(left.operation)) || left.position - right.position);
+  return candidates[0]?.operation ?? null;
+}
+
+/** Defensive de-duplication across the always-live and paged terminal sections. */
+export function visibleModelOperationPage(
+  active: readonly ModelOperation[],
+  history: readonly ModelOperation[],
+): ModelOperation[] {
+  const seen = new Set<string>();
+  return [...active, ...history].filter((operation) => {
+    if (seen.has(operation.operationId)) return false;
+    seen.add(operation.operationId);
+    return true;
+  });
+}
+
+/** Null from the displayed older page means the end, not a fallback to page zero. */
+export function nextModelHistoryOffset(
+  recentNextOffset: number | null,
+  olderPage: { nextOffset: number | null } | null,
+): number | null {
+  return olderPage ? olderPage.nextOffset : recentNextOffset;
+}
+
 export function deriveModelAvailability(model: ModelRecord, operation: ModelOperation | null = null): ModelAvailabilityView {
   if (operation && isActiveInstall(operation)) return { state: "downloading", operation, actions: ["cancel"] };
   if (model.availability === "available") {

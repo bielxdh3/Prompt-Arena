@@ -24,6 +24,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  windows-installer-preflight:
+    name: windows installer launcher preflight (no build)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # actions/checkout v7
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # actions/setup-node v7
+        with:
+          node-version: 22
+      - name: Probe Windows Installer launcher with missing package
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
+        run: node scripts/verify-package.mjs --msiexec-preflight-only
+      - name: Upload Windows Installer preflight diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        with:
+          name: prompt-arena-msiexec-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/*.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
   package:
     name: ${{ matrix.platform }} installers
     strategy:
@@ -37,12 +64,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out exact ref
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # actions/checkout v7
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
+      - name: Resolve checked-out commit
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # actions/setup-node v7
         with:
           node-version: 22
           cache: npm
@@ -72,7 +104,7 @@ jobs:
           npm run build
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # dtolnay/rust-toolchain stable
         with:
           components: rustfmt
 
@@ -94,6 +126,8 @@ jobs:
 
       - name: Build Windows MSI installer
         if: runner.os == 'Windows'
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run build:windows-msi
 
       - name: Build Linux packages
@@ -124,16 +158,112 @@ jobs:
 
       - name: Verify Windows packages and run clean-install smoke
         if: runner.os == 'Windows'
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
         run: npm run verify:package -- --platform windows --smoke
+
+      - name: Record Windows MSI prerequisite and signature evidence
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:PACKAGE_DIAGNOSTICS_DIR | Out-Null
+          $report = Join-Path $env:PACKAGE_DIAGNOSTICS_DIR 'msi-prerequisites.txt'
+          "OS: $([Environment]::OSVersion.Version)" | Set-Content -LiteralPath $report
+          # Only the effective token role, never the user name or group list.
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          "Runner effective Administrator role: $($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))" | Add-Content -LiteralPath $report
+          # WiX checks this WebView2 client ID; query both machine registry views and user scope.
+          $webViewId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtimeKeys = @(
+            "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$webViewId"
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$webViewId"
+            "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$webViewId"
+          )
+          $runtime = @(Get-ItemProperty -LiteralPath $runtimeKeys -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty pv -Unique)
+          "WebView2 Runtime registered versions: $(if ($runtime.Count) { $runtime -join ', ' } else { 'none detected in standard EdgeUpdate keys' })" | Add-Content -LiteralPath $report
+          $msi = @(Get-ChildItem package-artifacts -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+          if ($msi.Count -eq 1) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $msi[0].FullName
+            "MSI Authenticode status: $($signature.Status)" | Add-Content -LiteralPath $report
+          } else {
+            "Normalized MSI candidates: $($msi.Count)" | Add-Content -LiteralPath $report
+          }
+
+      - name: Capture Windows Installer failure context
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PACKAGE_DIAGNOSTICS_DIR: ${{ runner.temp }}\prompt-arena-msi-diagnostics
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:PACKAGE_DIAGNOSTICS_DIR | Out-Null
+          $report = Join-Path $env:PACKAGE_DIAGNOSTICS_DIR 'windows-installer-context.txt'
+          "Captured at: $(Get-Date -Format o)" | Set-Content -LiteralPath $report
+          'Windows Installer service:' | Add-Content -LiteralPath $report
+          try {
+            Get-Service -Name msiserver -ErrorAction Stop | Format-List Name,Status,StartType | Out-String | Add-Content -LiteralPath $report
+          } catch {
+            "Service query failed: $_" | Add-Content -LiteralPath $report
+          }
+          'msiexec processes:' | Add-Content -LiteralPath $report
+          try {
+            Get-CimInstance Win32_Process -Filter "Name = 'msiexec.exe'" -ErrorAction Stop |
+              Select-Object ProcessId,ParentProcessId,CreationDate,ExecutablePath |
+              Format-List | Out-String | Add-Content -LiteralPath $report
+          } catch {
+            "Process query failed: $_" | Add-Content -LiteralPath $report
+          }
+          'Recent MsiInstaller application events:' | Add-Content -LiteralPath $report
+          try {
+            Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='MsiInstaller';StartTime=(Get-Date).AddMinutes(-25)} -MaxEvents 30 -ErrorAction Stop |
+              Select-Object TimeCreated,Id,LevelDisplayName,ProviderName |
+              Format-List | Out-String | Add-Content -LiteralPath $report
+          } catch {
+            "Event query failed or no events found: $_" | Add-Content -LiteralPath $report
+          }
+
+      - name: Upload Windows MSI smoke diagnostics
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        with:
+          name: prompt-arena-msi-diagnostics-${{ steps.commit.outputs.sha }}
+          # Raw verbose .log files may contain installer properties or secrets.
+          # Upload only bounded, allowlisted diagnostic summaries to PR runs.
+          path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/*.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failed Windows package candidates for reproduction
+        if: failure() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.ref == 'main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        with:
+          name: prompt-arena-windows-failed-smoke-${{ steps.commit.outputs.sha }}
+          path: |
+            package-artifacts/
+            checksums-sha256.txt
+            package-verification.txt
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Verify Linux packages and run package/app smoke
         if: runner.os == 'Linux'
         run: npm run verify:package -- --platform linux --smoke
 
+      - name: Add checked-out commit to verification evidence
+        shell: bash
+        env:
+          CHECKED_OUT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          printf 'Checked-out commit SHA: %s\n' "$CHECKED_OUT_SHA" >> package-verification.txt
+
       - name: Upload unsigned installers and checksums
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
         with:
-          name: prompt-arena-${{ matrix.platform }}-${{ github.sha }}
+          name: prompt-arena-${{ matrix.platform }}-${{ steps.commit.outputs.sha }}
           path: |
             package-artifacts/
             checksums-sha256.txt

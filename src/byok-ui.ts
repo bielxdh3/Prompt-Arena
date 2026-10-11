@@ -308,6 +308,10 @@ export function formatStorageStatus(value: SecureStorageStatus | null | undefine
   }
 }
 
+export function providerActionsAvailable(value: SecureStorageStatus | null | undefined): boolean {
+  return value === "available";
+}
+
 export function formatCredentialSource(value: CredentialSource | null | undefined): string {
   switch (value) {
     case "os_secure_storage": return translate("OS secure storage");

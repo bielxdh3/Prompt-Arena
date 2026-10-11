@@ -509,6 +509,7 @@ mod tests {
             let attempt = Attempt {
                 attempt_id: attempt_id.clone(),
                 run_id: run_id.clone(),
+                task_id: None,
                 profile_revision_id: "profile@1".to_owned(),
                 case_id: "case-1".to_owned(),
                 status: "completed".to_owned(),
@@ -529,6 +530,7 @@ mod tests {
                 &Run {
                     run_id: run_id.clone(),
                     benchmark_version_id: "bench@1".to_owned(),
+                    task_id: None,
                     profile_revision_ids: vec!["profile@1".to_owned()],
                     status: "completed".to_owned(),
                     started_at: "100".to_owned(),

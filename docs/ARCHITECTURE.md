@@ -18,25 +18,31 @@ Rust runtime modules (Phase 03 adapter; invoked by the bounded worker)
         └─ loopback-only Ollama adapter
 ```
 
-The UI owns presentation state only. The Tauri entrypoint registers the small command set explicitly: status and
-benchmark validation/version persistence, typed benchmark draft list/read/save/publish commands, one published benchmark
-version read, profile-revision list/register commands, fixed local Ollama model discovery, `execute_run_once`, and the
-Runs read commands `list_runs`, `list_run_attempts`, and `get_run_status`. It does not expose an arbitrary shell,
-filesystem browser, configurable provider proxy, account flow, endpoint or credential input, or telemetry path.
-`app_status` reports `storageState: "local"` because the commands initialize and use the app-owned SQLite/artifact
-store.
+The UI owns presentation state only. The Tauri entrypoint registers typed commands for benchmark/profile/evidence
+storage, local model discovery and managed operations, the one-shot local worker, bounded result reads, and the explicit
+BYOK provider configuration and generation flow. It does not expose an arbitrary shell, arbitrary filesystem browser,
+account sync, or generic provider proxy. Local runtime endpoints are loopback-only. BYOK accepts bounded HTTPS provider
+configuration and requires per-request network consent; Windows uses the OS credential store and unsupported
+credential/transport platforms fail closed. `app_status` reports `storageState: "local"` because the commands initialize
+and use the app-owned SQLite/artifact store.
 
 The worker reads one JSON request from stdin, emits one typed JSON response, and exits. It has no daemon loop, shell
 escape, hosted inference client, or implicit background persistence. `execute_run_once` resolves only the fixed worker
 binary beside the app executable in development or the target-triple-suffixed `binaries/prompt-arena-worker-<TARGET_TRIPLE>`
 Tauri resource when packaged, sends one bounded `GenerateOnce` request without arbitrary arguments, waits for the child
-to exit, and persists the returned terminal outcome in the app-owned store. Browser preview cannot invoke this command
-and never creates sample runs.
+to exit, and persists the returned terminal outcome in the app-owned store. Cancellation is scoped to an active run ID:
+if it wins before the app receives the worker's terminal response, Tauri stops the app-owned worker and asks a fresh
+one-shot worker to persist a typed cancelled outcome. A terminal response already received by the app is preserved.
+After the terminal outcome is assembled, further cancellation is rejected while the run ID remains reserved until
+persistence finishes. Stopping the local client does not guarantee that the model service stops inference. Browser
+preview cannot invoke this command and never creates sample runs.
 
 `runtime.rs` defines the normalized request, response, chunk, model, health, capability, cancellation, and typed error
 contracts. Providers negotiate both capabilities and generation parameters before sending a request. `ollama.rs`
-implements health, model listing/metadata, chat/text generation, and NDJSON streaming against an already-running local
-Ollama service. Its standard-library HTTP client accepts only explicit plain-HTTP loopback endpoints, rejects
+implements health, model listing/metadata, chat/text generation, and NDJSON streaming against a local Ollama service;
+the bounded `start_local_ollama` command can start that service without a shell. `openai_compatible.rs` implements the
+LM Studio and llama.cpp loopback adapters. Local adapters use the standard-library HTTP client, which accepts only
+explicit plain-HTTP loopback endpoints, rejects
 credentials, query strings, fragments, and non-loopback hosts, and bounds each status/header/NDJSON line to 64 KiB,
 non-stream bodies to 16 MiB, and cumulative streamed NDJSON payload bytes to 16 MiB. Every response shares a finite
 10-minute overall read deadline by default, configurable from 1 ms through 60 minutes, in addition to the 500 ms
@@ -44,11 +50,11 @@ per-read socket timeout. The deadline spans HTTP headers, bodies, and NDJSON chu
 supported within the configured window. Cancellation is cooperative between socket reads and chunks; it does not
 force-kill a remote process.
 
-Phase 06 uses only the adapter's fixed local default, `http://127.0.0.1:11434`, for the Models surface. The discovery
-command accepts no endpoint or credential and returns at most 512 normalized model records. Each record's serialized
-metadata is capped at 256 KiB, bounded text fields are validated, and the result is sorted by model name and digest.
-Unavailable and malformed runtime responses remain typed `RuntimeError` variants mapped through the desktop bridge;
-there is no model download, deletion, cloud provider, or runtime process-lifecycle command.
+The Models surface uses a fixed Ollama default plus explicitly selected loopback endpoints for LM Studio and llama.cpp.
+Discovery returns at most 512 normalized model records. Each record's serialized metadata is capped at 256 KiB,
+bounded text fields are validated, and results are sorted by model name and digest. Managed operations include Ollama
+pull and app-managed GGUF import/removal; importing GGUF does not launch a llama.cpp server. Unavailable and malformed
+runtime responses remain typed `RuntimeError` variants mapped through the desktop bridge.
 
 The storage service owns `<root>/prompt-arena.sqlite3` and `<root>/artifacts/`. Migrations `0001_foundation.sql`,
 `0002_core_arena.sql`, and `0003_benchmark_drafts.sql` create migration, pack, benchmark-version, benchmark-draft,
@@ -127,8 +133,8 @@ multi-rater review, cross-run ranking, rubric authoring, or broader scoring/anal
 
 ## Phase 12 bounded official-pack catalog
 
-Three repository-owned benchmark-v1 documents live under `packs/official`: programming/software-engineering,
-reasoning/math/knowledge, and writing/analysis/instruction-following. The Rust catalog loads them with `include_str!`,
+Four repository-owned benchmark-v1 documents live under `packs/official`: programming/software-engineering@2,
+programming/Python functional correctness@3, reasoning/math/knowledge, and writing/analysis/instruction-following. The Rust catalog loads them with `include_str!`,
 passes each document through the existing serde/manual validator, canonicalizes the validated shape, and derives a stable
 SHA-256 content hash. Its typed list/get surface returns summaries, execution metadata, and a validated canonical document
 without opening storage or creating a benchmark version. Unknown metadata remains part of the canonical document contract;
@@ -136,14 +142,31 @@ the catalog does not weaken schema, path, hash, or immutable-storage rules.
 
 The Benchmarks UI treats these records as read-only source material. Desktop mode can inspect pack identity, version,
 hash, capability/evaluation metadata, and canonical JSON rendered as plain text. Browser preview shows an explicit no-read
-state and invokes no catalog command. The programming pack is intentionally limited to static text reasoning and marks
-`sandboxStatus: unavailable`; Docker-backed code execution, filesystem access, and unsafe local execution remain outside
-this phase.
+state and invokes no catalog command. The programming/software-engineering@2 pack has two implementation-owned, versioned
+Docker text contracts for its code-review/API prose cases. The backend binds each allowlisted verifier ID from the immutable
+stored case, runs the normal one-shot text-generation worker with a temporary text-only plan, then checks the bounded
+response in a pinned Python image. The separate `software-engineering@3` pack contains one fixed Python function challenge.
+For that contract, the fixed Rust-owned harness parses the generated source, permits only one named function with an
+allowlisted AST subset, then executes that restricted function against fixed hidden cases in the same isolated image.
+The image, command, harness, test expectations, and accepted verifier IDs are fixed in Rust; imported case fields cannot
+choose them. This is one restricted challenge, not general-purpose code execution. The evaluator refuses remote Docker
+contexts, requires the pinned image already present (`--pull=never`), and records daemon/image/timeout/output/cleanup
+failures without turning infrastructure errors into a model score or falling back to host execution. The container has
+no network or host mounts, uses a non-root UID, a read-only root filesystem, dropped capabilities, no-new-privileges,
+and CPU, memory, process, wall-clock, input, and combined-output bounds. Arena user-triggered cancellation propagates to
+the Docker evaluator, which kills the Docker CLI process and attempts named-container cleanup; the single-model benchmark
+screen currently has no cancel control. Evaluator wall-clock timeout uses the same process-termination and cleanup path.
+
+Docker is an additional local dependency only when running these cases. Rootless daemons are supported at the standard
+`/run/user/<uid>/docker.sock` endpoint; the app also accepts the standard local system sockets and Docker Desktop named
+pipes. Access to a rootful Docker socket effectively grants host-level daemon control, and even rootless containers
+share the host kernel, so the Docker daemon/operator and kernel remain part of the trust boundary.
 
 ## Phase 13 bounded model-library baseline
 
-The existing Models surface remains the only fixed-loopback Ollama discovery/profile boundary. A separate read-only
-`read_hardware_snapshot` command returns a typed local baseline: platform, logical CPU count, RAM bytes when the safe
+The Models surface discovers Ollama, LM Studio, and llama.cpp models only through selected loopback sources; there is
+no cloud discovery. A separate read-only `read_hardware_snapshot` command returns a typed local baseline: platform,
+logical CPU count, RAM bytes when the safe
 platform source provides them, and explicit GPU/VRAM unavailable metrics when feature detection is not implemented.
 Logical CPUs use `std::thread::available_parallelism`; Linux RAM reads only the bounded fixed `/proc/meminfo` file; Windows
 RAM uses a narrow `GetPhysicallyInstalledSystemMemory` binding. The command does not spawn processes, inspect model paths,
@@ -151,9 +174,9 @@ download files, or emit telemetry.
 
 The UI keeps recommendation thresholds in React state only. A pure helper compares bounded Ollama-reported model size
 with detected RAM and returns Ideal, Acceptable, Heavy, or Unavailable plus an explanation. This is a transparent heuristic,
-not a runtime admission check or empirical performance model. Unified search/downloads, duplicate management, hardware
-overrides, GPU/VRAM parity, and empirical history remain future work. Browser preview invokes no model/profile/hardware
-command and does not invent a hardware snapshot.
+not a runtime admission check or empirical performance model. Unified multi-source search, GPU/VRAM parity, and
+empirical history remain incomplete. Browser preview invokes no model/profile/hardware command and does not invent a
+hardware snapshot.
 
 ## Phase 14 bounded comparability diagnostic
 
@@ -165,8 +188,15 @@ ties; this is a diagnostic ordering/tie view, not an official ranking or score.
 
 The panel is mounted only inside the existing parent-owned blind-evaluation gate that permits attempt evidence. It does
 not render model/profile/provider/metrics/objective evidence or attempt IDs while that gate suppresses evidence, and
-browser preview reads no runs or attempts. Cross-run ranking, regression, tournaments, AI judging, calibration, cost
-analysis, and persistent comparability records remain future work.
+browser preview reads no runs or attempts. Separate Insights helpers compare saved single-model records and Arena summaries,
+calculate repeated-run Welch/Wilson intervals for single-model samples, and compute deterministic Elo v1 or regularized
+Bradley–Terry v1 global and taxonomy-specific snapshots from objective Arena pass rates. Task categories are retained only
+when the stored task category ID resolves in the benchmark's category tree. Elo's displayed `400 / sqrt(samples)` is a
+rough heuristic. Bradley–Terry uncertainty uses CR1 source-cluster standard errors when Arena summaries identify the
+source clusters, a prior-only standard deviation when only one cluster is available, and legacy Laplace standard errors
+when outcomes have no source IDs. These values are not calibrated confidence intervals. Repeated regression intervals
+apply Bonferroni adjustment across the seven reported metrics and target at least 95% family-wise coverage; legacy
+pointwise records remain readable. Tournament policy, AI judging, and calibrated rating intervals remain future work.
 
 ## Phase 15 bounded local appearance preferences
 
@@ -179,27 +209,23 @@ When Tauri is present, the UI reads and writes one versioned local webview-stora
 appearance preferences. Browser preview does not access localStorage, writes nothing, and says so explicitly. There is no
 theme import/export, account or cloud sync, external font loading, telemetry, or macOS support in this slice.
 
-## Phase 16 external-provider architecture and cost-safety foundation
+## Phase 16 external providers and cost controls
 
-The provider foundation is pure TypeScript data and arithmetic only. A fixed catalog names generic OpenAI-compatible,
-OpenAI, Anthropic, and Gemini identities and records capability status, external-transport status, credential-source state,
-and identity confidence. The catalog is descriptive: all external execution and discovery are not wired, and local Ollama
-remains the only executable runtime.
-
-The dated `PriceTableSnapshot` shape and cost helper accept no credentials and make no network calls. Estimates validate
-provider/model/date/price/usage bounds and return unavailable when prices are missing or invalid. Budget decisions are
-explicit allow/confirm/deny outcomes against optional confirmation and ceiling values. Provider selection sanitization
-keeps only a known provider and bounded model identity, discarding unknown fields. Settings renders this boundary read-only;
-actual adapters, secure credential storage, user-selected network consent, usage/cost history, and provider identity
-verification remain future work.
+Four typed provider adapters (OpenAI-compatible, OpenAI, Anthropic, and Gemini) are wired to a separate desktop BYOK
+flow. HTTPS endpoints, models, request/response sizes, timeouts, returned usage, and cost policies are bounded. The
+user supplies a key, the Windows implementation stores it in Windows Credential Manager, and execution requires
+explicit external-network consent. Linux currently reports secure credential/transport support unavailable and refuses
+execution. Prompt and response text and credentials are excluded from persisted external-generation history; the
+history stores sanitized provider/model/usage/cost/identity/budget/network evidence. Provider-reported identity is not
+independently verified. Price snapshots are dated user-supplied inputs, not a live price feed.
 
 ## Future boundaries
 
-Broader run authoring and model execution controls beyond this bounded Arena entry flow, richer/multi-rater human
-evaluation, AI judging, cross-run ranking, broader official-pack coverage, full model-library management/downloads/deletion,
-imports and broader benchmark-authoring flows, external/cloud provider adapters, interruption recovery, and any
-long-lived worker/runtime lifecycle remain later phases. They must keep provenance, effective configuration, error
-taxonomy, and historical records explicit rather than smuggling behavior into the current command or worker boundary.
+Remaining gaps include calibrated rating intervals, semantic-preservation guarantees for every robustness transform,
+functional-verifier integration into coding robustness, authenticated provenance for imported Repro Bundles, complete
+hardware/energy telemetry, Linux BYOK credential/transport support, broader official coding challenge coverage,
+AI judging, multi-rater evaluation, user-triggered Docker cancellation, and interruption recovery. Improvements must preserve provenance, effective
+configuration, error taxonomy, and immutable historical records.
 
 ## Completion stack: multi-model Arena and delivery
 
@@ -215,10 +241,14 @@ the storage service, and returns bounded text without filesystem paths. The Aren
 blind cards, and export. Blind locks still use the existing immutable per-run evaluation record; the UI never shows model,
 provider, timing, token, objective, or rank metadata while cards are unlocked.
 
-Objective helper policies live in `src/objective-verifiers.ts` and are bounded to local exact, numeric-tolerance,
-classification, JSON-required-field, and safe-pattern checks. They are intentionally not treated as persisted benchmark
-verifier authority until the benchmark document and Rust evidence schema carry the same policy.
+Objective verifier policies are stored in the published benchmark schema and are bounded to local exact,
+numeric-tolerance, classification, JSON-required-field, and safe-pattern checks. The Tauri execution path derives the
+verifier policy and expected answer from the stored benchmark task, then binds them with the canonical prompt, selected
+case, typed robustness transform, Docker policy, and system prompt derived from the exactly matched stored profile.
+Renderer-supplied execution fields cannot replace those stored authorities.
 
-The packaging workflow is separate from pull-request CI and is `workflow_dispatch` only. It checks out an exact ref,
-repeats boundary/audit/frontend/Rust validation, builds Tauri's Windows NSIS/MSI and Linux deb/AppImage targets, writes
-SHA-256 checksums, and uploads artifacts. It does not publish a release, tag, deploy, or create secrets.
+The packaging workflow is separate from pull-request CI and supports `pull_request` targeting `main`, reusable
+`workflow_call`, and manual `workflow_dispatch` triggers. It checks out the requested ref, resolves the actual checked-out
+commit SHA, repeats boundary/audit/frontend/Rust validation, builds Tauri's Windows NSIS/MSI and Linux deb/AppImage
+targets, writes SHA-256 checksums, records that SHA in package verification evidence, and names the uploaded artifact
+with that SHA. It does not publish a release, tag, deploy, or create secrets.

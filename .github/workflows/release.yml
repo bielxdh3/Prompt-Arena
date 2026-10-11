@@ -1,4 +1,6 @@
-name: Publish beta release
+# This workflow only validates and packages candidates. Publishing stays disabled
+# until a server-enforced publisher boundary protects against branch workflow copies.
+name: Validate release candidate (publishing disabled)
 
 on:
   workflow_dispatch:
@@ -8,27 +10,14 @@ on:
         required: true
         default: 0.1.4
       ref:
-        description: Exact commit, branch, or tag to release
+        description: Exact reviewed 40-character commit SHA merged to main
         required: true
-        default: main
-      prerelease:
-        description: Publish as a GitHub prerelease
-        required: true
-        type: boolean
-        default: true
-      confirm:
-        description: Type RELEASE to authorize publication
-        required: true
-  push:
-    branches: [main]
-    paths:
-      - docs/releases/v0.1.4.md
-
 permissions:
-  contents: write
+  contents: read
+  pull-requests: read
 
 concurrency:
-  group: publish-release-${{ inputs.version || '0.1.4' }}
+  group: release-candidate-${{ inputs.version || '0.1.4' }}
   cancel-in-progress: false
 
 jobs:
@@ -36,31 +25,91 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      ref: ${{ steps.meta.outputs.ref }}
-      prerelease: ${{ steps.meta.outputs.prerelease }}
+      ref: ${{ steps.commit.outputs.ref }}
     steps:
-      - name: Resolve release metadata
+      - name: Resolve candidate metadata
         id: meta
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_REF: ${{ inputs.ref }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ inputs.confirm }}" != "RELEASE" ]; then
-              echo "Manual release requires confirm=RELEASE." >&2
-              exit 1
-            fi
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "ref=${{ inputs.ref }}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.1.4" >> "$GITHUB_OUTPUT"
-            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Candidate version must be a valid semantic version without a leading v." >&2
+            exit 1
           fi
+          if [[ ! "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Release ref must be an exact 40-character commit SHA." >&2
+            exit 1
+          fi
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
 
-      - name: Check out release ref
-        uses: actions/checkout@v7
+      - name: Check out candidate ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # actions/checkout v7
         with:
           ref: ${{ steps.meta.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Require an approved commit merged to main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CANDIDATE_SHA: ${{ steps.meta.outputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$CANDIDATE_SHA" FETCH_HEAD; then
+            echo "Candidate commit is not reachable from main." >&2
+            exit 1
+          fi
+
+          approved=false
+          while IFS= read -r pull_number; do
+            [ -n "$pull_number" ] || continue
+            pull=$(gh api "repos/$REPOSITORY/pulls/$pull_number")
+            base=$(jq -r '.base.ref' <<< "$pull")
+            merged_at=$(jq -r '.merged_at // empty' <<< "$pull")
+            merge_sha=$(jq -r '.merge_commit_sha // empty' <<< "$pull")
+            head_sha=$(jq -r '.head.sha' <<< "$pull")
+            author=$(jq -r '.user.login' <<< "$pull")
+            if [ "$base" != "main" ] || [ -z "$merged_at" ] || [ "${merge_sha,,}" != "${CANDIDATE_SHA,,}" ]; then
+              continue
+            fi
+
+            reviews=$(gh api --paginate "repos/$REPOSITORY/pulls/$pull_number/reviews" | jq -s 'add')
+            reviewer_logins=$(jq -r --arg head "$head_sha" --arg author "$author" '
+              group_by(.user.login)
+              | map(sort_by(.submitted_at) | last)
+              | .[]
+              | select(.state == "APPROVED" and .commit_id == $head and .user.login != $author)
+              | .user.login
+            ' <<< "$reviews")
+            while IFS= read -r reviewer; do
+              [ -n "$reviewer" ] || continue
+              permission=$(gh api "repos/$REPOSITORY/collaborators/$reviewer/permission" --jq '.permission')
+              case "$permission" in
+                write|maintain|admin)
+                  approved=true
+                  break
+                  ;;
+              esac
+            done <<< "$reviewer_logins"
+            if [ "$approved" = "true" ]; then
+              break
+            fi
+          done < <(gh api --paginate --jq '.[] | select(.base.ref == "main" and .merged_at != null) | .number' "repos/$REPOSITORY/commits/$CANDIDATE_SHA/pulls")
+
+          if [ "$approved" != "true" ]; then
+            echo "Candidate commit must be the merge commit of a reviewed pull request to main." >&2
+            exit 1
+          fi
+
+      - name: Pin validated candidate commit
+        id: commit
+        shell: bash
+        run: echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate source version and notes
         shell: bash
@@ -76,77 +125,3 @@ jobs:
     uses: ./.github/workflows/package.yml
     with:
       ref: ${{ needs.validate.outputs.ref }}
-
-  publish:
-    needs: [validate, package]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out release ref
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.validate.outputs.ref }}
-
-      - name: Download packaged artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: prompt-arena-*
-          path: release-artifacts
-
-      - name: Normalize release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-upload
-
-          for artifact_dir in release-artifacts/prompt-arena-*; do
-            [ -d "$artifact_dir" ] || continue
-            artifact_name=$(basename "$artifact_dir")
-            case "$artifact_name" in
-              prompt-arena-windows-*) platform=windows ;;
-              prompt-arena-linux-*) platform=linux ;;
-              *) platform=unknown ;;
-            esac
-
-            while IFS= read -r -d '' file; do
-              base=$(basename "$file")
-              case "$base" in
-                checksums-sha256.txt)
-                  cp "$file" "release-upload/checksums-sha256-${platform}.txt"
-                  ;;
-                package-verification.txt)
-                  cp "$file" "release-upload/package-verification-${platform}.txt"
-                  ;;
-                msi-build-evidence.txt)
-                  cp "$file" "release-upload/msi-build-evidence-${platform}.txt"
-                  ;;
-                *.msi|*.exe|*.deb|*.AppImage)
-                  cp "$file" "release-upload/$base"
-                  ;;
-              esac
-            done < <(find "$artifact_dir" -type f -print0)
-          done
-
-          test -n "$(find release-upload -type f -print -quit)" || { echo "No releasable assets were normalized." >&2; exit 1; }
-
-      - name: Publish or refresh GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate.outputs.version }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          TAG="v${VERSION}"
-          NOTES="docs/releases/v${VERSION}.md"
-          mapfile -t FILES < <(find release-upload -maxdepth 1 -type f | sort)
-          test ${#FILES[@]} -gt 0 || { echo "No releasable artifacts found." >&2; exit 1; }
-
-          FLAGS=(--title "Prompt Arena ${TAG} Beta" --notes-file "$NOTES" --target "${{ needs.validate.outputs.ref }}")
-          if [ "$PRERELEASE" = "true" ]; then FLAGS+=(--prerelease); fi
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "Prompt Arena ${TAG} Beta" --notes-file "$NOTES"
-            gh release upload "$TAG" "${FILES[@]}" --clobber
-          else
-            gh release create "$TAG" "${FILES[@]}" "${FLAGS[@]}"
-          fi

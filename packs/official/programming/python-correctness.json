@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "kind": "benchmark",
+  "pack": {
+    "packId": "official-programming-python-correctness",
+    "name": "Official Programming / Python Functional Correctness",
+    "description": "A new immutable coding challenge version that checks one generated Python function in a pinned, isolated local Docker container.",
+    "categories": [
+      {
+        "categoryId": "programming",
+        "name": "Programming",
+        "children": [
+          {
+            "categoryId": "software-engineering",
+            "name": "Software Engineering",
+            "children": [
+              {
+                "categoryId": "functional-correctness",
+                "name": "Functional Correctness",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "benchmark": {
+    "benchmarkId": "software-engineering",
+    "name": "Software Engineering Essentials",
+    "description": "Version 3 adds one fixed Python function challenge with implementation-owned hidden cases in a restricted Docker harness; version 2 remains available unchanged."
+  },
+  "benchmarkVersion": {
+    "versionId": "software-engineering@3",
+    "versionNumber": 3,
+    "defaultRepetitions": 1,
+    "tasks": [
+      {
+        "taskId": "implement-user-lookup",
+        "categoryId": "functional-correctness",
+        "name": "Implement exact user lookup",
+        "prompt": "Implement a Python function named find_user(users, user_id). It must return the first user dictionary whose id exactly equals user_id, or None when no user matches. Preserve the input list and its records. Return only the function source code, with no Markdown fences or explanation.",
+        "cases": [
+          {
+            "caseId": "exact-user-lookup",
+            "prompt": "Implement find_user(users, user_id) in Python. Return the first matching user dictionary when its id exactly equals user_id; return None if absent. Do not mutate users. Return only the function source code, without fences or prose.",
+            "dockerVerifierContract": {
+              "version": 1,
+              "id": "fixed_function_python_v1"
+            },
+            "executionBoundary": "docker_required",
+            "artifacts": []
+          }
+        ],
+        "rubricId": "functional-correctness",
+        "difficulty": 2,
+        "context": "The model output is bounded hostile Python source sent only on stdin to a fixed harness. The harness accepts one restricted function, applies fixed hidden cases, and uses no network, mounts, host fallback, or model-selected tests."
+      }
+    ],
+    "rubrics": [
+      {
+        "rubricId": "functional-correctness",
+        "name": "Functional correctness",
+        "criteria": [
+          {
+            "criterionId": "behavior",
+            "name": "Required behavior",
+            "description": "Returns the first exact ID match and returns None when no record matches.",
+            "weight": 0.7
+          },
+          {
+            "criterionId": "input-integrity",
+            "name": "Input integrity",
+            "description": "Leaves the supplied users list and records unchanged.",
+            "weight": 0.3
+          }
+        ]
+      }
+    ]
+  },
+  "execution": {
+    "capability": "text_generation",
+    "status": "available",
+    "requiresSandbox": true,
+    "sandboxStatus": "required",
+    "executionBoundary": "docker_required",
+    "evaluationMode": "mixed",
+    "requirement": "A local Docker daemon and the pinned Python image are required. Model-generated Python source is evaluated by a fixed restricted harness; host execution is prohibited.",
+    "notes": "Source is bounded and supplied only through stdin. The pinned image runs without network or host mounts under non-root and resource limits."
+  },
+  "materialization": {
+    "kind": "deterministic_seeded",
+    "algorithm": "sha256-v1"
+  }
+}

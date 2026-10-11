@@ -4,6 +4,16 @@ All notable user-visible changes to Prompt Arena are documented here. The projec
 
 ## [Unreleased]
 
+### Benchmarking and analysis
+- Added bounded output-token and Ollama-only context-window controls (maximum 32,768) to immutable profile revisions and carried them into run plans.
+- Retained optional provider model digests and content hashes in immutable profile identity.
+- Added seven-metric family-wise repeated-run regression intervals while keeping legacy pointwise records readable with their original method labels.
+- Added source-cluster-aware Bradley–Terry standard errors and prior-only uncertainty when fewer than two source clusters exist; persisted rating snapshots retain their source summary IDs and hashes, and the uncertainty values are not calibrated confidence intervals.
+- Added a separate versioned Python functional-correctness challenge using one AST-restricted function and fixed hidden cases in the pinned Docker evaluator.
+- Added a version-3 Repro Bundle envelope with exact Rust-canonical benchmark bytes, task/case/hash checks, bounded output size, explicit model/runtime/seed identity, and click-triggered local benchmark reconstruction; Ollama digest checks run before and after Re-run, with a post-run loaded-model digest check and no catalog writes. These checks do not atomically pin a digest to the generation request. V1/v2 envelopes migrate read-only without rewriting payload identity.
+- Improved blind Arena presentations with per-presentation randomized response order, aggregate-only live progress, a concise screen-reader announcement, and saved-score retry recovery.
+- Added explicit keyboard focus to horizontally scrollable evidence tables.
+
 ### Repository and release engineering
 - Formalized contribution, governance, support, ownership, issue and PR templates.
 - Added Dependabot configuration for npm, Cargo and GitHub Actions.

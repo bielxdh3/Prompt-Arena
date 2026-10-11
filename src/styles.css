@@ -1113,6 +1113,11 @@ details.motion-disclosure[open] > :not(summary) > :nth-child(5) { transition-del
   border-radius: var(--radius-sm);
 }
 
+.evidence-table-wrap:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
 .evidence-table {
   width: 100%;
   min-width: 760px;
@@ -3284,6 +3289,12 @@ button.official-pack-row:hover,
   border-color: var(--color-accent);
 }
 
+.secondary-button[aria-pressed="true"] {
+  color: var(--color-accent-strong);
+  background: var(--color-surface-muted);
+  border-color: var(--color-accent);
+}
+
 .publish-button {
   color: var(--color-accent-strong);
 }
@@ -3878,6 +3889,7 @@ button.official-pack-row:hover,
 }
 .roadmap-features-view .arena-select-control select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .roadmap-table { overflow-x: auto; margin-top: 16px; }
+.roadmap-features-view .roadmap-table:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .roadmap-table table { width: 100%; min-width: 620px; border-collapse: collapse; }
 .roadmap-table th, .roadmap-table td { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); text-align: left; vertical-align: top; }
 .roadmap-table th { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -3922,6 +3934,10 @@ button.official-pack-row:hover,
 
 /* Roadmap evidence uses the same token vocabulary as the main shell. */
 .roadmap-features-view .arena-select-control select:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.repeated-regression-panel { display: grid; gap: 14px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-border); }
+.repeated-regression-panel h4 { margin: 0; color: var(--color-text); }
+.roadmap-features-view .repeated-run-select select { min-height: 10rem; height: auto; padding: 8px; }
+.roadmap-features-view .repeated-run-select option { padding: 4px 6px; }
 .roadmap-table th,
 .roadmap-table td { border-bottom-color: var(--color-border); }
 .roadmap-table th,
@@ -3930,7 +3946,8 @@ button.official-pack-row:hover,
 .roadmap-bundle-preview { background: var(--color-surface-muted); }
 
 /* Shared card containment: grid children and long labels may shrink within their panel. */
-.roadmap-features-view > .panel { padding: clamp(20px, 3vw, 32px); }
+.roadmap-features-view > .panel,
+.roadmap-features-view.panel { padding: clamp(20px, 3vw, 32px); }
 .arena-selection-grid > *, .metric-grid > *, .roadmap-table, .arena-custom-listbox { min-width: 0; max-width: 100%; }
 .metric-card strong, .run-row h3, .profile-record-row strong, .roadmap-table td { overflow-wrap: anywhere; }
 .arena-actions { flex-wrap: wrap; }

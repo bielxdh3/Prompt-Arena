@@ -69,6 +69,7 @@ export type ArenaExecutionRequest = {
 export type ExecutePlan = (plan: RunPlan) => Promise<PersistedExecution>;
 
 export type ArenaProgress = {
+  runId?: string;
   completed: number;
   total: number;
   currentCompetitor: string;
@@ -240,16 +241,7 @@ export function visibleArenaTelemetryError(error: string | null | undefined, bli
 }
 
 export function arenaTelemetryLabel(sample: ArenaSampleTelemetry, blind: boolean, locale: AppLocale = "en"): string {
-  const blindOrdinal = blindLabelOrdinal(sample.competitorId);
-  return blind
-    ? `${locale === "pt-BR" ? "Competidor" : "Competitor"} ${String.fromCharCode(65 + blindOrdinal)}`
-    : sample.competitorLabel;
-}
-
-function blindLabelOrdinal(value: string): number {
-  const key = opaqueBlindOrderKey(value);
-  const prefix = Number.parseInt(key.slice(0, 8), 16);
-  return Number.isFinite(prefix) ? prefix % 26 : 0;
+  return blind ? (locale === "pt-BR" ? "Competidor" : "Competitor") : sample.competitorLabel;
 }
 
 export type ArenaMetricSummary = {
@@ -331,7 +323,7 @@ export async function executeArena(
       const runId = `${request.arenaId}-${profileIndex + 1}-${repetition}`;
       const sampleIndex = profileIndex * request.repetitions + repetition - 1;
       const sampleStartedAtMs = now();
-      const progress = (status: ArenaSampleStatus, completedCount: number, execution: PersistedExecution | null = null, error: string | null = null, sampleDurationMs: number | null = null) => { const timestampMs = now(); onProgress?.({ completed: completedCount, total, currentCompetitor: competitorLabel, repetition, competitorOrdinal: profileIndex, sampleIndex, status, timestampMs, sampleStartedAtMs, sampleElapsedMs: Math.max(0, timestampMs - sampleStartedAtMs), sampleDurationMs, metrics: telemetryMetricsFromExecution(execution), error }); };
+      const progress = (status: ArenaSampleStatus, completedCount: number, execution: PersistedExecution | null = null, error: string | null = null, sampleDurationMs: number | null = null) => { const timestampMs = now(); onProgress?.({ runId, completed: completedCount, total, currentCompetitor: competitorLabel, repetition, competitorOrdinal: profileIndex, sampleIndex, status, timestampMs, sampleStartedAtMs, sampleElapsedMs: Math.max(0, timestampMs - sampleStartedAtMs), sampleDurationMs, metrics: telemetryMetricsFromExecution(execution), error }); };
       progress("preparing", completed);
       if (!shouldContinue()) {
         const durationMs = Math.max(0, now() - sampleStartedAtMs);
@@ -409,6 +401,11 @@ function sanitizeArenaError(error: unknown): string {
   const message = error instanceof Error ? error.message : "The competitor failed before producing a result.";
   if (!message.trim() || /(api[_ -]?key|authorization|bearer|credential|secret|prompt|response body)/iu.test(message)) return "Execution failed; details withheld.";
   return message.replace(/[\r\n\t]+/gu, " ").slice(0, 180);
+}
+
+export function hasCancelledDockerVerification(execution: PersistedExecution | null): boolean {
+  const dockerEvaluation = execution?.attempt.dockerEvaluation;
+  return isRecord(dockerEvaluation) && dockerEvaluation.status === "cancelled";
 }
 
 export function summarizeArenaExecutions(executions: ArenaExecution[]): ArenaMetricSummary {
@@ -491,19 +488,63 @@ export function buildArenaSummaryPayload(
   executions: ArenaExecution[],
 ): ArenaSummaryPayload {
   const summary = summarizeArenaExecutions(executions);
+  const taskCategory = categoryForTask(request.version.documentJson, request.taskId);
   return {
     arenaId: request.arenaId,
+    blind: request.blind === true,
     benchmarkVersionId: request.version.summary.versionId,
     taskId: request.taskId,
     caseId: request.caseId,
     repetitions: request.repetitions,
     packId: request.packId ?? null,
+    ...(taskCategory ? { categoryId: taskCategory.id, categoryName: taskCategory.name } : {}),
     materializationSeed: request.materializationSeed ?? null,
     arenaWallTimeMs: request.startedAtMs === undefined ? null : Math.max(0, Date.now() - request.startedAtMs),
     summary,
     competitors: summarizeArenaCompetitors(executions),
     evidence: executions.map(arenaExecutionEvidence),
   };
+}
+
+function categoryForTask(documentJson: string, taskId: string): { id: string; name: string } | null {
+  try {
+    const document = JSON.parse(documentJson) as Record<string, unknown>;
+    const pack = document.pack && typeof document.pack === "object" && !Array.isArray(document.pack)
+      ? document.pack as Record<string, unknown>
+      : null;
+    const version = document.benchmarkVersion && typeof document.benchmarkVersion === "object" && !Array.isArray(document.benchmarkVersion)
+      ? document.benchmarkVersion as Record<string, unknown>
+      : null;
+    const tasks = Array.isArray(version?.tasks) ? version.tasks : [];
+    const task = tasks.find((value) => value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).taskId === taskId) as Record<string, unknown> | undefined;
+    const categoryId = task?.categoryId;
+    if (typeof categoryId !== "string"
+      || categoryId.length === 0
+      || new TextEncoder().encode(categoryId).length > 128
+      || !/^[A-Za-z0-9._@-]+$/u.test(categoryId)
+      || !Array.isArray(pack?.categories)) return null;
+
+    const findCategory = (categories: unknown[]): string | null => {
+      for (const value of categories) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const category = value as Record<string, unknown>;
+        if (category.categoryId === categoryId
+          && typeof category.name === "string"
+          && category.name.trim()
+          && !category.name.includes("\0")
+          && new TextEncoder().encode(category.name).length <= 256) return category.name;
+        if (Array.isArray(category.children)) {
+          const child = findCategory(category.children);
+          if (child !== null) return child;
+        }
+      }
+      return null;
+    };
+    const name = findCategory(pack.categories);
+    return name === null ? null : { id: categoryId, name };
+  } catch {
+    return null;
+  }
 }
 
 function arenaExecutionEvidence(item: ArenaExecution): ArenaExecutionEvidence {
@@ -558,13 +599,32 @@ export function rankArenaCompetitors(
   executions: ArenaExecution[],
   humanScores: ReadonlyMap<string, number> = new Map(),
 ): ArenaRankingEntry[] {
-  return summarizeArenaCompetitors(executions)
+  const grouped = groupArenaExecutions(executions);
+  const summaries = summarizeArenaCompetitors(executions);
+  const humanScoresByCompetitor = new Map([...grouped].map(([competitorId, items]) => [competitorId, items
+    .filter((item) => item.execution?.attempt.status === "completed")
+    .map((item) => humanScores.get(executionKey(item)))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5)]));
+  const objectiveResultsByCompetitor = new Map([...grouped].map(([competitorId, items]) => [competitorId, items
+    .map((item) => {
+      const score = item.execution?.attempt.result?.score;
+      return isRecord(score) ? score.passed : null;
+    })
+    .filter((passed): passed is boolean => typeof passed === "boolean")]));
+  // A leaderboard compares one metric for all entrants. A 1–5 human average
+  // cannot be ranked against a 0–1 objective pass rate. Until every competitor
+  // has an eligible human evaluation, use objective evidence for everyone.
+  const completeHumanCoverage = summaries.length > 0 && summaries.every((summary) =>
+    (humanScoresByCompetitor.get(summary.competitorId)?.length ?? 0) > 0);
+  // An unmeasured objective rate is unknown, not a 0% failure. With neither
+  // complete human coverage nor complete objective evidence, no shared ranking
+  // metric exists yet; suppress the leaderboard rather than assign false ranks.
+  if (!completeHumanCoverage && summaries.some((summary) =>
+    (objectiveResultsByCompetitor.get(summary.competitorId)?.length ?? 0) === 0)) return [];
+  return summaries
     .map((summary) => {
-      const items = groupArenaExecutions(executions).get(summary.competitorId) ?? [];
-      const scores = items
-        .map((item) => humanScores.get(executionKey(item)))
-        .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5);
-      if (scores.length > 0) {
+      if (completeHumanCoverage) {
+        const scores = humanScoresByCompetitor.get(summary.competitorId)!;
         return {
           competitorId: summary.competitorId,
           competitorLabel: summary.competitorLabel,
@@ -575,17 +635,19 @@ export function rankArenaCompetitors(
           tieMargin: confidenceHalfWidth(scores) * 2,
         };
       }
+      const objectiveResults = objectiveResultsByCompetitor.get(summary.competitorId)!;
+      const objectiveUncertainty = confidenceHalfWidth(objectiveResults.map((passed) => passed ? 1 : 0));
       return {
         competitorId: summary.competitorId,
         competitorLabel: summary.competitorLabel,
         metric: "objective_pass_rate" as const,
-        value: summary.objectiveChecked === 0 ? 0 : summary.objectivePassed / summary.objectiveChecked,
-        sampleSize: summary.objectiveChecked,
-        uncertainty: summary.objectiveUncertainty,
-        tieMargin: summary.objectiveTieMargin,
+        value: objectiveResults.filter(Boolean).length / objectiveResults.length,
+        sampleSize: objectiveResults.length,
+        uncertainty: objectiveUncertainty,
+        tieMargin: objectiveUncertainty * 2,
       };
     })
-    .sort((left, right) => right.value - left.value || left.competitorId.localeCompare(right.competitorId))
+    .sort((left, right) => right.value - left.value || compareText(left.competitorId, right.competitorId))
     .reduce<ArenaRankingEntry[]>((ranking, entry, index, ordered) => {
       const previous = ranking[index - 1];
       ranking.push({
@@ -1046,18 +1108,19 @@ export type BlindArenaCard = {
 export function buildBlindArenaCards(
   executions: ArenaExecution[],
   responses: Map<string, string>,
+  orderSeed = "legacy-blind-order",
 ): BlindArenaCard[] {
   const candidates = executions
     .filter((item) => item.execution?.attempt.status === "completed")
     .map((item) => {
       const executionKey = `${item.runId}:${item.execution?.attempt.attemptId ?? ""}`;
-      return { executionKey, orderKey: opaqueBlindOrderKey(executionKey), text: responses.get(executionKey) ?? "" };
+      return { executionKey, orderKey: opaqueBlindOrderKey(`${orderSeed}:${executionKey}`), text: responses.get(executionKey) ?? "" };
     })
     .filter((card) => card.text.length > 0);
   candidates.sort((left, right) => left.orderKey.localeCompare(right.orderKey) || left.executionKey.localeCompare(right.executionKey));
   return candidates.map((candidate, index) => ({
     label: `Response ${String.fromCharCode(65 + (index % 26))}${index >= 26 ? `-${index + 1}` : ""}`,
-    token: `blind-${candidate.orderKey.slice(0, 24)}`,
+    token: `blind-${orderSeed.slice(0, 24)}-${index + 1}`,
     executionKey: candidate.executionKey,
     text: candidate.text,
   }));
@@ -1161,4 +1224,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function attemptForExecution(item: ArenaExecution): AttemptRecord | null {
   return item.execution?.attempt ?? null;
 }
-
