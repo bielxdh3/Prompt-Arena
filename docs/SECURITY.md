@@ -2,10 +2,10 @@
 
 ## Foundation verdict
 
-The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands are
-typed status, benchmark/profile/draft persistence, fixed-loopback Ollama discovery, one-shot execution, Runs read
-operations, bounded blind-evaluation preparation/lock, and read-only official-pack/published-version commands; they
-operate only on typed data and the app-owned local storage root. Draft saves use bounded requests and
+The desktop boundary remains narrow and has no enabled host-system plugin permissions. Registered Tauri commands use
+typed benchmark/profile/evidence storage, fixed-loopback local discovery and execution, bounded model operations,
+read-only Runs/blind-review/official-pack operations, and a separate explicit BYOK provider flow. They do not expose an
+arbitrary shell or filesystem browser. Draft saves use bounded requests and
 optimistic revisions; publishing revalidates the stored document before creating an immutable benchmark version. The
 capability file contains no plugin permissions. The worker accepts a tagged protocol, validates its version, job ID,
 and request bound, performs one generation at most, returns one typed terminal response, and exits.
@@ -19,11 +19,13 @@ the local webview store; browser preview neither reads nor writes localStorage a
 uses fixed selectors for normalized data attributes, with no arbitrary style strings, remote themes, imports, accounts,
 credentials, or telemetry.
 
-Phase 16 external-provider code is catalog, arithmetic, and explanatory UI only. It accepts no API key, secret, environment
-value, endpoint, credential file, or provider response; it makes no network call and has no persistence boundary. Cost
-estimation validates dated price snapshots and bounded usage, fails closed when prices are missing/invalid, and budget
-decisions never authorize execution by themselves. Unknown provider-selection fields, including credential-like fields,
-are discarded before a sanitized summary is returned. Local Ollama remains the only executable runtime.
+The BYOK flow supports typed OpenAI-compatible, OpenAI, Anthropic, and Gemini adapters. Provider calls require explicit
+per-request network consent and validated HTTPS endpoint/model configuration. On Windows the API key is stored in Windows
+Credential Manager; unsupported credential and transport platforms fail closed (Linux BYOK is not currently available).
+Secrets are held in secret-wrapped buffers for request construction and are omitted from debug output and persisted
+history. External history contains sanitized provider/model/usage/cost/policy metadata, not prompt/response text or
+credential material. Budget limits can require confirmation or deny a request; they do not reserve or guarantee a charge.
+Provider-reported model identity remains unverified.
 
 Phase 17 adds a dependency-free review checker. It reads fixed repository configuration and Git-tracked paths, never emits
 file contents, and validates the Windows/Linux pull-request matrix, deterministic worker sidecar packaging, local-only CSP/font and
@@ -31,10 +33,41 @@ loopback invariants, secret-file ignore rules, lockfiles, and obvious key-materi
 production-dependency audit after install. The checker is diagnostic only and does not publish, sign, deploy, or mutate
 repository state.
 
-The Phase 03 Ollama adapter remains a narrow backend module. Phase 06 exposes only the typed `list_local_ollama_models`
-command, which constructs the fixed local default `http://127.0.0.1:11434`; it is not a general provider proxy and
-does not accept an endpoint or credential. The adapter can request health, model metadata, generation, and streaming
-from an already-running local Ollama service; it does not spawn or forcibly terminate that service. Phase 13 adds a
+## GitHub security and dependency status (2026-10-01)
+
+The authenticated repository snapshot showed no open Code Scanning or Secret Scanning alerts; the five historical
+`js/file-system-race` Code Scanning alerts are closed as fixed. Secret scanning and push protection are enabled; non-provider
+patterns and validity checks are disabled. Dependabot vulnerability alerts were enabled during this mission, and the current
+open-alert query reports alert #1: `glib 0.18.5`, Medium, GHSA-wrw7-89jp-8q8g / RUSTSEC-2024-0429. Automated Dependabot
+security-update pull requests remain disabled. Production and full-tree `npm audit --audit-level=high` both reported zero
+known npm vulnerabilities on candidate `81b52716d6559720a0228059562b1c35e21dc19b`. `cargo-audit`, `cargo-deny`, and Trivy
+are unavailable in the local environment, so no standalone Cargo audit was run. PR #89's Dependency Review check passed for
+candidate `81b52716d6559720a0228059562b1c35e21dc19b`; it is candidate-specific and must pass again on any later PR head
+before merge. Dependency Review does not replace Dependabot alerts or establish that unchanged transitive dependencies
+have no exposure. GitHub Actions references in the edited CI, CodeQL, and Dependency Review workflows are pinned to full
+commit SHAs.
+
+The advisory concerns unsound `VariantStrIter` iterator methods and is fixed in `glib >=0.20.0`
+([GHSA-wrw7-89jp-8q8g](https://github.com/advisories/GHSA-wrw7-89jp-8q8g),
+[RustSec RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)). The affected dependency is
+Linux-target-only in this lockfile: Tauri 2.11.6 selects GTK 0.18.2 and its gtk-rs family, which constrain `glib` to the
+vulnerable 0.18 line. The current stable Tauri v2.12.1 manifest still selects GTK 0.18
+([source](https://github.com/tauri-apps/tauri/blob/tauri-v2.12.1/crates/tauri/Cargo.toml)); the gtk-rs 0.18
+backport [#2009](https://github.com/gtk-rs/gtk-rs-core/pull/2009) and 0.18.6 release request
+[#2010](https://github.com/gtk-rs/gtk-rs-core/issues/2010) were closed without a published fixed version, while
+Tauri's GTK4 migration remains tracked upstream ([Tauri issue #12561](https://github.com/tauri-apps/tauri/issues/12561)).
+Repository and locally cached dependency source searches found no direct `VariantStrIter` call site, but they do not
+prove application unreachability through native libraries. Keep Dependabot alert #1 open; reassess when upstream ships a
+maintained backport or a compatible stable native stack. Do not dismiss it as a false positive.
+
+The release workflow is candidate-validation only and has no publishing permissions or tag/release operations. The current
+GitHub snapshot has no `main` branch protection or repository ruleset. Release publication remains disabled pending
+server-side protections and an independently approved publisher, as documented in `docs/RELEASING.md`.
+
+The local runtime adapters accept only plain-HTTP loopback endpoints; the Models surface supplies a fixed Ollama default
+and selected loopback endpoints for LM Studio and llama.cpp. The adapters request health, model metadata, generation,
+and streaming. The `start_local_ollama` command can start Ollama with a shell-free process launch and no user-supplied
+arguments; it does not forcibly terminate the service. Phase 13 adds a
 read-only `read_hardware_snapshot` command with fixed, bounded platform sources; it does not spawn a shell, traverse
 model paths, download files, or send telemetry.
 
@@ -42,7 +75,7 @@ model paths, download files, or send telemetry.
 
 - UI input is presentation state; font selection, scale, accent, radius, surface, and reduced motion are constrained by
   the pure appearance normalizer before reaching CSS data attributes or local webview storage.
-- Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or path.
+- Tauri commands are explicit Rust functions with typed responses; no command accepts a shell string or arbitrary filesystem path. Managed GGUF import accepts a bounded relative `.gguf` path that Rust validates under the managed model root.
 - Worker input is untrusted JSON and is rejected on malformed JSON, unsupported protocol versions, or unsafe job IDs.
 - The execution command checks only the fixed dev worker sibling and then the target-triple-suffixed
   `binaries/prompt-arena-worker-<TARGET_TRIPLE>` Tauri resource, supplies no shell, PATH lookup, user path, download, or
@@ -50,6 +83,14 @@ model paths, download files, or send telemetry.
 - Benchmark documents are capped at 256 KiB of raw input before serde parsing or canonicalization, then deserialized and
   manually validated at the domain boundary; oversized input returns a typed `benchmark_too_large` error and unknown
   JSON fields are retained.
+- The Tauri one-shot execution command loads the immutable stored benchmark version and derives the selected task/case,
+  canonical prompt, typed robustness transform, verifier policy/expectation, and Docker policy on the backend before
+  launching the worker. It requires the submitted profile snapshot to match exactly one stored profile and derives the
+  system prompt from that stored profile and authoritative task. Renderer-supplied prompt, system prompt, profile fields,
+  generation options, or boundary metadata are not authority; generation parameters must equal the supported profile
+  projection and seed, stops, tools, and response format follow a fixed backend policy. When an Ollama profile omits an
+  endpoint, execution is restricted to the canonical `127.0.0.1:11434` endpoint. Explicit saved loopback endpoints must
+  match after normalization; missing identities, unsupported parameters, malformed transforms, and mismatches fail closed.
 - Published version reads validate the deterministic bounded `benchmark-id@version` identity and return only the stored
   canonical document JSON plus summary. They do not import, rewrite, re-canonicalize, or publish benchmark history.
 - Benchmark drafts are canonicalized before local storage and enforce portable IDs, a 256-byte title limit, a 256 KiB
@@ -57,8 +98,10 @@ model paths, download files, or send telemetry.
   remain immutable and conflicting content is rejected.
 - Profile registration is typed and immutable. The derived `profile-id@revision` identity is checked at the storage
   boundary; identical replay is idempotent and changed content under that identity is rejected as an immutable conflict.
-  The complete serialized profile request is capped at 256 KiB, including `parameters` and flattened `extra`, and the
-  resulting metadata remains under the 1 MiB local metadata ceiling.
+  Output-token and context-window profile values are positive integers capped at 32,768 at the UI, plan, runtime, and
+  storage boundaries; context-window overrides are supported only for Ollama. Optional model digest/content-hash fields
+  are validated and retained in profile identity. The complete serialized profile request is capped at 256 KiB,
+  including `parameters` and flattened `extra`, and the resulting metadata remains under the 1 MiB local metadata ceiling.
 - The structured editor emits only bounded optional text expected answers. It rejects non-text expected values when
   loading a draft rather than silently converting them, and it rejects unsupported multi-item shapes before an edit can
   rewrite data.
@@ -74,19 +117,34 @@ model paths, download files, or send telemetry.
   response headers and chunk trailers are separately capped at 64 KiB and 128 entries; non-stream bodies are capped at
   16 MiB, cumulative streamed NDJSON payload bytes at 16 MiB, and every response has a finite 10-minute overall read
   deadline by default, configurable from 1 ms through 60 minutes, in addition to the 500 ms per-read socket timeout.
-- Hardware discovery uses only `std::thread::available_parallelism`, the fixed Linux `/proc/meminfo` file, and a narrow
-  Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are not guessed:
-  they remain null with unavailable status/confidence when feature detection is absent. The snapshot is read-only and
-  ephemeral; no hardware telemetry or user override is persisted.
-- Cancellation is cooperative: the client checks the token between socket reads and streamed chunks and returns a typed
-  cancellation error. It has no remote process-kill capability.
-- The run-plan helper accepts no endpoint, credential, shell, provider, or lifecycle input. It validates the published
+- The static hardware snapshot uses only `std::thread::available_parallelism`, the fixed Linux `/proc/meminfo` file,
+  and a narrow Windows physical-memory API binding. CPU/RAM failures become explicit unavailable metrics. GPU/VRAM are
+  not guessed: they remain null with unavailable status/confidence when feature detection is absent. That baseline
+  snapshot is read-only and ephemeral. Separately, the one-shot generation executor records host-wide CPU and physical-RAM
+  samples during each generation window in the local attempt evidence; Performance Lab projects those values into local
+  performance evidence. They are not attributed to the model process and are not sent to a Prompt Arena service. Because
+  the explicit Repro Bundle export includes the attempt evidence and, when available, the saved response artifact, a
+  bundle may contain these host metrics, prompt/profile data, and response text. The UI warns that this text may be
+  private; review the full bundle before sharing it.
+- Cancellation is scoped to an active Arena run ID. If cancellation wins before the app receives the worker's terminal
+  response, Tauri stops only the app-owned worker and asks a fresh one-shot worker to persist a typed cancelled outcome.
+  A terminal response already received by the app is preserved. After its terminal outcome is assembled, cancellation
+  is rejected while the run ID stays reserved through persistence. The local request can stop while the model service
+  continues inference; the app has no remote model-process kill capability.
+- Docker verification checks the same run cancellation token while waiting on the bounded local Docker CLI process.
+  Cancellation stops that CLI and attempts `docker container rm --force` for the app-owned container. The persisted
+  verifier status is `cancelled` with no candidate score; cleanup failure is disclosed and is not represented as a
+  successful cleanup.
+- The local run-plan helper accepts no shell, arbitrary provider, or lifecycle input. It validates the published
   version/document identity, selected task/case identity, non-empty prompt, immutable profile identity/runtime/model,
-  supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It always emits the
-  fixed/default `http://127.0.0.1:11434` Ollama configuration and delegates only to the existing one-shot worker.
+  supported bounded profile parameters, one-repetition limit, and serialized 256 KiB plan bound. It emits only a
+  loopback runtime configuration and delegates local generation to the existing one-shot worker. The profile's optional
+  reasoning-effort `none` value is sent only to Ollama (`think: false`) and LM Studio (`reasoning_effort: "none"`);
+  llama.cpp does not advertise that parameter and rejects it during negotiation.
 - The Arena view accepts only selected identities returned by typed immutable version/profile reads and the selected
-  stored document. It exposes no raw JSON, endpoint, credential, cancellation, or process-lifecycle input; progress and
-  terminal text are rendered as text and no run record exists until explicit one-shot execution.
+  stored document. It exposes no raw JSON, endpoint, credential, or process-lifecycle input. Its cancel control sends
+  only the current run ID to the app; progress and terminal text are rendered as text and no run record exists until
+  explicit one-shot execution.
 - Completed attempt summaries are bounded metadata only: they omit response text, are stored in the immutable attempt's
   flattened extra fields, and are rejected when they exceed the 8 KiB summary bound. The effective-configuration snapshot
   retains only approved provider/endpoint/runtime/profile/model, runtime scalar, and capability fields; the full
@@ -104,28 +162,79 @@ model paths, download files, or send telemetry.
 - Blind human evaluation is a separate local immutable record, not a mutation of Attempts, Results, or artifacts. Its
   preparation reader accepts only completed attempts pointing to registered `generation-response` artifacts, checks the
   app-owned relative path, kind/schema/path metadata, regular-file boundary, size, and SHA-256, and parses the bounded
-  response as untrusted plain text. Stable anonymous tokens/order are derived from run and attempt IDs, while the
+  response as untrusted plain text. A fresh cryptographic per-presentation seed permutes anonymous cards and tokens;
+  before lock, the live Arena monitor exposes only aggregate progress, not per-competitor order/status/identity. Its
+  screen-reader live region announces only the aggregate completed/total count, not the changing monitor table. The
   prepared UI does not mount AttemptDetail or identifying model/profile/provider/endpoint/metric/objective/attempt-ID
   evidence. The parent gate also keeps that evidence hidden for loading, empty, and error states; only a successful lock
-  re-enables post-lock audit IDs. The persisted record contains no response text, and scores/ranking are validated at
-  the Rust boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
-- Phase 14 comparability is a pure in-memory diagnostic over one local run and its typed attempts. Its panel is nested
-  under the same parent-owned blind-evaluation gate, so it cannot expose model/profile/provider/metrics/objective
-  evidence or attempt IDs while the gate suppresses AttemptDetail. It creates no records, reads no artifacts, and makes
-  no official ranking, cross-run, regression, tournament, AI-judge, calibration, or cost claim.
+  re-enables post-lock audit IDs. Failed lock writes retain scores and offer a retry after checking whether a record was
+  already committed. The persisted record contains no response text, and scores/ranking are validated at the Rust
+  boundary (overall/criterion scores 1–5, bounded token coverage, immutable replay/conflict behavior).
+  Arena summaries record whether execution was blind. Summary history, exports, historical comparisons, and ratings hide
+  identity-sensitive results until locked per-run evaluation records cover every completed source attempt. Legacy
+  summaries without the marker use the same fail-closed lock check.
+- Phase 14 comparability remains a pure in-memory diagnostic over one local run and its typed attempts. The separate
+  Insights surface stores bounded single-model suite summaries, per-run metrics, single-run comparisons across saved
+  single-model/Arena sources, repeated single-model regression intervals, Elo v1/Bradley–Terry v1 rating snapshots,
+  robustness outcomes and comparisons, and integrity-checked repro bundles. Derived comparisons retain source IDs/content
+  hashes on export. Robustness comparison exports include both source records and may contain private source/variant prompt
+  text; the UI warns users to review these files before sharing. Repeated regression intervals apply a Bonferroni family-wise correction across seven metrics. Bradley–Terry
+  outcomes are clustered by immutable Arena summary hash when present; source-cluster counts do not establish statistical
+  independence, and new rating snapshots carry their contributing Arena summary IDs and content hashes. Repro Bundle
+  v3 preserves exact Rust-canonical benchmark UTF-8 bytes in bounded base64 chunks, so JavaScript number formatting
+  cannot invalidate hashes. Its final serialized envelope is capped at 8 MiB including integrity metadata, matching the
+  import bound. It compares the full registered profile and available model digest, then reads the current Ollama digest
+  and runtime version from the profile's saved loopback endpoint before and after an explicit Re-run. After generation it
+  also requires `/api/ps` to report exactly one loaded model with a digest matching the current tag. These checks do not
+  write catalog rows; changed or mismatched digests block the reproduced-run record. They are best-effort and do not
+  atomically pin a digest to the generation request. LM Studio and llama.cpp currently do not provide a
+  live model digest through this adapter and remain read-only for Repro reruns. Provider-reported hashes do not attest
+  which weight bytes a runtime actually loaded; unavailable source runtime-version evidence remains disclosed. A missing
+  local benchmark is reconstructed only on an explicit Re-run action after local validation and reread. Legacy v1/v2 envelopes preserve payloads during
+  integrity-checked read-only migration; v1 single-model evidence without identity proof remains read-only. Unsupported
+  seeds and missing model identity block rerun; runtime-version unavailability is surfaced as a difference. Bundles may
+  contain private prompt text, and a self-computed SHA-256 detects changes but does not authenticate the source. These
+  partial features still do not implement an official global ranking, tournament policy, or AI judging.
+- Roadmap-record writes bind `single_model_benchmark` payloads to the exact persisted run, attempt, profile revision,
+  benchmark version, task/case, objective, and performance evidence; `performance_lab` must match that benchmark's
+  derived metrics, and `single_model_suite` cases and totals are checked against the published case list and referenced
+  run/attempt outcomes. These checks run on writes so existing immutable snapshots remain readable after retention
+  removes source rows. The `hardware` field in a single-model snapshot is only shape-checked: it is renderer-captured
+  context, not backend-attested telemetry. Historical comparisons, rating sets, robustness results, and repro-bundle
+  snapshots remain bounded renderer-derived records; Rust does not recompute their analysis from source evidence.
 - Phase 15 appearance preferences are sanitized local presentation state only. The browser surface is explicitly
-  no-persistence; desktop storage is limited to one local preference value and contains no prompts, runs, attempts,
-  models, profiles, metrics, or credentials.
-- Phase 16 provider metadata and cost helpers are ephemeral and read-only. They never accept, log, persist, export, or
-  transmit secrets; all four external identities remain unconfigured, identity-unverified, and network-not-wired.
+  no-persistence; desktop appearance-preference storage contains only one normalized preference value. Separate
+  app-owned SQLite storage holds product records, including runs, attempts, profiles, model metadata, metrics, and
+  sanitized external-provider evidence; API keys remain in OS credential storage on supported Windows builds.
+- BYOK commands accept key material only during configuration and do not return it. External generation requires
+  explicit consent; request and response bodies are bounded, transport is HTTPS on supported Windows builds, and
+  persisted external records omit prompts, responses, keys, and headers. Linux provider storage/transport remains
+  explicitly unavailable.
 - Phase 17 boundary checks are fail-closed diagnostics over repository policy. They inspect every Git-tracked capability JSON
   under `src-tauri/capabilities`, require its current empty/allowlisted permission boundary, and parse exact reviewed
   `script-src`, `style-src`, `font-src`, and `connect-src` CSP allowlists. They report only generic failures or paths, never
   matched contents, and documentation references to macOS are not treated as active support targets.
 - Official packs are fixed repository source files loaded with `include_str!`, not user-controlled paths or persisted
   records. The catalog validates every full document with the canonical benchmark-v1 validator before returning a
-  summary/hash or canonical JSON. Pack metadata explicitly types the text-generation capability, evaluation mode, and
-  sandbox status; the programming pack marks Docker-backed sandbox execution unavailable, so no local code is run.
+  summary/hash or canonical JSON. The @2 prose cases and the single @3 function case bind only implementation-owned
+  version-1 verifier IDs from the authoritative stored case. Fixed image, executable/argv, Python harness, test cases,
+  and function name live in Rust; no imported case field can select a command or test. The function harness rejects all
+  syntax outside its Python AST allowlist and executes the accepted function only inside the constrained container.
+  This covers one fixed function challenge, not general-purpose code execution. The evaluator accepts only standard local Docker endpoints
+  (`/var/run/docker.sock`, `/run/docker.sock`, `/run/user/<uid>/docker.sock`, or Docker Desktop's local named pipes),
+  confirms the active endpoint, and refuses SSH/TCP contexts and Docker environment overrides. It requires the pinned
+  digest locally with `--pull=never`; missing daemon/image and runtime/cleanup failures produce no candidate score.
+  The response is bounded and sent only on stdin. The container uses no network or host/project/home/Docker-socket mounts,
+  a read-only root, UID 65532, dropped capabilities, no-new-privileges, CPU/memory/PID limits, a 20-second timeout, and
+  a combined output cap; timeout/output failure kills the Docker CLI process and attempts removal by generated container
+  name. The @2 text contracts use lexical phrase requirements; a matching phrase can pass without proving semantic
+  behavior. The @3 function contract executes only its AST-restricted function
+  under fixed tests; it does not execute unrestricted model-generated programs. The active Arena flow passes its run
+  cancellation token through this evaluator and can cancel the active run. The separate one-shot execution UI does not
+  expose a cancellation control. The earlier pinned-image smoke report is not bound to the current candidate SHA, and
+  the local Docker daemon was unavailable on 2026-09-30, so live execution of these contracts remains unverified for this
+  branch. Docker access remains part of the trust boundary: a rootful daemon socket
+  permits host-level daemon control, while rootless Docker reduces but does not remove kernel/daemon risk.
 - Browser preview is a no-write surface: it renders unsaved editor/profile state and explanatory Arena contract copy
   only. It cannot invoke draft/version/profile/model/hardware/Arena/official-pack commands, validate benchmarks, query
   Ollama, or invent records. Official canonical JSON is rendered as plain text only in desktop mode; future model output
@@ -147,6 +256,18 @@ process that can modify app-owned files can still race separate path checks and 
 - Worker execution selects only the fixed app-owned development sibling or the target-triple-suffixed Tauri resource and
   supplies no shell, PATH lookup, or user path. Its `is_file` validation and subsequent spawn are separate, so the
   selected worker executable can still be replaced between validation and spawn.
+- Managed GGUF import and removal validate a relative path and reject symlink components, then use path-based file opens
+  or removal. A concurrent same-user process able to modify the app-owned model directory could replace an intermediate
+  component between validation and the operation. No cross-user or remote exploitability was established; portable
+  no-follow-handle semantics would be needed to close this local race. A capability-root API such as
+  [`cap-std::fs::Dir`](https://docs.rs/cap-std/4.0.3/cap_std/fs/struct.Dir.html) can anchor relative opens/removal and
+  prevent escapes from an opened root, but alone it would not preserve the current reject-every-symlink policy, and
+  `remove_file` remains name-based rather than atomically unlinking the file handle whose contents were hash-checked.
+  This service currently opens storage per command, so a complete mitigation also needs an app-lifetime anchored root
+  and explicit Windows/Linux reparse-point semantics; a partial path rewrite would leave the integrity race.
+- `start_local_ollama` launches `ollama serve` without a shell or caller-supplied arguments, but resolves `ollama` through
+  `PATH`. A lower-trust actor would need control of a searched directory or an elevated-launch condition for this to
+  become a distinct execution path; neither was established in the Standard scan.
 
 Portable no-follow handles or equivalent OS-specific open/execute primitives would be required to close these races; they
 are not implemented in this bounded cycle. Benchmark input is not a parsing-order finding: the raw document size is
@@ -154,9 +275,11 @@ checked against 256 KiB before `serde_json::from_str`, and draft input is size-c
 
 ## Required future controls
 
-External/cloud provider adapters, credentials, downloads, deletion, long-lived runtime process lifecycle, broader run authoring/
-model execution UI beyond the bounded Arena flow, multi-rater human evaluation, AI judging, cross-run rankings, broader scoring/analysis, broader official-pack coverage, Docker-backed coding sandbox execution, unified model search, duplicate management, empirical recommendation history, full model-library management,
-broader benchmark authoring/import flows, and destructive cleanup are not implemented here. When added, they require
+Linux secure credential storage and BYOK transport, calibrated rating intervals, full robustness semantic-preservation
+evidence and functional-verifier integration, portable seed application and authenticated Repro provenance, Performance Lab
+telemetry beyond host-wide CPU/RAM sampling (model-process attribution, GPU/VRAM, and trustworthy energy/power metrics),
+multi-rater human evaluation, AI judging, unified model search, empirical recommendation history, broader official
+coding-pack coverage, and user-triggered Docker cancellation are not complete. When extended, these require
 explicit capability review, allowlisted executable paths, bounded arguments, safe archive extraction, credential
 isolation, cancellation, and confirmation for user data deletion.
 Historical benchmark records must not be deleted as a migration side effect.

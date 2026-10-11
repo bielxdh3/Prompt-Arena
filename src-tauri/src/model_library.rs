@@ -1,15 +1,17 @@
 use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use serde_json::{json, Map, Value};
 
 use crate::{
     domain::{
-        ModelBackend, ModelCatalog, ModelDiscoveryRequest, ModelDuplicateGroup, ModelImportRequest,
-        ModelOperation, ModelOperationKind, ModelOperationStatus, ModelRecord,
-        ModelRemovalEvidence, ModelSource, ModelSourceConfig, ModelSourceStatus,
+        ModelBackend, ModelCatalog, ModelContentHashStatus, ModelDiscoveryRequest,
+        ModelDuplicateGroup, ModelImportRequest, ModelOperation, ModelOperationKind,
+        ModelOperationStatus, ModelRecord, ModelRemovalEvidence, ModelSource, ModelSourceConfig,
+        ModelSourceStatus, ProfileRevision,
     },
     ollama::{OllamaConfig, OllamaEndpoint, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
@@ -25,11 +27,58 @@ pub const MAX_MODEL_SOURCE_COUNT: usize = 8;
 pub const MAX_MODEL_QUERY_BYTES: usize = 256;
 pub const MAX_GGUF_HEADER_BYTES: usize = 256 * 1024;
 pub const MAX_MODEL_OPERATION_COUNT: usize = 512;
+/// Bound simultaneously running model transfers and multi-GB disk scans.
+pub const MAX_ACTIVE_MODEL_OPERATIONS: usize = 8;
+/// Maximum number of persisted snapshots for one operation, including initial and terminal states.
 pub const MAX_MODEL_OPERATION_EVENTS: usize = 512;
+const MODEL_PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_GGUF_STRING_BYTES: usize = 64 * 1024;
 const MAX_GGUF_METADATA_ENTRIES: usize = 4_096;
 const MAX_GGUF_VALUE_DEPTH: usize = 8;
 const MAX_MODEL_OPERATION_REQUEST_BYTES: usize = 16 * 1024;
+
+// This is shared by controller-driven operations, direct model imports, and
+// test entry points. Holding the reservation across the terminal DB update
+// avoids the gap between checking a path and actually hashing/deleting it.
+static ACTIVE_MANAGED_MODEL_PATHS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+
+struct ManagedPathReservation {
+    identity: String,
+}
+
+impl ManagedPathReservation {
+    fn acquire(storage: &StorageService, relative_path: &str) -> Result<Self, ModelLibraryError> {
+        validate_gguf_path(relative_path)?;
+        let root = storage.layout().managed_model_root();
+        // Windows file paths are case-insensitive, even when model IDs are not.
+        let path = root.join(relative_path).to_string_lossy().into_owned();
+        let identity = if cfg!(windows) {
+            path.to_lowercase()
+        } else {
+            path
+        };
+        let registry = ACTIVE_MANAGED_MODEL_PATHS.get_or_init(|| Mutex::new(BTreeSet::new()));
+        let mut active = registry.lock().map_err(|_| {
+            ModelLibraryError::InvalidRequest("model path reservation is unavailable".to_owned())
+        })?;
+        if !active.insert(identity.clone()) {
+            return Err(ModelLibraryError::InvalidRequest(
+                "another model operation is already active for this managed GGUF path".to_owned(),
+            ));
+        }
+        Ok(Self { identity })
+    }
+}
+
+impl Drop for ManagedPathReservation {
+    fn drop(&mut self) {
+        if let Some(registry) = ACTIVE_MANAGED_MODEL_PATHS.get() {
+            if let Ok(mut active) = registry.lock() {
+                active.remove(&self.identity);
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ModelLibraryError {
@@ -37,6 +86,20 @@ pub enum ModelLibraryError {
     GgufImport(String),
     Runtime(RuntimeError),
     Storage(StorageError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveProfileModelIdentity {
+    pub model_id: String,
+    pub source_id: String,
+    pub backend: ModelBackend,
+    pub model: String,
+    pub runtime: String,
+    pub digest: Option<String>,
+    pub content_hash: Option<String>,
+    pub quantization_level: Option<String>,
+    pub runtime_version: Option<String>,
 }
 
 impl std::fmt::Display for ModelLibraryError {
@@ -116,7 +179,7 @@ impl ModelOperationController {
                     "model operation is already running".to_owned(),
                 ));
             }
-            if active.len() >= MAX_MODEL_OPERATION_COUNT {
+            if active.len() >= MAX_ACTIVE_MODEL_OPERATIONS {
                 return Err(ModelLibraryError::InvalidRequest(
                     "active model operation count exceeds the local item limit".to_owned(),
                 ));
@@ -148,6 +211,29 @@ impl ModelOperationController {
         cancellation.cancel();
         Ok(())
     }
+}
+
+/// Run once on application startup, before accepting new model operations.
+/// A previous process cannot leave an in-memory cancellation token behind, so
+/// queued/running rows from that process must become terminal audit evidence.
+pub fn reconcile_interrupted_model_operations(
+    storage: &StorageService,
+) -> Result<usize, ModelLibraryError> {
+    let mut recovered = 0;
+    for mut operation in storage.list_model_operations()? {
+        if !matches!(
+            operation.status,
+            ModelOperationStatus::Queued | ModelOperationStatus::Running
+        ) {
+            continue;
+        }
+        operation.status = ModelOperationStatus::Failed;
+        operation.message = Some("interrupted by an earlier application shutdown".to_owned());
+        operation.updated_at = now_marker();
+        persist_operation(storage, &operation)?;
+        recovered += 1;
+    }
+    Ok(recovered)
 }
 
 pub fn default_source_configs() -> Vec<ModelSourceConfig> {
@@ -228,11 +314,131 @@ pub fn discover_local_models(
     })
 }
 
+/// Reads the current Ollama tag identity for an immutable local profile without persisting catalog rows.
+/// Other providers do not expose a trustworthy artifact digest through their current adapter, so they fail closed.
+pub fn read_live_profile_model_identity(
+    storage: &StorageService,
+    profile_revision_id: &str,
+    require_loaded_model_digest: bool,
+) -> Result<LiveProfileModelIdentity, ModelLibraryError> {
+    validate_bounded_text(profile_revision_id, 128, "profile revision ID")?;
+    let profile = storage
+        .list_profile_revisions()?
+        .into_iter()
+        .find(|profile| profile.profile_revision_id == profile_revision_id)
+        .ok_or_else(|| {
+            ModelLibraryError::InvalidRequest("local profile revision was not found".to_owned())
+        })?;
+    live_ollama_profile_identity(&profile, require_loaded_model_digest)
+}
+
+fn live_ollama_profile_identity(
+    profile: &ProfileRevision,
+    require_loaded_model_digest: bool,
+) -> Result<LiveProfileModelIdentity, ModelLibraryError> {
+    let extra_string = |key: &str| {
+        profile
+            .extra
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let backend: ModelBackend =
+        serde_json::from_value(profile.extra.get("backend").cloned().ok_or_else(|| {
+            ModelLibraryError::InvalidRequest("profile has no model backend identity".to_owned())
+        })?)
+        .map_err(|_| {
+            ModelLibraryError::InvalidRequest(
+                "profile model backend identity is invalid".to_owned(),
+            )
+        })?;
+    if backend != ModelBackend::Ollama || profile.runtime != "ollama" {
+        return Err(ModelLibraryError::InvalidRequest(
+            "the configured provider cannot report a live model artifact digest".to_owned(),
+        ));
+    }
+    let source_id = extra_string("sourceId").ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("profile has no model source identity".to_owned())
+    })?;
+    let stored_model_id = extra_string("modelId").ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("profile has no model record identity".to_owned())
+    })?;
+    validate_bounded_text(&stored_model_id, 128, "model record ID")?;
+    let endpoint = extra_string("endpoint").ok_or_else(|| {
+        ModelLibraryError::InvalidRequest("profile has no local Ollama endpoint".to_owned())
+    })?;
+    let config = ModelSourceConfig {
+        backend: backend.clone(),
+        label: None,
+        endpoint: Some(endpoint.clone()),
+        path: None,
+    };
+    let validated_source_id = stable_model_source_id(&config)?;
+    if validated_source_id != source_id {
+        return Err(ModelLibraryError::InvalidRequest(
+            "profile model source identity no longer matches its endpoint".to_owned(),
+        ));
+    }
+    let provider = local_provider(&endpoint)?;
+    let runtime_version = provider.health()?.version.filter(|version| {
+        !version.is_empty() && version.len() <= 128 && !version.chars().any(char::is_control)
+    });
+    let mut matching_models = provider
+        .list_models()?
+        .into_iter()
+        .filter(|model| model.name == profile.model);
+    let model = matching_models.next().ok_or_else(|| {
+        ModelLibraryError::InvalidRequest(
+            "the profile model is not currently listed by Ollama".to_owned(),
+        )
+    })?;
+    if matching_models.next().is_some() {
+        return Err(ModelLibraryError::InvalidRequest(
+            "Ollama returned multiple entries for the profile model".to_owned(),
+        ));
+    }
+    let current = model_record_from_info(&source_id, &provider, backend.clone(), model)?;
+    if require_loaded_model_digest {
+        let mut running_models = provider
+            .list_running_models()?
+            .into_iter()
+            .filter(|running_model| running_model.name == profile.model);
+        let running_model = running_models.next().ok_or_else(|| {
+            ModelLibraryError::InvalidRequest(
+                "Ollama did not report the profile model as loaded after generation".to_owned(),
+            )
+        })?;
+        if running_models.next().is_some() {
+            return Err(ModelLibraryError::InvalidRequest(
+                "Ollama reported multiple loaded entries for the profile model".to_owned(),
+            ));
+        }
+        if current.digest.is_none() || running_model.digest != current.digest {
+            return Err(ModelLibraryError::InvalidRequest(
+                "the loaded model digest does not match the current Ollama tag digest".to_owned(),
+            ));
+        }
+    }
+    Ok(LiveProfileModelIdentity {
+        model_id: current.model_id,
+        source_id,
+        backend,
+        model: current.name,
+        runtime: profile.runtime.clone(),
+        digest: current.digest,
+        content_hash: current.content_hash,
+        quantization_level: current.quantization_level,
+        runtime_version,
+    })
+}
+
 pub fn import_managed_gguf_model(
     storage: &StorageService,
     request: &ModelImportRequest,
 ) -> Result<ModelRecord, ModelLibraryError> {
     validate_gguf_path(&request.source_path)?;
+    let _reservation = ManagedPathReservation::acquire(storage, &request.source_path)?;
     let config = ModelSourceConfig {
         backend: ModelBackend::LlamaCpp,
         label: Some("Managed GGUF".to_owned()),
@@ -240,7 +446,7 @@ pub fn import_managed_gguf_model(
         path: Some(request.source_path.clone()),
     };
     let source_id = stable_model_source_id(&config)?;
-    let record = parse_managed_gguf_record(storage, &source_id, &request.source_path)?;
+    let record = parse_managed_gguf_record(storage, &source_id, &request.source_path, true)?;
     storage.save_model_record(&record, &now_marker())?;
     Ok(record)
 }
@@ -254,6 +460,11 @@ pub fn run_model_operation(
         mut operation,
         action,
     } = prepare_operation(storage, request)?;
+    let _managed_path_reservation = operation
+        .managed_path
+        .as_deref()
+        .map(|path| ManagedPathReservation::acquire(storage, path))
+        .transpose()?;
     reserve_operation(storage, &operation.operation_id)?;
     persist_operation(storage, &operation)?;
 
@@ -455,11 +666,8 @@ fn reserve_operation(
             "model operation id already exists".to_owned(),
         ));
     }
-    if storage.list_model_operations()?.len() >= MAX_MODEL_OPERATION_COUNT {
-        return Err(ModelLibraryError::InvalidRequest(
-            "model operation count exceeds the local item limit".to_owned(),
-        ));
-    }
+    // MAX_MODEL_OPERATION_COUNT limits concurrent operations in the controller;
+    // it must not cap lifetime audit history or permanently block new work.
     Ok(())
 }
 
@@ -491,17 +699,25 @@ fn execute_download(
     cancellation: &CancellationToken,
 ) -> Result<CompletedOperation, ModelLibraryError> {
     let provider = download_provider(endpoint)?;
-    let mut progress_events = 0_usize;
+    // Every runtime frame is validated; only meaningful progress is written to SQLite.
+    // Reserve room for the queued, running and terminal snapshots in the audit history.
+    let mut persisted_events = 2_usize;
+    let mut last_persisted = operation.clone();
+    let mut last_persisted_at = Instant::now();
     provider.pull_model(model_name, cancellation, |event| {
-        if progress_events >= MAX_MODEL_OPERATION_EVENTS {
-            return Err(RuntimeError::Protocol {
-                message: "model operation progress exceeded the local item limit".to_owned(),
-            });
-        }
-        progress_events += 1;
         apply_download_event(operation, event)?;
-        operation.updated_at = now_marker();
-        persist_operation(storage, operation).map_err(operation_runtime_error)?;
+        if persisted_events < MAX_MODEL_OPERATION_EVENTS.saturating_sub(1)
+            && (operation.progress_percent != last_persisted.progress_percent
+                || operation.message != last_persisted.message
+                || (operation.bytes_completed != last_persisted.bytes_completed
+                    && last_persisted_at.elapsed() >= MODEL_PROGRESS_PERSIST_INTERVAL))
+        {
+            operation.updated_at = now_marker();
+            persist_operation(storage, operation).map_err(operation_runtime_error)?;
+            last_persisted = operation.clone();
+            last_persisted_at = Instant::now();
+            persisted_events += 1;
+        }
         Ok(())
     })?;
     if cancellation.is_cancelled() {
@@ -587,10 +803,26 @@ fn execute_import(
         return Err(RuntimeError::Cancelled.into());
     }
 
-    let source_id = operation.source_id.as_deref().ok_or_else(|| {
+    let source_id = operation.source_id.clone().ok_or_else(|| {
         ModelLibraryError::InvalidRequest("managed import source identity is missing".to_owned())
     })?;
-    let record = parse_managed_gguf_record(storage, source_id, source_path)?;
+    let mut saved_percent = 0;
+    let mut progress_error = None;
+    let result =
+        parse_managed_gguf_record_with_progress(storage, &source_id, source_path, true, |bytes| {
+            persist_hash_progress(
+                storage,
+                operation,
+                bytes,
+                cancellation,
+                &mut saved_percent,
+                &mut progress_error,
+            )
+        });
+    if let Some(error) = progress_error {
+        return Err(error);
+    }
+    let record = result?;
     if cancellation.is_cancelled() {
         return Err(RuntimeError::Cancelled.into());
     }
@@ -624,8 +856,26 @@ fn execute_remove(
         return Err(RuntimeError::Cancelled.into());
     }
 
-    let (size, content_hash) =
-        storage.remove_managed_model(managed_path, record.content_hash.as_deref())?;
+    let mut saved_percent = 0;
+    let mut progress_error = None;
+    let result = storage.remove_managed_model_cancellable(
+        managed_path,
+        record.content_hash.as_deref(),
+        |bytes| {
+            persist_hash_progress(
+                storage,
+                operation,
+                bytes,
+                cancellation,
+                &mut saved_percent,
+                &mut progress_error,
+            )
+        },
+    );
+    if let Some(error) = progress_error {
+        return Err(error);
+    }
+    let (size, content_hash) = result.map_err(map_cancelled_storage)?;
     let removal = ModelRemovalEvidence {
         removal_id: format!(
             "removal-{}",
@@ -640,6 +890,53 @@ fn execute_remove(
     };
     storage.save_model_removal(&removal)?;
     Ok(CompletedOperation::Remove { size, content_hash })
+}
+
+fn map_cancelled_storage(error: StorageError) -> ModelLibraryError {
+    if error == StorageError::OperationCancelled {
+        ModelLibraryError::Runtime(RuntimeError::Cancelled)
+    } else {
+        ModelLibraryError::Storage(error)
+    }
+}
+
+/// Hashing a large GGUF can run for minutes. Persist coarse progress without
+/// turning each 64 KiB disk read into a SQLite write, while checking every read
+/// for cancellation. Keep 100% for the successfully persisted terminal state.
+fn persist_hash_progress(
+    storage: &StorageService,
+    operation: &mut ModelOperation,
+    hashed_bytes: u64,
+    cancellation: &CancellationToken,
+    saved_percent: &mut u8,
+    progress_error: &mut Option<ModelLibraryError>,
+) -> bool {
+    if cancellation.is_cancelled() || progress_error.is_some() {
+        return false;
+    }
+    let Some(total) = operation.bytes_total else {
+        return true;
+    };
+    if hashed_bytes > total {
+        // Storage verifies the file's final length and detects concurrent edits.
+        return true;
+    }
+    operation.bytes_completed = hashed_bytes;
+    let percent = if total == 0 {
+        0
+    } else {
+        (hashed_bytes.saturating_mul(100) / total).min(99) as u8
+    };
+    operation.progress_percent = Some(percent);
+    if percent > *saved_percent {
+        operation.updated_at = now_marker();
+        if let Err(error) = persist_operation(storage, operation) {
+            *progress_error = Some(error);
+            return false;
+        }
+        *saved_percent = percent;
+    }
+    !cancellation.is_cancelled()
 }
 
 fn persist_operation(
@@ -836,7 +1133,13 @@ fn discover_source(
     };
 
     for model in &discovered {
-        storage.save_model_record(model, &now_marker())?;
+        // Managed GGUF discovery is transient. The immutable hashed import record
+        // is saved only by the explicit import action; persisting a metadata-only
+        // rediscovery view under that same identity would conflict, while saving
+        // it separately would create a duplicate hashless catalog row.
+        if !model.managed {
+            storage.save_model_record(model, &now_marker())?;
+        }
     }
     let models = discovered
         .into_iter()
@@ -880,7 +1183,25 @@ fn discover_source_models(
         ModelBackend::LmStudio | ModelBackend::LlamaCpp => {
             let Some(endpoint) = endpoint else {
                 if let Some(path) = path {
-                    return Ok(vec![parse_managed_gguf_record(storage, source_id, path)?]);
+                    let current = parse_managed_gguf_record(storage, source_id, path, false)?;
+                    let prior_import =
+                        storage
+                            .list_model_records()?
+                            .into_iter()
+                            .rev()
+                            .find(|record| {
+                                record.managed
+                                    && record.content_hash.is_some()
+                                    && record.source_id == source_id
+                                    && record.managed_path.as_deref() == Some(path)
+                                    && same_managed_model_metadata(record, &current)
+                            });
+                    if let Some(mut record) = prior_import {
+                        record.content_hash_status =
+                            ModelContentHashStatus::ImportIdentityNotRechecked;
+                        return Ok(vec![record]);
+                    }
+                    return Ok(vec![current]);
                 }
                 return Err(ModelLibraryError::InvalidRequest(
                     "local model source endpoint or managed GGUF path is required".to_owned(),
@@ -927,7 +1248,7 @@ fn model_record_from_info(
     backend: ModelBackend,
     model: ModelInfo,
 ) -> Result<ModelRecord, ModelLibraryError> {
-    let model_id = stable_model_id(source_id, &model, None);
+    let model_id = stable_model_id(source_id, &model, None, None);
     Ok(ModelRecord {
         model_id,
         source_id: source_id.to_owned(),
@@ -938,6 +1259,7 @@ fn model_record_from_info(
         availability: crate::domain::ModelAvailability::Available,
         digest: model.digest,
         content_hash: None,
+        content_hash_status: ModelContentHashStatus::NotAvailable,
         size_bytes: model.size_bytes,
         family: model.family,
         parameter_size: model.parameter_size,
@@ -1038,8 +1360,24 @@ fn first_u64(object: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
         .find_map(|key| object.get(*key).and_then(Value::as_u64))
 }
 
-fn stable_model_id(source_id: &str, model: &ModelInfo, path: Option<&str>) -> String {
-    let identity = format!(
+fn same_managed_model_metadata(left: &ModelRecord, right: &ModelRecord) -> bool {
+    left.backend == right.backend
+        && left.name == right.name
+        && left.size_bytes == right.size_bytes
+        && left.family == right.family
+        && left.parameter_size == right.parameter_size
+        && left.quantization_level == right.quantization_level
+        && left.context_length == right.context_length
+        && left.metadata == right.metadata
+}
+
+fn stable_model_id(
+    source_id: &str,
+    model: &ModelInfo,
+    path: Option<&str>,
+    content_hash: Option<&str>,
+) -> String {
+    let mut identity = format!(
         "{}|{}|{}|{}|{}|{}",
         source_id,
         model.name,
@@ -1049,8 +1387,12 @@ fn stable_model_id(source_id: &str, model: &ModelInfo, path: Option<&str>) -> St
             .size_bytes
             .map(|size| size.to_string())
             .unwrap_or_default(),
-        path.unwrap_or_default()
+        path.unwrap_or_default(),
     );
+    if let Some(content_hash) = content_hash {
+        identity.push('|');
+        identity.push_str(content_hash);
+    }
     format!(
         "model-{}",
         &crate::domain::sha256_hex(identity.as_bytes())[..32]
@@ -1061,11 +1403,46 @@ fn parse_managed_gguf_record(
     storage: &StorageService,
     source_id: &str,
     relative_path: &str,
+    hash_contents: bool,
+) -> Result<ModelRecord, ModelLibraryError> {
+    parse_managed_gguf_record_with_progress(
+        storage,
+        source_id,
+        relative_path,
+        hash_contents,
+        |_| true,
+    )
+}
+
+fn parse_managed_gguf_record_with_progress(
+    storage: &StorageService,
+    source_id: &str,
+    relative_path: &str,
+    hash_contents: bool,
+    mut on_progress: impl FnMut(u64) -> bool,
 ) -> Result<ModelRecord, ModelLibraryError> {
     validate_gguf_path(relative_path)?;
-    let (size, bytes) = storage
-        .read_managed_model_prefix(relative_path, MAX_GGUF_HEADER_BYTES)
-        .map_err(|error| ModelLibraryError::GgufImport(error.to_string()))?;
+    let (size, bytes, content_hash) = if hash_contents {
+        let (size, bytes, hash) = storage
+            .read_managed_model_prefix_and_hash_cancellable(
+                relative_path,
+                MAX_GGUF_HEADER_BYTES,
+                &mut on_progress,
+            )
+            .map_err(|error| {
+                if error == StorageError::OperationCancelled {
+                    map_cancelled_storage(error)
+                } else {
+                    ModelLibraryError::GgufImport(error.to_string())
+                }
+            })?;
+        (size, bytes, Some(hash))
+    } else {
+        let (size, bytes) = storage
+            .read_managed_model_prefix(relative_path, MAX_GGUF_HEADER_BYTES)
+            .map_err(|error| ModelLibraryError::GgufImport(error.to_string()))?;
+        (size, bytes, None)
+    };
     if size > MAX_MANAGED_MODEL_BYTES {
         return Err(ModelLibraryError::GgufImport(
             "managed GGUF file exceeds the local size limit".to_owned(),
@@ -1133,8 +1510,18 @@ fn parse_managed_gguf_record(
         metadata: parsed.metadata,
     };
     crate::ollama::validate_model_info(&info)?;
+    let content_hash_status = if content_hash.is_some() {
+        ModelContentHashStatus::VerifiedAtImport
+    } else {
+        ModelContentHashStatus::NotAvailable
+    };
     Ok(ModelRecord {
-        model_id: stable_model_id(source_id, &info, Some(relative_path)),
+        model_id: stable_model_id(
+            source_id,
+            &info,
+            Some(relative_path),
+            content_hash.as_deref(),
+        ),
         source_id: source_id.to_owned(),
         backend: ModelBackend::LlamaCpp,
         name: info.name,
@@ -1142,7 +1529,8 @@ fn parse_managed_gguf_record(
         path: Some(relative_path.to_owned()),
         availability: crate::domain::ModelAvailability::Available,
         digest: info.digest,
-        content_hash: None,
+        content_hash,
+        content_hash_status,
         size_bytes: info.size_bytes,
         family: info.family,
         parameter_size: info.parameter_size,
@@ -1389,12 +1777,41 @@ fn gguf_file_type(value: u64) -> String {
 fn validate_gguf_path(path: &str) -> Result<(), ModelLibraryError> {
     if path.is_empty()
         || path.len() > MAX_MODEL_PATH_BYTES
-        || path.contains('\\')
-        || path.starts_with('/')
-        || path.as_bytes().get(1) == Some(&b':')
         || path
-            .split('/')
-            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+            .chars()
+            .any(|character| character.is_control() || "\\:<>\"|?*".contains(character))
+        || path.starts_with('/')
+        || path.split('/').any(|segment| {
+            let basename = segment.split('.').next().unwrap_or_default();
+            segment.is_empty()
+                || matches!(segment, "." | "..")
+                || segment.ends_with([' ', '.'])
+                || matches!(
+                    basename.to_ascii_lowercase().as_str(),
+                    "con"
+                        | "prn"
+                        | "aux"
+                        | "nul"
+                        | "com1"
+                        | "com2"
+                        | "com3"
+                        | "com4"
+                        | "com5"
+                        | "com6"
+                        | "com7"
+                        | "com8"
+                        | "com9"
+                        | "lpt1"
+                        | "lpt2"
+                        | "lpt3"
+                        | "lpt4"
+                        | "lpt5"
+                        | "lpt6"
+                        | "lpt7"
+                        | "lpt8"
+                        | "lpt9"
+                )
+        })
         || !path.to_ascii_lowercase().ends_with(".gguf")
     {
         return Err(ModelLibraryError::InvalidRequest(
@@ -1565,7 +1982,16 @@ mod tests {
                     return;
                 };
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                read_request_headers(&mut stream);
+                let request_headers = read_request_headers(&mut stream);
+                let request_length = request_headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length: "))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut request_body = vec![0; request_length];
+                if stream.read_exact(&mut request_body).is_err() {
+                    return;
+                }
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -1589,7 +2015,58 @@ mod tests {
         }
     }
 
-    fn read_request_headers(stream: &mut TcpStream) {
+    struct IdentityServer {
+        endpoint: String,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl IdentityServer {
+        fn start(tag_digest: &'static str, running_digest: &'static str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let handle = thread::spawn(move || {
+                for _ in 0..3 {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    let request = read_request_headers(&mut stream);
+                    let path = request.lines().next().unwrap_or_default();
+                    let body = if path.starts_with("GET /api/version ") {
+                        r#"{"version":"0.5.0"}"#.to_owned()
+                    } else if path.starts_with("GET /api/tags ") {
+                        format!(
+                            r#"{{"models":[{{"name":"alpha","digest":"{tag_digest}","size":42,"details":{{"quantization_level":"Q4_K_M"}}}}]}}"#
+                        )
+                    } else {
+                        format!(
+                            r#"{{"models":[{{"name":"alpha","digest":"{running_digest}","size":42,"details":{{"quantization_level":"Q4_K_M"}}}}]}}"#
+                        )
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            Self {
+                endpoint: format!("http://127.0.0.1:{port}"),
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for IdentityServer {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn read_request_headers(stream: &mut TcpStream) -> String {
         let mut bytes = Vec::new();
         let mut one = [0_u8; 1];
         while bytes.len() < 16 * 1024 {
@@ -1601,6 +2078,7 @@ mod tests {
                 break;
             }
         }
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     fn minimal_gguf(model_name: &str) -> Vec<u8> {
@@ -1636,6 +2114,7 @@ mod tests {
             availability: crate::domain::ModelAvailability::Available,
             digest: digest.map(str::to_owned),
             content_hash: None,
+            content_hash_status: ModelContentHashStatus::NotAvailable,
             size_bytes: Some(42),
             family: Some("llama".to_owned()),
             parameter_size: Some("7B".to_owned()),
@@ -1646,6 +2125,42 @@ mod tests {
             managed_path: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn adding_import_hash_preserves_existing_unhashed_model_ids() {
+        let info = ModelInfo {
+            name: "local-model".to_owned(),
+            digest: Some("sha256:model".to_owned()),
+            size_bytes: Some(42),
+            modified_at: None,
+            family: Some("llama".to_owned()),
+            parameter_size: Some("7B".to_owned()),
+            quantization_level: Some("Q4_K_M".to_owned()),
+            context_length: None,
+            metadata: BTreeMap::new(),
+        };
+
+        let old_id = stable_model_id("local-source", &info, None, None);
+        let import_id = stable_model_id("local-source", &info, None, Some(&"a".repeat(64)));
+
+        let old_identity = format!(
+            "{}|{}|{}|{}|{}|{}",
+            "local-source",
+            info.name,
+            info.digest.as_deref().unwrap_or_default(),
+            info.quantization_level.as_deref().unwrap_or_default(),
+            info.size_bytes.unwrap_or_default(),
+            "",
+        );
+        assert_eq!(
+            old_id,
+            format!(
+                "model-{}",
+                &crate::domain::sha256_hex(old_identity.as_bytes())[..32]
+            )
+        );
+        assert_ne!(old_id, import_id);
     }
 
     #[test]
@@ -1744,6 +2259,88 @@ mod tests {
     }
 
     #[test]
+    fn live_ollama_profile_identity_reads_current_digest_without_persisting_catalog_rows() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let server = IdentityServer::start("sha256:current", "sha256:current");
+        let config = ModelSourceConfig {
+            backend: ModelBackend::Ollama,
+            label: None,
+            endpoint: Some(server.endpoint.clone()),
+            path: None,
+        };
+        let source_id = stable_model_source_id(&config).unwrap();
+        let mut extra = BTreeMap::new();
+        extra.insert("backend".to_owned(), json!(ModelBackend::Ollama));
+        extra.insert("modelId".to_owned(), json!("model-stored"));
+        extra.insert("sourceId".to_owned(), json!(source_id));
+        extra.insert("endpoint".to_owned(), json!(server.endpoint));
+        extra.insert("modelDigest".to_owned(), json!("sha256:previous"));
+        let profile = ProfileRevision {
+            profile_id: "profile-live".to_owned(),
+            profile_revision_id: "profile-live@1".to_owned(),
+            revision: 1,
+            model: "alpha".to_owned(),
+            runtime: "ollama".to_owned(),
+            parameters: BTreeMap::new(),
+            system_prompt: None,
+            extra,
+        };
+        storage.save_profile_revision(&profile, "100").unwrap();
+        assert!(storage.list_model_records().unwrap().is_empty());
+
+        let current =
+            read_live_profile_model_identity(&storage, &profile.profile_revision_id, true)
+                .expect("live runtime identity is read");
+
+        assert_eq!(current.digest.as_deref(), Some("sha256:current"));
+        assert_eq!(current.runtime_version.as_deref(), Some("0.5.0"));
+        assert_eq!(current.source_id, source_id);
+        assert_eq!(current.model, "alpha");
+        assert!(storage.list_model_records().unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_ollama_profile_identity_rejects_a_loaded_digest_different_from_the_current_tag() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let server = IdentityServer::start("sha256:current", "sha256:loaded-other");
+        let config = ModelSourceConfig {
+            backend: ModelBackend::Ollama,
+            label: None,
+            endpoint: Some(server.endpoint.clone()),
+            path: None,
+        };
+        let source_id = stable_model_source_id(&config).unwrap();
+        let mut extra = BTreeMap::new();
+        extra.insert("backend".to_owned(), json!(ModelBackend::Ollama));
+        extra.insert("modelId".to_owned(), json!("model-stored"));
+        extra.insert("sourceId".to_owned(), json!(source_id));
+        extra.insert("endpoint".to_owned(), json!(server.endpoint));
+        extra.insert("modelDigest".to_owned(), json!("sha256:previous"));
+        let profile = ProfileRevision {
+            profile_id: "profile-live".to_owned(),
+            profile_revision_id: "profile-live@1".to_owned(),
+            revision: 1,
+            model: "alpha".to_owned(),
+            runtime: "ollama".to_owned(),
+            parameters: BTreeMap::new(),
+            system_prompt: None,
+            extra,
+        };
+        storage.save_profile_revision(&profile, "100").unwrap();
+
+        let result = read_live_profile_model_identity(&storage, &profile.profile_revision_id, true);
+
+        assert!(
+            matches!(result, Err(ModelLibraryError::InvalidRequest(message)) if message.contains("loaded model digest"))
+        );
+        assert!(storage.list_model_records().unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn duplicate_grouping_keeps_digest_and_quantization_variants_distinct() {
         let same = model("one", Some("sha256:same"), Some("Q4_K_M"));
         let mut duplicate = same.clone();
@@ -1815,6 +2412,234 @@ mod tests {
     }
 
     #[test]
+    fn download_accepts_more_than_512_progress_frames_without_unbounded_audit_writes() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let mut body = (0..600_u64)
+            .map(|completed| {
+                json!({
+                    "status": "downloading",
+                    "total": 600,
+                    "completed": completed
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push('\n');
+        body.push_str(&json!({ "status": "success", "total": 600, "completed": 600 }).to_string());
+        body.push('\n');
+        let server = PullServer::start(body);
+
+        let result = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Download {
+                operation_id: "download-many-frames".to_owned(),
+                endpoint: server.endpoint.clone(),
+                model_name: "tiny-model".to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("a large but bounded progress stream must complete");
+
+        assert_eq!(result.status, ModelOperationStatus::Completed, "{result:?}");
+        assert_eq!(result.bytes_completed, 600);
+        let events = storage
+            .list_model_operation_events("download-many-frames")
+            .unwrap();
+        assert!(
+            events.len() < 150,
+            "unchanged percentage frames should be coalesced"
+        );
+        assert!(events.len() <= MAX_MODEL_OPERATION_EVENTS);
+        assert_eq!(events.first().unwrap().status, ModelOperationStatus::Queued);
+        assert_eq!(events.last().unwrap(), &result);
+
+        drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn download_reserves_a_terminal_audit_snapshot_after_history_limit() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let mut body = (0..(MAX_MODEL_OPERATION_EVENTS + 20))
+            .map(|index| json!({ "status": format!("phase-{index}") }).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push('\n');
+        body.push_str(&json!({ "status": "success", "total": 100, "completed": 100 }).to_string());
+        body.push('\n');
+        let server = PullServer::start(body);
+
+        let operation = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Download {
+                operation_id: "bounded-history".to_owned(),
+                endpoint: server.endpoint.clone(),
+                model_name: "tiny-model".to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .expect("bounded progress history must not reject a valid runtime stream");
+
+        assert_eq!(
+            operation.status,
+            ModelOperationStatus::Completed,
+            "{operation:?}"
+        );
+        let events = storage
+            .list_model_operation_events("bounded-history")
+            .unwrap();
+        assert_eq!(events.len(), MAX_MODEL_OPERATION_EVENTS);
+        assert_eq!(events.first().unwrap().status, ModelOperationStatus::Queued);
+        assert_eq!(events.last().unwrap(), &operation);
+
+        drop(server);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_reconciles_orphaned_model_operations_without_touching_terminal_history() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let queued = queued_operation(
+            "orphan-queued",
+            ModelOperationKind::Download,
+            ModelBackend::Ollama,
+            None,
+            Some("model".to_owned()),
+            None,
+            None,
+            "100".to_owned(),
+        );
+        let mut running = queued.clone();
+        running.operation_id = "orphan-running".to_owned();
+        running.status = ModelOperationStatus::Running;
+        running.bytes_completed = 42;
+        let mut finished = queued.clone();
+        finished.operation_id = "already-finished".to_owned();
+        finished.status = ModelOperationStatus::Completed;
+        storage.save_model_operation(&queued).unwrap();
+        storage.save_model_operation(&running).unwrap();
+        storage.save_model_operation(&finished).unwrap();
+
+        assert_eq!(reconcile_interrupted_model_operations(&storage).unwrap(), 2);
+        assert_eq!(reconcile_interrupted_model_operations(&storage).unwrap(), 0);
+        for operation_id in ["orphan-queued", "orphan-running"] {
+            let operation = storage.get_model_operation(operation_id).unwrap().unwrap();
+            assert_eq!(operation.status, ModelOperationStatus::Failed);
+            assert!(operation
+                .message
+                .unwrap()
+                .contains("earlier application shutdown"));
+            let events = storage.list_model_operation_events(operation_id).unwrap();
+            assert_eq!(events.last().unwrap().status, ModelOperationStatus::Failed);
+        }
+        assert_eq!(
+            storage
+                .get_model_operation("orphan-running")
+                .unwrap()
+                .unwrap()
+                .bytes_completed,
+            42
+        );
+        assert_eq!(
+            storage.get_model_operation("already-finished").unwrap(),
+            Some(finished)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn historical_operation_count_does_not_block_the_next_operation() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        for index in 0..MAX_MODEL_OPERATION_COUNT {
+            let mut historical = queued_operation(
+                &format!("completed-{index}"),
+                ModelOperationKind::Import,
+                ModelBackend::LlamaCpp,
+                None,
+                None,
+                None,
+                None,
+                "100".to_owned(),
+            );
+            historical.status = ModelOperationStatus::Completed;
+            storage.save_model_operation(&historical).unwrap();
+        }
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let operation = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "operation-513".to_owned(),
+                source_path: "next.gguf".to_owned(),
+            },
+            &cancellation,
+        )
+        .expect("historical operations must not exhaust lifetime operation capacity");
+
+        assert_eq!(operation.status, ModelOperationStatus::Cancelled);
+        assert_eq!(
+            storage.list_model_operations().unwrap().len(),
+            MAX_MODEL_OPERATION_COUNT + 1
+        );
+        let old = storage.get_model_operation("completed-0").unwrap().unwrap();
+        assert_eq!(old.status, ModelOperationStatus::Completed);
+        assert_eq!(
+            storage
+                .list_model_operation_events("completed-0")
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn active_operation_cap_is_independent_of_the_immutable_history_limit() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let controller = ModelOperationController::default();
+        {
+            let mut active = controller.active.lock().unwrap();
+            for index in 0..MAX_ACTIVE_MODEL_OPERATIONS {
+                active.insert(format!("active-{index}"), CancellationToken::new());
+            }
+        }
+        let new_request = ModelOperationRequest::Import {
+            operation_id: "extra-operation".to_owned(),
+            source_path: "new.gguf".to_owned(),
+        };
+        let error = controller.execute(&storage, &new_request).unwrap_err();
+        assert!(error.to_string().contains("active model operation count"));
+        assert!(storage
+            .get_model_operation("extra-operation")
+            .unwrap()
+            .is_none());
+
+        controller.active.lock().unwrap().remove("active-0");
+        let attempt = ModelOperationRequest::Import {
+            operation_id: "extra-operation".to_owned(),
+            source_path: "new.gguf".to_owned(),
+        };
+        // One freed slot permits new work immediately; missing input is
+        // recorded as a normal terminal failure rather than a capacity error.
+        let result = controller.execute(&storage, &attempt).unwrap();
+        assert_eq!(result.status, ModelOperationStatus::Failed);
+        assert_eq!(
+            controller.active.lock().unwrap().len(),
+            MAX_ACTIVE_MODEL_OPERATIONS - 1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn import_and_remove_operations_persist_progress_and_audit_hash() {
         let root = temporary_root();
         let storage = StorageService::open(&root).unwrap();
@@ -1845,6 +2670,11 @@ mod tests {
             .expect("imported model record");
         assert!(record.managed);
         assert_eq!(record.managed_path.as_deref(), Some(relative_path));
+        assert_eq!(record.content_hash, Some(crate::domain::sha256_hex(&bytes)));
+        assert_eq!(
+            record.content_hash_status,
+            ModelContentHashStatus::VerifiedAtImport
+        );
 
         let removed = run_model_operation(
             &storage,
@@ -1869,6 +2699,119 @@ mod tests {
         assert_eq!(removals[0].managed_path, relative_path);
         assert_eq!(removals[0].content_hash, expected_hash);
         assert_eq!(removals[0].outcome, "removed");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_gguf_rediscovery_preserves_import_identity_without_rechecking_bytes() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/versioned-model.gguf";
+        let mut bytes = minimal_gguf("versioned-model");
+        bytes.push(0x2a);
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &bytes).unwrap();
+
+        let first_import = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "versioned-import-1".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let first_model_id = first_import.model_id.unwrap();
+        let first_hash = crate::domain::sha256_hex(&bytes);
+        let source_config = ModelSourceConfig {
+            backend: ModelBackend::LlamaCpp,
+            label: Some("Managed GGUF".to_owned()),
+            endpoint: None,
+            path: Some(relative_path.to_owned()),
+        };
+        let discover = || {
+            discover_local_models(
+                &storage,
+                &ModelDiscoveryRequest {
+                    sources: vec![source_config.clone()],
+                    query: None,
+                },
+            )
+            .unwrap()
+        };
+
+        let discovered = discover();
+        assert_eq!(discovered.models.len(), 1);
+        assert_eq!(discovered.models[0].model_id, first_model_id);
+        assert_eq!(
+            discovered.models[0].content_hash.as_deref(),
+            Some(first_hash.as_str())
+        );
+        assert_eq!(
+            discovered.models[0].content_hash_status,
+            ModelContentHashStatus::ImportIdentityNotRechecked
+        );
+        let persisted = storage.get_model_record(&first_model_id).unwrap().unwrap();
+        assert_eq!(
+            persisted.content_hash_status,
+            ModelContentHashStatus::VerifiedAtImport
+        );
+        assert_eq!(storage.list_model_records().unwrap().len(), 1);
+
+        // Same-length weight changes cannot be recognized from bounded header
+        // discovery. The catalog retains the historical import identity but
+        // marks current bytes as unverified rather than relabeling the hash.
+        *bytes.last_mut().unwrap() = 0x2b;
+        fs::write(&path, &bytes).unwrap();
+        let after_change = discover();
+        assert_eq!(after_change.models[0].model_id, first_model_id);
+        assert_eq!(
+            after_change.models[0].content_hash.as_deref(),
+            Some(first_hash.as_str())
+        );
+        assert_eq!(
+            after_change.models[0].content_hash_status,
+            ModelContentHashStatus::ImportIdentityNotRechecked
+        );
+        assert_eq!(storage.list_model_records().unwrap().len(), 1);
+
+        let second_import = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "versioned-import-2".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let second_model_id = second_import.model_id.unwrap();
+        let second_hash = crate::domain::sha256_hex(&bytes);
+        assert_ne!(first_model_id, second_model_id);
+        assert_ne!(first_hash, second_hash);
+        let second_record = storage.get_model_record(&second_model_id).unwrap().unwrap();
+        assert_eq!(
+            second_record.content_hash.as_deref(),
+            Some(second_hash.as_str())
+        );
+        assert_eq!(
+            second_record.content_hash_status,
+            ModelContentHashStatus::VerifiedAtImport
+        );
+        assert_eq!(storage.list_model_records().unwrap().len(), 2);
+
+        bytes.push(0x2c);
+        fs::write(&path, &bytes).unwrap();
+        let changed_size = discover();
+        assert_eq!(changed_size.models.len(), 1);
+        assert_eq!(changed_size.models[0].content_hash, None);
+        assert_eq!(
+            changed_size.models[0].content_hash_status,
+            ModelContentHashStatus::NotAvailable
+        );
+        assert_ne!(changed_size.models[0].model_id, second_model_id);
+        assert_eq!(storage.list_model_records().unwrap().len(), 2);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1924,11 +2867,251 @@ mod tests {
     }
 
     #[test]
+    fn simultaneous_distinct_ids_cannot_import_or_remove_the_same_managed_path() {
+        use std::sync::{mpsc, Barrier};
+
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let path = "nested/guarded.gguf";
+        let destination = storage.layout().managed_model_root().join(path);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, minimal_gguf("guarded")).unwrap();
+        let existing = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "before-race".to_owned(),
+                source_path: path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let model_id = existing.model_id.unwrap();
+
+        let holder = ManagedPathReservation::acquire(&storage, path).unwrap();
+        const CONTENDERS: usize = 24;
+        let barrier = Arc::new(Barrier::new(CONTENDERS + 1));
+        let (tx, rx) = mpsc::channel();
+        let mut threads = Vec::new();
+        for index in 0..CONTENDERS {
+            let storage = storage.clone();
+            let barrier = Arc::clone(&barrier);
+            let tx = tx.clone();
+            let model_id = model_id.clone();
+            threads.push(thread::spawn(move || {
+                let request = if index % 2 == 0 {
+                    ModelOperationRequest::Import {
+                        operation_id: format!("simultaneous-import-{index}"),
+                        source_path: "nested/guarded.gguf".to_owned(),
+                    }
+                } else {
+                    ModelOperationRequest::Remove {
+                        operation_id: format!("simultaneous-remove-{index}"),
+                        model_id,
+                    }
+                };
+                barrier.wait();
+                tx.send(run_model_operation(
+                    &storage,
+                    &request,
+                    &CancellationToken::new(),
+                ))
+                .unwrap();
+            }));
+        }
+        barrier.wait();
+        for _ in 0..CONTENDERS {
+            let outcome = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(
+                matches!(outcome, Err(ModelLibraryError::InvalidRequest(message)) if message.contains("active"))
+            );
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert!(destination.exists());
+        assert_eq!(storage.list_model_operations().unwrap().len(), 1);
+        drop(holder);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let recovered = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "after-race".to_owned(),
+                source_path: path.to_owned(),
+            },
+            &cancellation,
+        )
+        .unwrap();
+        assert_eq!(recovered.status, ModelOperationStatus::Cancelled);
+        assert_eq!(storage.list_model_operations().unwrap().len(), 2);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn direct_gguf_import_cannot_bypass_the_managed_path_reservation() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let path = "direct.gguf";
+        let file = storage.layout().managed_model_root().join(path);
+        fs::write(&file, minimal_gguf("direct")).unwrap();
+        let reservation = ManagedPathReservation::acquire(&storage, path).unwrap();
+        let request = ModelImportRequest {
+            source_path: path.to_owned(),
+        };
+        let error = import_managed_gguf_model(&storage, &request).unwrap_err();
+        assert!(error.to_string().contains("active"));
+        drop(reservation);
+        assert!(import_managed_gguf_model(&storage, &request).is_ok());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn streaming_gguf_hash_stops_on_mid_file_cancellation_before_saving_model() {
+        use std::fs::OpenOptions;
+
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/cancellable.gguf";
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, minimal_gguf("cancellable")).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(8 * 1024 * 1024)
+            .unwrap();
+
+        let mut progress = Vec::new();
+        let outcome = parse_managed_gguf_record_with_progress(
+            &storage,
+            "llama-cpp-local",
+            relative_path,
+            true,
+            |bytes| {
+                progress.push(bytes);
+                bytes < 2 * 1024 * 1024
+            },
+        );
+        assert!(matches!(
+            outcome,
+            Err(ModelLibraryError::Runtime(RuntimeError::Cancelled))
+        ));
+        assert!(progress.iter().any(|bytes| *bytes > 0));
+        assert!(progress.last().copied().unwrap() < 8 * 1024 * 1024);
+        assert_eq!(fs::metadata(&path).unwrap().len(), 8 * 1024 * 1024);
+        assert!(storage.list_model_records().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_gguf_import_persists_bounded_progress_during_large_hash() {
+        use std::fs::OpenOptions;
+
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let relative_path = "nested/progress.gguf";
+        let path = storage.layout().managed_model_root().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, minimal_gguf("progress")).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(4 * 1024 * 1024)
+            .unwrap();
+
+        let result = run_model_operation(
+            &storage,
+            &ModelOperationRequest::Import {
+                operation_id: "progress-import".to_owned(),
+                source_path: relative_path.to_owned(),
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(result.status, ModelOperationStatus::Completed);
+        let events = storage
+            .list_model_operation_events("progress-import")
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.status == ModelOperationStatus::Running
+                && event.bytes_completed > 0
+                && event.progress_percent.is_some_and(|percent| percent < 100)
+        }));
+        assert!(events.len() <= MAX_MODEL_OPERATION_EVENTS);
+        assert_eq!(events.last().unwrap(), &result);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_hash_progress_is_bounded_and_preserves_terminal_state() {
+        let root = temporary_root();
+        let storage = StorageService::open(&root).unwrap();
+        let cancellation = CancellationToken::new();
+        let mut operation = queued_operation(
+            "hash-progress",
+            ModelOperationKind::Import,
+            ModelBackend::LlamaCpp,
+            None,
+            None,
+            None,
+            Some("sample.gguf".to_owned()),
+            "100".to_owned(),
+        );
+        operation.status = ModelOperationStatus::Running;
+        operation.bytes_total = Some(1_000);
+        storage.save_model_operation(&operation).unwrap();
+        let mut saved_percent = 0;
+        let mut error = None;
+        for bytes in [0, 10, 250, 1_000] {
+            assert!(persist_hash_progress(
+                &storage,
+                &mut operation,
+                bytes,
+                &cancellation,
+                &mut saved_percent,
+                &mut error,
+            ));
+        }
+        assert!(error.is_none());
+        assert_eq!(operation.bytes_completed, 1_000);
+        assert_eq!(operation.progress_percent, Some(99));
+        assert!(saved_percent <= 99);
+        cancellation.cancel();
+        assert!(!persist_hash_progress(
+            &storage,
+            &mut operation,
+            1_000,
+            &cancellation,
+            &mut saved_percent,
+            &mut error,
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn source_validation_rejects_non_loopback_endpoints_and_unsafe_paths() {
         for endpoint in ["https://127.0.0.1:1234", "http://192.168.1.10:1234"] {
             assert!(validated_source_parts(&source(ModelBackend::LmStudio, endpoint)).is_err());
         }
-        for path in ["../model.gguf", "C:/model.gguf", "nested\\model.gguf"] {
+        for path in [
+            "../model.gguf",
+            "C:/model.gguf",
+            "nested\\model.gguf",
+            "nested/model:stream.gguf",
+            "CON.gguf",
+            "aux/model.gguf",
+            "nested/model?.gguf",
+            "nested/model .gguf\t",
+            "nested/model.gguf\n",
+        ] {
             assert!(validated_source_parts(&ModelSourceConfig {
                 backend: ModelBackend::LlamaCpp,
                 label: None,

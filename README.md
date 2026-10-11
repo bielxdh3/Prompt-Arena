@@ -185,7 +185,7 @@ The goal is not only to get an answer. It is to keep enough evidence to answer: 
 
 **Current canonical release: `v0.1.4 Beta`.**
 
-The integrated desktop product is on `main`, the release pipeline is operational, and public packages are available for Windows and Linux. The project is intentionally **not** presented as production-complete while acceptance gaps remain.
+The latest published beta is `v0.1.4`, with Windows and Linux assets on GitHub Releases. The current source workflow validates and packages release candidates; public publication is paused until the server-side controls in [docs/RELEASING.md](docs/RELEASING.md) are verified. The project is intentionally **not** presented as production-complete while acceptance gaps remain.
 
 <details>
 <summary><strong>Current implementation / acceptance matrix</strong></summary>
@@ -263,7 +263,7 @@ CI executes the supported Windows/Linux validation matrix on pushes and pull req
 
 ## Releases
 
-GitHub Releases are the canonical distribution surface. Release automation builds from an exact ref, re-runs validation, creates Windows/Linux native packages, publishes checksums and verification evidence, and marks 0.x builds as prereleases unless explicitly promoted.
+GitHub Releases are the canonical distribution surface. The current workflow builds and validates packages from an exact reviewed ref and stores them as temporary Actions artifacts; it does not create tags or publish releases. Existing public assets remain available on GitHub Releases while further publication is paused pending server-side control verification.
 
 See [docs/RELEASING.md](docs/RELEASING.md), [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md), and the [v0.1.4 release notes](docs/releases/v0.1.4.md).
 

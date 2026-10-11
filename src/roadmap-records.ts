@@ -1,6 +1,7 @@
 /** Shared immutable roadmap-record contracts and bounded sanitization helpers. */
 export const ROADMAP_FEATURE_KINDS = [
   "single_model_benchmark",
+  "single_model_suite",
   "performance_lab",
   "historical_regression",
   "model_ratings",

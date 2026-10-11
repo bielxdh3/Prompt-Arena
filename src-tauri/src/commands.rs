@@ -1,25 +1,32 @@
 use std::{
+    collections::HashMap,
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Mutex, OnceLock,
+        mpsc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::{
+    docker_evaluator::{
+        evaluate_cancellable as evaluate_docker_contract, DockerEvaluation, DockerEvaluationStatus,
+        PINNED_PYTHON_IMAGE, VERIFIER_CONTRACT_VERSION,
+    },
     domain::{
         sha256_hex, validate_benchmark_document as validate_document,
         validate_benchmark_document_size as validate_document_size, Attempt,
         BlindEvaluationLockRequest, BlindEvaluationPreparation, BlindEvaluationRecord,
-        ModelCatalog, ModelDiscoveryRequest, ModelImportRequest, ModelOperation, ModelRecord,
-        ModelRemovalEvidence, ProfileRevision, Run, ValidatedBenchmark, ValidationError,
+        DockerVerifierId, ModelCatalog, ModelDiscoveryRequest, ModelImportRequest, ModelOperation,
+        ModelRecord, ModelRemovalEvidence, ObjectiveVerificationEvidence, ProfileRevision, Run,
+        ValidatedBenchmark, ValidationError,
     },
     evaluation::{
         get_blind_evaluation as get_blind_evaluation_record,
@@ -40,8 +47,10 @@ use crate::{
     hardware::{read_hardware_snapshot as read_hardware_snapshot_record, HardwareSnapshot},
     model_library::{
         discover_local_models as discover_local_models_backend,
-        import_managed_gguf_model as import_managed_gguf_model_backend, ModelLibraryError,
-        ModelOperationController, ModelOperationRequest,
+        import_managed_gguf_model as import_managed_gguf_model_backend,
+        read_live_profile_model_identity as read_live_profile_model_identity_backend,
+        LiveProfileModelIdentity, ModelLibraryError, ModelOperationController,
+        ModelOperationRequest,
     },
     official_packs::{
         get_official_pack as get_official_pack_record,
@@ -51,21 +60,23 @@ use crate::{
     },
     ollama::{OllamaConfig, OllamaProvider, DEFAULT_OLLAMA_ENDPOINT},
     orchestration::{
-        persist_terminal_outcome, OrchestrationError, PersistedExecution, RunPlan, TerminalOutcome,
+        bind_authoritative_execution_boundary, persist_terminal_outcome, OrchestrationError,
+        PersistedExecution, RunPlan, TerminalOutcome,
     },
     protocol::{
         WorkerErrorCode, WorkerOutcome, WorkerRequest, WorkerResponse, WorkerResult,
         MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, WORKER_PROTOCOL_VERSION,
     },
-    runtime::{ModelInfo, RuntimeError, RuntimeProvider},
+    runtime::{CancellationToken, ModelInfo, RuntimeError, RuntimeProvider},
     storage::{
         now_marker, ArenaSummaryPayload, ArenaSummaryRecord, BenchmarkDraft, BenchmarkDraftInput,
         BenchmarkDraftSummary, BenchmarkVersion, BenchmarkVersionSummary,
         CalibrationBenchmarkPayload, CalibrationBenchmarkRecord, CalibrationResultPayload,
-        CalibrationResultRecord, ExternalGenerationEvidenceRecord, RoadmapRecord,
-        RoadmapRecordRequest, StorageError, StorageRetentionPreview, StorageRetentionRequest,
-        StorageRetentionResult, StorageService, TournamentResultPayload, TournamentResultRecord,
-        MAX_DRAFT_REQUEST_BYTES, MAX_METADATA_BYTES, MAX_PROFILE_REQUEST_BYTES,
+        CalibrationResultRecord, ExternalGenerationEvidenceRecord, ModelOperationsPage,
+        RoadmapRecord, RoadmapRecordRequest, StorageError, StorageRetentionPreview,
+        StorageRetentionRequest, StorageRetentionResult, StorageService, TournamentResultPayload,
+        TournamentResultRecord, MAX_DRAFT_REQUEST_BYTES, MAX_METADATA_BYTES,
+        MAX_PROFILE_REQUEST_BYTES,
     },
     APP_NAME, APP_PROTOCOL_VERSION,
 };
@@ -125,13 +136,134 @@ const OLLAMA_EXECUTABLE: &str = "ollama";
 const OLLAMA_SERVE_ARGUMENT: &str = "serve";
 const OLLAMA_START_RETRIES: usize = 20;
 const OLLAMA_START_RETRY_DELAY_MS: u64 = 250;
+const MAX_ACTIVE_ONE_SHOT_RUNS: usize = 16;
 // ponytail: one app-wide startup lock; split locks only if startup contention matters.
 static OLLAMA_START_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_OPERATION_CONTROLLER: OnceLock<ModelOperationController> = OnceLock::new();
+static ONE_SHOT_CANCELLATIONS: OnceLock<OneShotCancellationRegistry> = OnceLock::new();
 static EXTERNAL_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn model_operation_controller() -> &'static ModelOperationController {
     MODEL_OPERATION_CONTROLLER.get_or_init(ModelOperationController::default)
+}
+
+#[derive(Default)]
+struct OneShotCancellationRegistry {
+    active: Mutex<HashMap<String, ActiveCancellationEntry>>,
+}
+
+struct ActiveCancellationEntry {
+    token: CancellationToken,
+    accepts_cancel: bool,
+}
+
+struct ActiveOneShotCancellation<'a> {
+    registry: &'a OneShotCancellationRegistry,
+    run_id: String,
+}
+
+impl OneShotCancellationRegistry {
+    fn register(
+        &self,
+        run_id: &str,
+    ) -> Result<(CancellationToken, ActiveOneShotCancellation<'_>), CommandError> {
+        if !valid_one_shot_run_id(run_id) {
+            return Err(CommandError {
+                code: "run_plan_invalid",
+                message: "the run id is invalid".to_owned(),
+            });
+        }
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.contains_key(run_id) {
+            return Err(CommandError {
+                code: "run_already_active",
+                message: "a run with this id is already active".to_owned(),
+            });
+        }
+        if active.len() >= MAX_ACTIVE_ONE_SHOT_RUNS {
+            return Err(CommandError {
+                code: "run_concurrency_limit",
+                message: format!(
+                    "at most {MAX_ACTIVE_ONE_SHOT_RUNS} one-shot runs may be active at once"
+                ),
+            });
+        }
+        let cancellation = CancellationToken::new();
+        active.insert(
+            run_id.to_owned(),
+            ActiveCancellationEntry {
+                token: cancellation.clone(),
+                accepts_cancel: true,
+            },
+        );
+        Ok((
+            cancellation,
+            ActiveOneShotCancellation {
+                registry: self,
+                run_id: run_id.to_owned(),
+            },
+        ))
+    }
+
+    fn cancel(&self, run_id: &str) -> bool {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = active.get_mut(run_id).filter(|entry| entry.accepts_cancel) {
+            entry.token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn stop_accepting_cancellation(&self, run_id: &str) {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = active.get_mut(run_id) {
+            entry.accepts_cancel = false;
+        }
+    }
+}
+
+impl ActiveOneShotCancellation<'_> {
+    fn stop_accepting_cancellation(&self) {
+        self.registry.stop_accepting_cancellation(&self.run_id);
+    }
+}
+
+impl Drop for ActiveOneShotCancellation<'_> {
+    fn drop(&mut self) {
+        self.registry
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.run_id);
+    }
+}
+
+fn one_shot_cancellations() -> &'static OneShotCancellationRegistry {
+    ONE_SHOT_CANCELLATIONS.get_or_init(OneShotCancellationRegistry::default)
+}
+
+fn register_one_shot_run(
+    run_id: &str,
+) -> Result<(CancellationToken, ActiveOneShotCancellation<'static>), CommandError> {
+    one_shot_cancellations().register(run_id)
+}
+
+fn valid_one_shot_run_id(run_id: &str) -> bool {
+    !run_id.is_empty()
+        && run_id.len() <= 96
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@'))
 }
 
 impl From<ValidationError> for CommandError {
@@ -183,6 +315,7 @@ impl From<StorageError> for CommandError {
             StorageError::RetentionTooBroad => "retention_too_broad",
             StorageError::RetentionConfirmationRequired => "retention_confirmation_required",
             StorageError::RetentionPreviewStale => "retention_preview_stale",
+            StorageError::OperationCancelled => "model_operation_cancelled",
             StorageError::IoFailure => "storage_io_failed",
             StorageError::DatabaseFailure => "storage_database_failed",
             StorageError::MigrationFailure => "storage_migration_failed",
@@ -351,8 +484,22 @@ pub fn remove_external_provider(provider_id: ExternalProviderId) -> Result<bool,
 }
 
 #[tauri::command]
-pub fn execute_external_generation(
+pub async fn execute_external_generation(
     app: AppHandle,
+    request: ExternalGenerationRequest,
+) -> Result<ExternalGenerationResult, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_external_generation_blocking(&app, request)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "provider_transport",
+        message: "the external generation worker failed".to_owned(),
+    })?
+}
+
+fn execute_external_generation_blocking(
+    app: &AppHandle,
     request: ExternalGenerationRequest,
 ) -> Result<ExternalGenerationResult, CommandError> {
     let result = execute_external_generation_record(request).map_err(CommandError::from)?;
@@ -366,7 +513,7 @@ pub fn execute_external_generation(
     );
     let evidence = sanitized_external_generation_evidence(generation_id, &result)
         .map_err(CommandError::from)?;
-    storage_for(&app)?
+    storage_for(app)?
         .save_external_generation_evidence(&evidence, &now_marker())
         .map_err(CommandError::from)?;
     Ok(result)
@@ -745,29 +892,71 @@ pub fn list_profile_revisions(app: AppHandle) -> Result<Vec<ProfileRevision>, Co
 }
 
 #[tauri::command]
-pub fn discover_local_models(
+pub async fn discover_local_models(
     app: AppHandle,
     request: ModelDiscoveryRequest,
 ) -> Result<ModelCatalog, CommandError> {
-    discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        discover_local_models_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_discovery_failed",
+        message: "the local model discovery worker failed".to_owned(),
+    })?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn read_live_profile_model_identity(
+    app: AppHandle,
+    profile_revision_id: String,
+    require_loaded_model_digest: bool,
+) -> Result<LiveProfileModelIdentity, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_live_profile_model_identity_backend(
+            &storage_for(&app)?,
+            &profile_revision_id,
+            require_loaded_model_digest,
+        )
+        .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_discovery_failed",
+        message: "the local model identity worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
-pub fn import_managed_gguf_model(
+pub async fn import_managed_gguf_model(
     app: AppHandle,
     request: ModelImportRequest,
 ) -> Result<ModelRecord, CommandError> {
-    import_managed_gguf_model_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        import_managed_gguf_model_backend(&storage_for(&app)?, &request).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_import_failed",
+        message: "the managed GGUF import worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
-pub fn start_model_operation(
+pub async fn start_model_operation(
     app: AppHandle,
     request: ModelOperationRequest,
 ) -> Result<ModelOperation, CommandError> {
-    model_operation_controller()
-        .execute(&storage_for(&app)?, &request)
-        .map_err(Into::into)
+    tauri::async_runtime::spawn_blocking(move || {
+        model_operation_controller()
+            .execute(&storage_for(&app)?, &request)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_operation_failed",
+        message: "the model operation worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
@@ -775,6 +964,38 @@ pub fn list_model_operations(app: AppHandle) -> Result<Vec<ModelOperation>, Comm
     storage_for(&app)?
         .list_model_operations()
         .map_err(Into::into)
+}
+
+fn validate_model_operations_page(limit: u32, offset: u32) -> Result<(), CommandError> {
+    if !(1..=100).contains(&limit) || offset.checked_add(limit).is_none() {
+        return Err(CommandError {
+            code: "model_operations_page_invalid",
+            message: "model operation page limit must be 1–100 and offset must not overflow"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_model_operations_page(
+    app: AppHandle,
+    limit: u32,
+    offset: u32,
+) -> Result<ModelOperationsPage, CommandError> {
+    validate_model_operations_page(limit, offset)?;
+    // The UI polls this command during active generation; keep SQL off the
+    // dispatcher so a slow history query cannot stall cancellation requests.
+    tauri::async_runtime::spawn_blocking(move || {
+        storage_for(&app)?
+            .list_model_operations_page(limit, offset)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "model_operations_read_failed",
+        message: "the model operation history worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
@@ -800,14 +1021,30 @@ pub fn list_model_removals(app: AppHandle) -> Result<Vec<ModelRemovalEvidence>, 
 }
 
 #[tauri::command]
-pub fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
-    OllamaProvider::default_local()?
-        .list_models()
-        .map_err(Into::into)
+pub async fn list_local_ollama_models() -> Result<Vec<ModelInfo>, CommandError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        OllamaProvider::default_local()?
+            .list_models()
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "runtime_failed",
+        message: "the local Ollama model listing worker failed".to_owned(),
+    })?
 }
 
 #[tauri::command]
-pub fn start_local_ollama() -> Result<OllamaStartStatus, CommandError> {
+pub async fn start_local_ollama() -> Result<OllamaStartStatus, CommandError> {
+    tauri::async_runtime::spawn_blocking(start_local_ollama_blocking)
+        .await
+        .map_err(|_| CommandError {
+            code: "ollama_start_failed",
+            message: "the Ollama startup worker failed".to_owned(),
+        })?
+}
+
+fn start_local_ollama_blocking() -> Result<OllamaStartStatus, CommandError> {
     let _start_guard = OLLAMA_START_LOCK.lock().map_err(|_| CommandError {
         code: "ollama_start_failed",
         message: "Ollama could not be started.".to_owned(),
@@ -990,18 +1227,229 @@ pub fn get_run_status(app: AppHandle, run_id: String) -> Result<Option<RunStatus
 /// Execute exactly one bounded generation in the app-owned worker, then persist
 /// its terminal outcome in the app-owned store.
 #[tauri::command]
-pub fn execute_run_once(app: AppHandle, plan: RunPlan) -> Result<PersistedExecution, CommandError> {
-    let outcome = invoke_worker_once(&app, &plan)?;
-    persist_terminal_outcome(&storage_for(&app)?, &outcome, &now_marker()).map_err(Into::into)
+pub async fn execute_run_once(
+    app: AppHandle,
+    plan: RunPlan,
+) -> Result<PersistedExecution, CommandError> {
+    // Reserve synchronously during command dispatch, before spawn_blocking can
+    // queue the work. Immediate cancel requests must see this pending run.
+    let (cancellation, active_run) = register_one_shot_run(&plan.run_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_run_once_blocking(&app, plan, cancellation, active_run)
+    })
+    .await
+    .map_err(|_| CommandError {
+        code: "worker_failed",
+        message: "the one-shot execution worker failed".to_owned(),
+    })?
 }
 
-fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome, CommandError> {
+fn execute_run_once_blocking(
+    app: &AppHandle,
+    mut plan: RunPlan,
+    cancellation: CancellationToken,
+    active_run: ActiveOneShotCancellation<'_>,
+) -> Result<PersistedExecution, CommandError> {
+    let storage = storage_for(app)?;
+    bind_authoritative_execution_boundary(&mut plan, &storage)?;
+    let outcome = if let Some(verifier_id) = plan.docker_verifier_id {
+        let mut generation_plan = plan.clone();
+        // This text-only plan is constructed after authoritative backend
+        // binding; renderer-supplied boundary/verifier fields are never used
+        // to bypass the allowlisted Docker contract.
+        generation_plan.execution_boundary = Default::default();
+        generation_plan.docker_verifier_id = None;
+        generation_plan.verifier_policy = None;
+        generation_plan.objective_expectation = None;
+        let generated = invoke_worker_once(app, &generation_plan, &cancellation)?;
+        attach_docker_contract_outcome(generated, verifier_id, &cancellation)
+    } else {
+        invoke_worker_once(app, &plan, &cancellation)?
+    };
+    // Keep the run ID reserved until persistence finishes, while rejecting
+    // late cancel requests after its terminal outcome has been assembled.
+    active_run.stop_accepting_cancellation();
+    persist_terminal_outcome(&storage, &outcome, &now_marker()).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn cancel_run_once(run_id: String) -> bool {
+    valid_one_shot_run_id(&run_id) && one_shot_cancellations().cancel(&run_id)
+}
+
+fn attach_docker_contract_outcome(
+    outcome: TerminalOutcome,
+    verifier_id: DockerVerifierId,
+    cancellation: &CancellationToken,
+) -> TerminalOutcome {
+    match outcome {
+        TerminalOutcome::Completed {
+            mut run,
+            mut attempt,
+            response,
+            score: _,
+            progress,
+        } => {
+            let evaluation = evaluate_docker_contract(verifier_id, &response.text, cancellation);
+            let details = docker_evaluation_details(&evaluation);
+            attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
+            attempt
+                .effective_config
+                .insert("dockerImage".to_owned(), json!(PINNED_PYTHON_IMAGE));
+            attempt.extra.insert("dockerEvaluation".to_owned(), details);
+            // Infrastructure failures are persisted as verifier state with
+            // the response artifact intact, never as a failed model score.
+            let score = docker_evaluation_score(&evaluation, &response.text);
+            TerminalOutcome::Completed {
+                run,
+                attempt,
+                response,
+                score,
+                progress,
+            }
+        }
+        TerminalOutcome::Cancelled {
+            mut run,
+            mut attempt,
+            progress,
+        } => {
+            let details = json!({
+                "status": "not_run",
+                "contractVersion": VERIFIER_CONTRACT_VERSION,
+                "verifierId": verifier_id.as_str(),
+                "reason": "Generation was cancelled before Docker text verification."
+            });
+            attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
+            attempt.extra.insert("dockerEvaluation".to_owned(), details);
+            TerminalOutcome::Cancelled {
+                run,
+                attempt,
+                progress,
+            }
+        }
+        TerminalOutcome::Failed {
+            mut run,
+            mut attempt,
+            error,
+            progress,
+        } => {
+            let details = json!({
+                "status": "not_run",
+                "contractVersion": VERIFIER_CONTRACT_VERSION,
+                "verifierId": verifier_id.as_str(),
+                "reason": "Generation failed before Docker text verification."
+            });
+            attach_docker_policy(&mut run, &mut attempt, verifier_id, details.clone());
+            attempt.extra.insert("dockerEvaluation".to_owned(), details);
+            TerminalOutcome::Failed {
+                run,
+                attempt,
+                error,
+                progress,
+            }
+        }
+    }
+}
+
+fn docker_evaluation_score(
+    evaluation: &DockerEvaluation,
+    response: &str,
+) -> Option<ObjectiveVerificationEvidence> {
+    matches!(
+        evaluation.status,
+        DockerEvaluationStatus::Passed | DockerEvaluationStatus::Failed
+    )
+    .then(|| evaluation.evidence(response))
+}
+
+fn attach_docker_policy(
+    run: &mut Run,
+    attempt: &mut Attempt,
+    verifier_id: DockerVerifierId,
+    details: serde_json::Value,
+) {
+    run.environment
+        .insert("executionBoundary".to_owned(), json!("docker_required"));
+    run.environment.insert(
+        "dockerVerifierContractVersion".to_owned(),
+        json!(VERIFIER_CONTRACT_VERSION),
+    );
+    run.environment
+        .insert("dockerVerifierId".to_owned(), json!(verifier_id.as_str()));
+    run.environment
+        .insert("dockerEvaluation".to_owned(), details);
+    attempt
+        .effective_config
+        .insert("executionBoundary".to_owned(), json!("docker_required"));
+    attempt
+        .effective_config
+        .insert("dockerVerifierId".to_owned(), json!(verifier_id.as_str()));
+}
+
+fn docker_evaluation_details(evaluation: &DockerEvaluation) -> serde_json::Value {
+    json!({
+        "status": evaluation.status.as_str(),
+        "contractVersion": VERIFIER_CONTRACT_VERSION,
+        "verifierId": evaluation.verifier_id.as_str(),
+        "image": PINNED_PYTHON_IMAGE,
+        "passedTests": evaluation.passed_tests,
+        "totalTests": evaluation.total_tests,
+        "reason": evaluation.reason,
+        "network": "none",
+        "hostMounts": "none"
+    })
+}
+
+fn invoke_worker_once(
+    app: &AppHandle,
+    plan: &RunPlan,
+    cancellation: &CancellationToken,
+) -> Result<TerminalOutcome, CommandError> {
     let job_id = worker_job_id(plan);
+    let current_executable = std::env::current_exe().map_err(|_| CommandError {
+        code: "worker_unavailable",
+        message: "the app executable path is unavailable".to_owned(),
+    })?;
+    let packaged_worker = app
+        .path()
+        .resolve(worker_sidecar_resource_path(), BaseDirectory::Resource)
+        .ok();
+    let worker_executable =
+        resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
     let request = WorkerRequest::GenerateOnce {
         protocol_version: WORKER_PROTOCOL_VERSION,
         job_id: job_id.clone(),
         plan: plan.clone(),
     };
+    let response = if cancellation.is_cancelled() {
+        None
+    } else {
+        invoke_worker_request(&worker_executable, request, Some(cancellation))?
+    };
+    let response = match response {
+        Some(response) => response,
+        None => invoke_worker_request(
+            &worker_executable,
+            WorkerRequest::CancelGenerateOnce {
+                protocol_version: WORKER_PROTOCOL_VERSION,
+                job_id: job_id.clone(),
+                plan: plan.clone(),
+            },
+            None,
+        )?
+        .ok_or_else(|| CommandError {
+            code: "worker_failed",
+            message: "the cancellation outcome worker did not finish".to_owned(),
+        })?,
+    };
+    worker_terminal_outcome(response, &job_id)
+}
+
+fn invoke_worker_request(
+    worker_executable: &Path,
+    request: WorkerRequest,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Option<WorkerResponse>, CommandError> {
     let request_bytes = serde_json::to_vec(&request).map_err(|_| CommandError {
         code: "run_plan_invalid",
         message: "the one-shot worker request could not be encoded".to_owned(),
@@ -1013,17 +1461,21 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         });
     }
 
-    let current_executable = std::env::current_exe().map_err(|_| CommandError {
-        code: "worker_unavailable",
-        message: "the app executable path is unavailable".to_owned(),
-    })?;
-    let packaged_worker = app
-        .path()
-        .resolve(worker_sidecar_resource_path(), BaseDirectory::Resource)
-        .ok();
-    let worker_executable =
-        resolve_worker_executable(&current_executable, packaged_worker.as_deref())?;
-    let mut child = Command::new(worker_executable)
+    invoke_worker_request_bytes(
+        Command::new(worker_executable),
+        &request_bytes,
+        cancellation,
+    )
+}
+
+/// Separating spawning from request encoding makes the real worker lifecycle
+/// testable against a synthetic child that never stops writing stdout.
+fn invoke_worker_request_bytes(
+    mut command: Command,
+    request_bytes: &[u8],
+    cancellation: Option<&CancellationToken>,
+) -> Result<Option<WorkerResponse>, CommandError> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1036,36 +1488,109 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         code: "worker_protocol_failed",
         message: "the one-shot worker did not expose stdout".to_owned(),
     })?;
-    let reader =
-        thread::spawn(move || read_bounded(stdout, MAX_WORKER_RESPONSE_BYTES.saturating_add(1)));
+    let (reader_error_tx, reader_error_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let result = read_bounded(stdout, MAX_WORKER_RESPONSE_BYTES);
+        // The reader must alert the parent before it waits for child exit.
+        // Otherwise a worker that streams forever can hold the parent forever.
+        if let Err(error) = &result {
+            let _ = reader_error_tx.send(error.kind());
+        }
+        result
+    });
 
-    let write_result = child
-        .stdin
-        .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "worker stdin unavailable"))
-        .and_then(|mut stdin| stdin.write_all(&request_bytes));
+    // A bad worker may spam stdout without ever reading its request. Writing
+    // a valid (up to 1 MiB) request on this thread would then fill the pipe
+    // and prevent it from noticing the stdout overflow or a cancellation.
+    let mut stdin = child.stdin.take().ok_or_else(|| CommandError {
+        code: "worker_unavailable",
+        message: "the one-shot worker did not expose stdin".to_owned(),
+    })?;
+    let request_bytes = request_bytes.to_vec();
+    let (writer_error_tx, writer_error_rx) = mpsc::channel();
+    let writer = thread::spawn(move || {
+        let result = stdin.write_all(&request_bytes);
+        if result.is_err() {
+            let _ = writer_error_tx.send(());
+        }
+        result
+    });
+
+    let (status, cancelled) = loop {
+        if let Ok(kind) = reader_error_rx.try_recv() {
+            // Signal arrived while the worker may still be writing endlessly.
+            // Close it, reap it, then join the bounded stdout reader.
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            let _ = writer.join();
+            return Err(CommandError {
+                code: "worker_protocol_failed",
+                message: if kind == io::ErrorKind::InvalidData {
+                    "the one-shot worker response exceeded the size limit"
+                } else {
+                    "the one-shot worker output reader failed"
+                }
+                .to_owned(),
+            });
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) => {}
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                let _ = writer.join();
+                return Err(CommandError {
+                    code: "worker_unavailable",
+                    message: "the one-shot worker did not exit cleanly".to_owned(),
+                });
+            }
+        }
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
+            let _ = child.kill();
+            let status = child.wait().map_err(|_| CommandError {
+                code: "worker_unavailable",
+                message: "the cancelled one-shot worker could not be reaped".to_owned(),
+            })?;
+            break (status, true);
+        }
+        if writer_error_rx.try_recv().is_ok() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            let _ = writer.join();
+            return Err(CommandError {
+                code: "worker_unavailable",
+                message: "the one-shot worker request could not be written".to_owned(),
+            });
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let output = reader.join().map_err(|_| CommandError {
+        code: "worker_protocol_failed",
+        message: "the one-shot worker output reader failed".to_owned(),
+    })?;
+    let write_result = writer.join().map_err(|_| CommandError {
+        code: "worker_unavailable",
+        message: "the one-shot worker request writer failed".to_owned(),
+    })?;
+    if cancelled {
+        return Ok(None);
+    }
+    // Preserve the protocol overflow error even when closing the saturated
+    // child's pipes also caused its stdin writer to receive BrokenPipe.
+    let output = output.map_err(|_| CommandError {
+        code: "worker_protocol_failed",
+        message: "the one-shot worker response exceeded the size limit".to_owned(),
+    })?;
     if write_result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = reader.join();
         return Err(CommandError {
             code: "worker_unavailable",
             message: "the one-shot worker request could not be written".to_owned(),
         });
     }
-
-    let status = child.wait().map_err(|_| CommandError {
-        code: "worker_unavailable",
-        message: "the one-shot worker did not exit cleanly".to_owned(),
-    })?;
-    let output = reader.join().map_err(|_| CommandError {
-        code: "worker_protocol_failed",
-        message: "the one-shot worker output reader failed".to_owned(),
-    })?;
-    let output = output.map_err(|_| CommandError {
-        code: "worker_protocol_failed",
-        message: "the one-shot worker response exceeded the size limit".to_owned(),
-    })?;
     if !status.success() {
         return Err(CommandError {
             code: "worker_failed",
@@ -1078,6 +1603,13 @@ fn invoke_worker_once(app: &AppHandle, plan: &RunPlan) -> Result<TerminalOutcome
         code: "worker_protocol_failed",
         message: "the one-shot worker response was not valid JSON".to_owned(),
     })?;
+    Ok(Some(response))
+}
+
+fn worker_terminal_outcome(
+    response: WorkerResponse,
+    job_id: &str,
+) -> Result<TerminalOutcome, CommandError> {
     if response.job_id != job_id {
         return Err(CommandError {
             code: "worker_protocol_failed",
@@ -1155,7 +1687,6 @@ fn resolve_worker_executable(
 fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
     let mut output = Vec::new();
     let mut buffer = [0_u8; 8192];
-    let mut oversized = false;
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
@@ -1163,19 +1694,14 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
         }
         let remaining = limit.saturating_sub(output.len());
         if read > remaining {
-            oversized = true;
-        } else {
-            output.extend_from_slice(&buffer[..read]);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "worker output exceeds the size limit",
+            ));
         }
+        output.extend_from_slice(&buffer[..read]);
     }
-    if oversized {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "worker output exceeds the size limit",
-        ))
-    } else {
-        Ok(output)
-    }
+    Ok(output)
 }
 
 fn worker_error_code(code: &WorkerErrorCode) -> &'static str {
@@ -1259,21 +1785,290 @@ fn supported_platform() -> SupportedPlatform {
 #[cfg(test)]
 mod tests {
     use std::{
+        env,
         ffi::OsStr,
         fs,
+        io::{self, Cursor, Write},
         path::{Path, PathBuf},
-        sync::atomic::{AtomicU64, Ordering},
+        process::Command,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc, Arc, Barrier, Mutex,
+        },
+        thread,
+        time::{Duration, Instant},
     };
 
     use super::{
-        app_status, ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
-        resolve_worker_executable, start_ollama_with, worker_executable_name,
-        worker_executable_path, worker_sidecar_resource_path, OllamaStartStatus, StorageState,
-        OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH, WORKER_SIDECAR_TARGET_TRIPLE,
+        app_status, cancel_run_once, docker_evaluation_score, invoke_worker_request_bytes,
+        ollama_server_command, ollama_spawn_error, read_benchmark_version_from_storage,
+        read_bounded, register_one_shot_run, resolve_worker_executable, start_ollama_with,
+        validate_model_operations_page, worker_executable_name, worker_executable_path,
+        worker_sidecar_resource_path, OllamaStartStatus, OneShotCancellationRegistry, StorageState,
+        MAX_ACTIVE_ONE_SHOT_RUNS, OLLAMA_START_RETRIES, WORKER_SIDECAR_PATH,
+        WORKER_SIDECAR_TARGET_TRIPLE,
     };
     use crate::storage::StorageService;
+    use crate::{
+        docker_evaluator::{DockerEvaluation, DockerEvaluationStatus},
+        domain::{DockerVerifierId, ObjectiveVerifierKind},
+    };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn read_bounded_rejects_immediately_after_first_excess_byte() {
+        assert_eq!(read_bounded(Cursor::new(b"1234"), 4).unwrap(), b"1234");
+        let error = read_bounded(Cursor::new(b"12345"), 4).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // This test executable is the fake app-owned worker in the two process
+    // tests below. Its long-running mode intentionally never reads stdin.
+    #[test]
+    fn fake_worker_stdout_fixture() {
+        match env::var("PROMPT_ARENA_TEST_FAKE_WORKER_STDOUT").as_deref() {
+            Ok("endless") => {
+                let mut stdout = io::stdout().lock();
+                let chunk = [b'x'; 64 * 1024];
+                loop {
+                    if stdout.write_all(&chunk).is_err() {
+                        break;
+                    }
+                }
+            }
+            Ok("idle") => thread::sleep(Duration::from_secs(15)),
+            _ => {}
+        }
+    }
+
+    fn fake_worker_command(mode: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "commands::tests::fake_worker_stdout_fixture",
+                "--nocapture",
+            ])
+            .env("PROMPT_ARENA_TEST_FAKE_WORKER_STDOUT", mode);
+        command
+    }
+
+    #[test]
+    fn endless_stdout_worker_is_killed_reaped_and_returns_protocol_error() {
+        let token = crate::runtime::CancellationToken::new();
+        let watchdog_token = token.clone();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        // A broken implementation must fail, not hang the entire CI runner.
+        let watchdog = thread::spawn(move || {
+            if finished_rx.recv_timeout(Duration::from_secs(12)).is_err() {
+                watchdog_token.cancel();
+            }
+        });
+
+        let started = Instant::now();
+        // A 1 MiB input intentionally fills the worker's stdin pipe: the
+        // fake child never reads it while continuously streaming stdout.
+        let request = vec![b'x'; crate::protocol::MAX_WORKER_REQUEST_BYTES];
+        let result =
+            invoke_worker_request_bytes(fake_worker_command("endless"), &request, Some(&token));
+        let elapsed = started.elapsed();
+        let _ = finished_tx.send(());
+        watchdog.join().unwrap();
+
+        let error = result.expect_err("unending output must be killed after the size cap");
+        assert_eq!(error.code, "worker_protocol_failed");
+        assert!(error.message.contains("size limit"));
+        assert!(
+            elapsed < Duration::from_secs(12),
+            "overflow waited for cancellation watchdog"
+        );
+    }
+
+    #[test]
+    fn cancellation_still_kills_and_reaps_worker_while_stdout_is_open() {
+        let token = crate::runtime::CancellationToken::new();
+        let cancel_token = token.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(125));
+            cancel_token.cancel();
+        });
+        let started = Instant::now();
+        let result = invoke_worker_request_bytes(fake_worker_command("idle"), b"{}", Some(&token));
+        canceller.join().unwrap();
+
+        assert!(
+            result.unwrap().is_none(),
+            "cancellation must return the cancel path"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "cancellation waited for child exit"
+        );
+    }
+
+    #[test]
+    fn model_operations_page_ipc_validates_bounded_limits_and_offsets() {
+        assert!(validate_model_operations_page(1, 0).is_ok());
+        assert!(validate_model_operations_page(100, 1_000).is_ok());
+        for (limit, offset) in [(0, 0), (101, 0), (100, u32::MAX)] {
+            let error = validate_model_operations_page(limit, offset).unwrap_err();
+            assert_eq!(error.code, "model_operations_page_invalid");
+        }
+    }
+
+    #[test]
+    fn docker_infrastructure_outcomes_never_become_candidate_scores() {
+        let response = "Return not-found for a missing user instead of null.";
+        for (status, score_passed) in [
+            (DockerEvaluationStatus::Passed, Some(true)),
+            (DockerEvaluationStatus::Failed, Some(false)),
+            (DockerEvaluationStatus::Cancelled, None),
+            (DockerEvaluationStatus::Unavailable, None),
+            (DockerEvaluationStatus::TimedOut, None),
+            (DockerEvaluationStatus::OutputLimit, None),
+            (DockerEvaluationStatus::InvalidOutput, None),
+        ] {
+            let evaluation = DockerEvaluation {
+                verifier_id: DockerVerifierId::MissingUserTextV1,
+                status,
+                passed_tests: if status == DockerEvaluationStatus::Passed {
+                    3
+                } else {
+                    1
+                },
+                total_tests: 3,
+                reason: "test outcome",
+            };
+            let score = docker_evaluation_score(&evaluation, response);
+            assert_eq!(score.as_ref().map(|evidence| evidence.passed), score_passed);
+            if let Some(score) = score {
+                assert_eq!(score.verifier_kind, ObjectiveVerifierKind::DockerContract);
+            }
+        }
+    }
+
+    #[test]
+    fn one_shot_cancellation_only_targets_an_active_run_and_is_removed_at_exit() {
+        let registry = OneShotCancellationRegistry::default();
+        let (token, active) = registry
+            .register("arena-123-1-1")
+            .expect("active run registers");
+        assert!(!registry.cancel("arena-123-1-2"));
+        assert!(registry.cancel("arena-123-1-1"));
+        assert!(token.is_cancelled());
+        assert!(registry.register("arena-123-1-1").is_err());
+        registry.stop_accepting_cancellation("arena-123-1-1");
+        assert!(!registry.cancel("arena-123-1-1"));
+        assert!(registry.register("arena-123-1-1").is_err());
+        drop(active);
+        assert!(!registry.cancel("arena-123-1-1"));
+
+        let (finished_token, finished) = registry
+            .register("arena-123-1-2")
+            .expect("finished run remains reserved until guard drop");
+        finished.stop_accepting_cancellation();
+        assert!(!registry.cancel("arena-123-1-2"));
+        assert!(!finished_token.is_cancelled());
+        assert!(registry.register("arena-123-1-2").is_err());
+        drop(finished);
+        assert!(!registry.cancel("arena-123-1-2"));
+    }
+
+    #[test]
+    fn concurrent_one_shot_runs_are_capped_and_slots_reopen_after_completion() {
+        let registry = Arc::new(OneShotCancellationRegistry::default());
+        let start = Arc::new(Barrier::new(MAX_ACTIVE_ONE_SHOT_RUNS + 1));
+        let (registered_tx, registered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let (released_tx, released_rx) = mpsc::channel();
+
+        let workers = (0..MAX_ACTIVE_ONE_SHOT_RUNS)
+            .map(|index| {
+                let registry = Arc::clone(&registry);
+                let start = Arc::clone(&start);
+                let registered_tx = registered_tx.clone();
+                let release_rx = Arc::clone(&release_rx);
+                let released_tx = released_tx.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    let id = format!("parallel-run-{index}");
+                    let registration = registry.register(&id);
+                    registered_tx.send(registration.is_ok()).unwrap();
+                    let (_token, active_run) = registration.expect("a slot is available");
+                    release_rx.lock().unwrap().recv().unwrap();
+                    drop(active_run);
+                    released_tx.send(()).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(registered_tx);
+        drop(released_tx);
+
+        start.wait();
+        for _ in 0..MAX_ACTIVE_ONE_SHOT_RUNS {
+            assert!(registered_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+
+        let limit_error = registry.register("parallel-run-overflow").err().unwrap();
+        assert_eq!(limit_error.code, "run_concurrency_limit");
+        assert!(limit_error.message.contains("16"));
+        let duplicate_error = registry.register("parallel-run-0").err().unwrap();
+        assert_eq!(duplicate_error.code, "run_already_active");
+        assert!(registry.cancel("parallel-run-0"));
+
+        release_tx.send(()).unwrap();
+        released_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (_token, replacement) = registry
+            .register("parallel-run-replacement")
+            .expect("a finished run immediately reopens its slot");
+        assert_eq!(
+            registry
+                .register("parallel-run-overflow")
+                .err()
+                .unwrap()
+                .code,
+            "run_concurrency_limit"
+        );
+        drop(replacement);
+
+        for _ in 1..MAX_ACTIVE_ONE_SHOT_RUNS {
+            release_tx.send(()).unwrap();
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        for index in 0..MAX_ACTIVE_ONE_SHOT_RUNS * 2 {
+            let (_, completed) = registry
+                .register(&format!("sequential-run-{index}"))
+                .expect("sequential workflows can reuse slots indefinitely");
+            drop(completed);
+        }
+    }
+
+    #[test]
+    fn early_cancel_reaches_run_registered_before_worker_starts() {
+        let run_id = format!(
+            "early-cancel-{}",
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        // Exercise the same reservation path as the Tauri command, then
+        // deliberately delay the worker to simulate a saturated blocking pool.
+        let (cancellation, active_run) = register_one_shot_run(&run_id).unwrap();
+        let (start_tx, start_rx) = mpsc::channel::<()>();
+        let worker = thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let was_cancelled = cancellation.is_cancelled();
+            drop(active_run);
+            was_cancelled
+        });
+
+        assert!(cancel_run_once(run_id.clone()));
+        start_tx.send(()).unwrap();
+        assert!(worker.join().unwrap());
+        assert!(!cancel_run_once(run_id));
+    }
 
     #[test]
     fn status_exposes_local_storage_without_runtime_providers() {
