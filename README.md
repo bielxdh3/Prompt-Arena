@@ -187,6 +187,8 @@ The goal is not only to get an answer. It is to keep enough evidence to answer: 
 
 The latest published beta is `v0.1.4`, with Windows and Linux assets on GitHub Releases. The current source workflow validates and packages release candidates; public publication is paused until the server-side controls in [docs/RELEASING.md](docs/RELEASING.md) are verified. The project is intentionally **not** presented as production-complete while acceptance gaps remain.
 
+**Source progress since the published beta (October 2026):** merged [PR #89](https://github.com/bielxdh3/Prompt-Arena/pull/89) advances single-model suites, host telemetry, historical comparisons, Elo-style ratings, robustness workflows, and reproducibility evidence. It also adds cancellation/partial-result handling, stronger stored-result and blind-evaluation checks, and Windows installer/worker integrity fixes. These are **source changes**, not a newer published release or proof that all native-runtime acceptance gaps are closed.
+
 <details>
 <summary><strong>Current implementation / acceptance matrix</strong></summary>
 
