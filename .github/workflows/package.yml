@@ -35,7 +35,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # actions/setup-node v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # actions/setup-node v7
         with:
           node-version: 22
       - name: Probe Windows Installer launcher with missing package
@@ -44,7 +44,7 @@ jobs:
         run: node scripts/verify-package.mjs --msiexec-preflight-only
       - name: Upload Windows Installer preflight diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact v7
         with:
           name: prompt-arena-msiexec-preflight-${{ github.run_id }}
           path: ${{ runner.temp }}/prompt-arena-msi-diagnostics/*.txt
@@ -74,7 +74,7 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # actions/setup-node v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # actions/setup-node v7
         with:
           node-version: 22
           cache: npm
@@ -227,7 +227,7 @@ jobs:
 
       - name: Upload Windows MSI smoke diagnostics
         if: failure() && runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact v7
         with:
           name: prompt-arena-msi-diagnostics-${{ steps.commit.outputs.sha }}
           # Raw verbose .log files may contain installer properties or secrets.
@@ -238,7 +238,7 @@ jobs:
 
       - name: Upload failed Windows package candidates for reproduction
         if: failure() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.ref == 'main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact v7
         with:
           name: prompt-arena-windows-failed-smoke-${{ steps.commit.outputs.sha }}
           path: |
@@ -261,7 +261,7 @@ jobs:
           printf 'Checked-out commit SHA: %s\n' "$CHECKED_OUT_SHA" >> package-verification.txt
 
       - name: Upload unsigned installers and checksums
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # actions/upload-artifact v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact v7
         with:
           name: prompt-arena-${{ matrix.platform }}-${{ steps.commit.outputs.sha }}
           path: |
