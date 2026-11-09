@@ -93,18 +93,22 @@ Arena comparison, single-model benchmarking, historical regression, Elo-style ra
                     ┌────────────▼───────┐  ┌───▼──────────────────┐
                     │ SQLite metadata    │  │ One-shot worker      │
                     │ + immutable files  │  │ start · run · exit   │
-                    └────────────────────┘  └───┬───────────┬──────┘
-                                                │           │
-                                        loopback│           │ explicit network/cost boundary
-                                                │           │
-                         ┌──────────────────────▼─┐   ┌─────▼─────────────┐
-                         │ Local model runtimes   │   │ Optional BYOK     │
-                         │ Ollama · LM Studio     │   │ provider adapters │
-                         │ llama.cpp / GGUF       │   └───────────────────┘
-                         └────────────────────────┘
+                    └────────────────────┘  └───┬──────────────────┘
+                                                │ loopback only
+                                    ┌───────────▼─────────────┐
+                                    │ Local model runtimes    │
+                                    │ Ollama · LM Studio      │
+                                    │ llama.cpp / GGUF        │
+                                    └─────────────────────────┘
+
+                    Separate guarded Rust/Tauri command
+                                 │ HTTPS · consent · cost
+                                 ▼
+                       Optional BYOK providers
+                       (not the local worker)
 ```
 
-The desktop core owns persistence and trust boundaries. Model output, imported benchmark content, and provider responses are treated as untrusted data.
+The desktop core owns persistence and trust boundaries. The one-shot worker runs bounded local generations; **optional BYOK** uses a separate Tauri command with explicit HTTPS network/cost consent and sanitized evidence storage. The external-provider path does not go through the local one-shot worker. Model output, imported benchmark content, and provider responses are untrusted data.
 
 ## How a benchmark round works
 
@@ -138,8 +142,8 @@ A round starts from **versioned inputs**, not an ad-hoc chat. The benchmark and 
                                  │
                                  ▼
                     ┌─────────────────────────┐
-                    │ Local runtime / BYOK    │
-                    │ bounded provider call   │
+                    │ Local model runtime     │
+                    │ bounded loopback call   │
                     └────────────┬────────────┘
                                  │
                                  ▼
@@ -166,7 +170,7 @@ A round starts from **versioned inputs**, not an ad-hoc chat. The benchmark and 
                     └─────────────────────────┘
 ```
 
-The goal is not only to get an answer. It is to keep enough evidence to answer: **what ran, with which configuration, against which benchmark version, and how was the result evaluated?**
+This round depicts the **local one-shot execution path**; optional external BYOK requests have a separate, consent-gated command. Depending on the task's evaluation policy, a result may use an objective verifier or blind human review. The goal is to keep enough evidence to answer: **what ran, with which configuration, against which benchmark version, and how was the result evaluated?**
 
 ## What it can do
 
@@ -187,28 +191,7 @@ The goal is not only to get an answer. It is to keep enough evidence to answer: 
 
 The latest published beta is `v0.1.4`, with Windows and Linux assets on GitHub Releases. The current source workflow validates and packages release candidates; public publication is paused until the server-side controls in [docs/RELEASING.md](docs/RELEASING.md) are verified. The project is intentionally **not** presented as production-complete while acceptance gaps remain.
 
-**Source progress since the published beta (October 2026):** merged [PR #89](https://github.com/bielxdh3/Prompt-Arena/pull/89) advances single-model suites, host telemetry, historical comparisons, Elo-style ratings, robustness workflows, and reproducibility evidence. It also adds cancellation/partial-result handling, stronger stored-result and blind-evaluation checks, and Windows installer/worker integrity fixes. These are **source changes**, not a newer published release or proof that all native-runtime acceptance gaps are closed.
-
-<details>
-<summary><strong>Current implementation / acceptance matrix</strong></summary>
-
-| Area | Current state |
-|---|---|
-| Foundation / trust boundary | **Complete** |
-| Core multi-model Arena | Implemented; native end-to-end acceptance still open |
-| Official packs / verification | Implemented; Docker boundary smoke still open |
-| Model Library | Ollama + LM Studio + llama.cpp/GGUF implemented; llama.cpp live smoke open |
-| Single-model benchmark | Implemented and persisted; live generation-contract acceptance open |
-| Performance Lab | Timing/token metrics present; TTFT/system telemetry incomplete |
-| Historical comparison | Implemented; statistical depth still limited |
-| Elo ratings | Deterministic Elo v1 implemented; richer history/uncertainty remains |
-| Robustness Arena | Implemented; semantic-preservation validation remains |
-| Repro Bundle | Integrity/export/import implemented; automatic rerun reconstruction remains |
-| BYOK | Adapters and safety boundaries implemented; broader real-provider acceptance remains |
-| Windows packaging | MSI + NSIS published; signing not yet guaranteed |
-| Linux packaging | AppImage + DEB published |
-
-</details>
+Development work may include capabilities not yet accepted across native runtimes or published in a newer release. For user-visible changes consult the [Changelog](CHANGELOG.md); for readiness and remaining acceptance work consult the [Roadmap](ROADMAP.md). The former dated implementation matrix is retained in [historical status notes](docs/validation/readme-october-2026-status-snapshot.md).
 
 Open product work is tracked in the [issue tracker](https://github.com/bielxdh3/Prompt-Arena/issues) and [ROADMAP.md](ROADMAP.md).
 
